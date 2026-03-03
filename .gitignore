@@ -1,0 +1,65 @@
+# OS / editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Python
+venv/
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+coverage.xml
+htmlcov/
+
+# Node / frontend / gateway
+**/node_modules/
+**/.next/
+**/dist/
+**/build/
+**/coverage/
+**/*.tsbuildinfo
+
+# Runtime temp / logs
+*.log
+logs/
+tmp/
+temp/
+
+# Env / secrets
+.env
+.env.*
+!.env.example
+!.env.template
+*.pem
+*.key
+*.crt
+
+# Local tooling cache
+.playwright/
+.playwright-cli/
+.playwright-browsers/
+
+# Project runtime artifacts
+runs/
+output/
+
+# Data strategy: ignore heavy or reproducible artifacts
+data/indexes/
+data/raw/
+data/papers/
+data/processed/chunks.jsonl
+data/processed/chunks_clean.jsonl
+data/session_store.json
+
+# Keep lightweight metadata in data/
+!data/**/*.md
+!data/**/*.json
+!data/**/*.yaml
+!data/**/*.yml

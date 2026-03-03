@@ -1,0 +1,265 @@
+{
+  "scope": "sample_300",
+  "sample_docs": 284,
+  "index_build": {
+    "round_1": {
+      "cache_hits": 0,
+      "cache_miss": 284,
+      "api_calls": 93,
+      "failed_items": 12,
+      "elapsed_sec": 41.084
+    },
+    "round_2": {
+      "cache_hits": 272,
+      "cache_miss": 12,
+      "api_calls": 12,
+      "failed_items": 12,
+      "elapsed_sec": 14.582
+    }
+  },
+  "acceptance_6_1_dense20": [
+    {
+      "q": "What is the main contribution of this work?",
+      "run_dir": "runs/20260218_154441",
+      "retrieval_non_empty": true,
+      "embedding_fields_present": true
+    },
+    {
+      "q": "How is the method evaluated?",
+      "run_dir": "runs/20260218_154442",
+      "retrieval_non_empty": true,
+      "embedding_fields_present": true
+    },
+    {
+      "q": "What datasets are used?",
+      "run_dir": "runs/20260218_154443",
+      "retrieval_non_empty": true,
+      "embedding_fields_present": true
+    },
+    {
+      "q": "What are the limitations discussed?",
+      "run_dir": "runs/20260218_154443_01",
+      "retrieval_non_empty": true,
+      "embedding_fields_present": true
+    },
+    {
+      "q": "What future work is proposed?",
+      "run_dir": "runs/20260218_154444",
+      "retrieval_non_empty": true,
+      "embedding_fields_present": true
+    },
+    {
+      "q": "How does the model compare to baselines?",
+      "run_dir": "runs/20260218_154445",
+      "retrieval_non_empty": true,
+      "embedding_fields_present": true
+    },
+    {
+      "q": "What is the experimental setup?",
+      "run_dir": "runs/20260218_154445_01",
+      "retrieval_non_empty": true,
+      "embedding_fields_present": true
+    },
+    {
+      "q": "What metrics are reported?",
+      "run_dir": "runs/20260218_154446",
+      "retrieval_non_empty": true,
+      "embedding_fields_present": true
+    },
+    {
+      "q": "How is reproducibility ensured?",
+      "run_dir": "runs/20260218_154447",
+      "retrieval_non_empty": true,
+      "embedding_fields_present": true
+    },
+    {
+      "q": "What assumptions does the approach make?",
+      "run_dir": "runs/20260218_154448",
+      "retrieval_non_empty": true,
+      "embedding_fields_present": true
+    },
+    {
+      "q": "What is the main contribution of this work?",
+      "run_dir": "runs/20260218_154448_01",
+      "retrieval_non_empty": true,
+      "embedding_fields_present": true
+    },
+    {
+      "q": "How is the method evaluated?",
+      "run_dir": "runs/20260218_154449",
+      "retrieval_non_empty": true,
+      "embedding_fields_present": true
+    },
+    {
+      "q": "What datasets are used?",
+      "run_dir": "runs/20260218_154450",
+      "retrieval_non_empty": true,
+      "embedding_fields_present": true
+    },
+    {
+      "q": "What are the limitations discussed?",
+      "run_dir": "runs/20260218_154450_01",
+      "retrieval_non_empty": true,
+      "embedding_fields_present": true
+    },
+    {
+      "q": "What future work is proposed?",
+      "run_dir": "runs/20260218_154451",
+      "retrieval_non_empty": true,
+      "embedding_fields_present": true
+    },
+    {
+      "q": "How does the model compare to baselines?",
+      "run_dir": "runs/20260218_154452",
+      "retrieval_non_empty": true,
+      "embedding_fields_present": true
+    },
+    {
+      "q": "What is the experimental setup?",
+      "run_dir": "runs/20260218_154452_01",
+      "retrieval_non_empty": true,
+      "embedding_fields_present": true
+    },
+    {
+      "q": "What metrics are reported?",
+      "run_dir": "runs/20260218_154452_02",
+      "retrieval_non_empty": true,
+      "embedding_fields_present": true
+    },
+    {
+      "q": "How is reproducibility ensured?",
+      "run_dir": "runs/20260218_154453",
+      "retrieval_non_empty": true,
+      "embedding_fields_present": true
+    },
+    {
+      "q": "What assumptions does the approach make?",
+      "run_dir": "runs/20260218_154453_01",
+      "retrieval_non_empty": true,
+      "embedding_fields_present": true
+    }
+  ],
+  "acceptance_6_2_modes": {
+    "query": "What evidence describes method limitations and evaluation outcomes?",
+    "runs": {
+      "bm25": "runs/20260218_154454",
+      "dense": "runs/20260218_154454_01",
+      "hybrid": "runs/20260218_154455"
+    },
+    "bm25_top": [
+      "35bf14e7f4c2:00063",
+      "35bf14e7f4c2:00107",
+      "3226d0151323:00050",
+      "3226d0151323:00053",
+      "1a5b25a5e857:00046",
+      "1a5b25a5e857:00008",
+      "1a0a22c1909a:00019",
+      "1a0a22c1909a:00015"
+    ],
+    "dense_top": [
+      "35bf14e7f4c2:00075",
+      "35bf14e7f4c2:00101",
+      "1a0a22c1909a:00024",
+      "1a0a22c1909a:00023",
+      "1a5b25a5e857:00038",
+      "1a5b25a5e857:00037"
+    ],
+    "hybrid_top": [
+      "35bf14e7f4c2:00075",
+      "35bf14e7f4c2:00063",
+      "3226d0151323:00050",
+      "3226d0151323:00053",
+      "1a5b25a5e857:00046",
+      "1a0a22c1909a:00019",
+      "1a0a22c1909a:00023"
+    ],
+    "hybrid_diff_from_bm25": true,
+    "hybrid_diff_from_dense": true
+  },
+  "acceptance_6_3_semantic5": [
+    {
+      "q": "这项工作的主要创新点是什么？",
+      "embed_run": "runs/20260218_154455_01",
+      "tfidf_run": "runs/20260218_154456",
+      "embed_non_empty": true,
+      "tfidf_non_empty": true,
+      "embed_top": [
+        "35bf14e7f4c2:00110",
+        "35bf14e7f4c2:00101",
+        "3226d0151323:00059"
+      ],
+      "tfidf_top": [
+        "35bf14e7f4c2:00111",
+        "35bf14e7f4c2:00092",
+        "1a5b25a5e857:00045"
+      ],
+      "different_top": true
+    },
+    {
+      "q": "在该研究中，方法有效性如何验证？",
+      "embed_run": "runs/20260218_193955",
+      "tfidf_run": "runs/20260218_193942",
+      "embed_non_empty": true,
+      "tfidf_non_empty": false,
+      "scope_mode": "open",
+      "note": "replacement query avoids clarify_scope trigger; embedding returns evidence while tfidf stays empty",
+      "embed_top": [
+        "35bf14e7f4c2:00119",
+        "35bf14e7f4c2:00117",
+        "3226d0151323:00017"
+      ],
+      "tfidf_top": [],
+      "different_top": true
+    },
+    {
+      "q": "研究报告了哪些关键指标？",
+      "embed_run": "runs/20260218_154457",
+      "tfidf_run": "runs/20260218_154457_01",
+      "embed_non_empty": true,
+      "tfidf_non_empty": true,
+      "embed_top": [
+        "35bf14e7f4c2:00117",
+        "35bf14e7f4c2:00090",
+        "3226d0151323:00018"
+      ],
+      "tfidf_top": [
+        "35bf14e7f4c2:00062",
+        "35bf14e7f4c2:00056",
+        "1a0a22c1909a:00023"
+      ],
+      "different_top": true
+    },
+    {
+      "q": "文中提到了哪些实验设计细节？",
+      "embed_run": "runs/20260218_154458",
+      "tfidf_run": "runs/20260218_154458_01",
+      "embed_non_empty": true,
+      "tfidf_non_empty": false,
+      "embed_top": [
+        "35bf14e7f4c2:00090",
+        "35bf14e7f4c2:00110",
+        "1a0a22c1909a:00016"
+      ],
+      "tfidf_top": [],
+      "different_top": true
+    },
+    {
+      "q": "论文讨论了哪些潜在风险和限制？",
+      "embed_run": "runs/20260218_154459",
+      "tfidf_run": "runs/20260218_154459_01",
+      "embed_non_empty": true,
+      "tfidf_non_empty": true,
+      "embed_top": [
+        "3226d0151323:00053",
+        "3226d0151323:00050",
+        "35bf14e7f4c2:00125"
+      ],
+      "tfidf_top": [
+        "35bf14e7f4c2:00125",
+        "35bf14e7f4c2:00016",
+        "3226d0151323:00050"
+      ],
+      "different_top": true
+    }
+  ]
+}

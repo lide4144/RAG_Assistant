@@ -1,0 +1,160 @@
+chunk_size: 400
+overlap: 50
+top_k_retrieval: 20
+alpha_expansion: 0.3
+top_n_evidence: 8
+fusion_weight: 0.6
+RRF_k: 60
+sufficiency_threshold: 0.7
+dense_backend: embedding
+rerank:
+  enabled: true
+  provider: siliconflow
+  base_url: https://api.siliconflow.cn/v1
+  model: Qwen/Qwen3-Reranker-8B
+  api_key_env: SILICONFLOW_API_KEY
+  top_n: 8
+  timeout_ms: 8000
+  max_retries: 1
+  fallback_to_retrieval: true
+embedding:
+  enabled: true
+  provider: siliconflow
+  base_url: https://api.siliconflow.cn/v1
+  model: Qwen/Qwen3-Embedding-8B
+  api_key_env: SILICONFLOW_API_KEY
+  batch_size: 32
+  normalize: true
+  cache_enabled: true
+  cache_path: data/indexes/embedding_cache.jsonl
+  failure_log_path: data/indexes/embedding_failures.jsonl
+  max_requests_per_minute: 120
+  max_concurrent_requests: 2
+  max_retries: 2
+  backoff_base_ms: 500
+  backoff_max_ms: 8000
+  max_tokens_per_chunk: 512
+  over_limit_strategy: truncate
+  max_failed_chunk_ids: 200
+  max_skipped_chunk_ids: 200
+table_list_downweight: 0.5
+front_matter_downweight: 0.3
+reference_downweight: 0.3
+graph_path: "data/processed/graph.json"
+graph_expand_alpha: 2.0
+graph_expand_max_candidates: 200
+graph_expand_author_keywords: ["author", "authors", "affiliation", "institute", "institution", "university", "corresponding", "email", "作者", "单位", "机构", "通讯作者", "邮箱"]
+graph_expand_reference_keywords: ["reference", "citation", "source", "appendix", "validate", "verification", "scale", "questionnaire", "引用", "出处", "参考文献", "验证", "量表"]
+rewrite_enabled: true
+rewrite_meta_guard_enabled: true
+rewrite_use_llm: true
+rewrite_parallel_candidates_enabled: true
+rewrite_arbitration_enabled: true
+rewrite_arbitration_min_delta: 0.03
+rewrite_legacy_strategy_enabled: false
+rewrite_entity_preservation_min_ratio: 0.6
+rewrite_llm_provider: siliconflow
+rewrite_llm_model: Pro/deepseek-ai/DeepSeek-V3.2
+rewrite_llm_api_base: https://api.siliconflow.cn/v1
+rewrite_llm_api_key_env: SILICONFLOW_API_KEY
+rewrite_llm_fallback_provider: siliconflow
+rewrite_llm_fallback_model: ""
+rewrite_llm_fallback_api_base: ""
+rewrite_llm_fallback_api_key_env: ""
+answer_use_llm: true
+answer_llm_provider: siliconflow
+answer_llm_model: Pro/deepseek-ai/DeepSeek-V3.2
+answer_llm_api_base: https://api.siliconflow.cn/v1
+answer_llm_api_key_env: SILICONFLOW_API_KEY
+answer_llm_fallback_provider: siliconflow
+answer_llm_fallback_model: ""
+answer_llm_fallback_api_base: ""
+answer_llm_fallback_api_key_env: ""
+embedding_provider: siliconflow
+embedding_model: Qwen/Qwen3-Embedding-8B
+embedding_api_base: https://api.siliconflow.cn/v1
+embedding_api_key_env: SILICONFLOW_API_KEY
+embedding_fallback_provider: siliconflow
+embedding_fallback_model: ""
+embedding_fallback_api_base: ""
+embedding_fallback_api_key_env: ""
+rerank_provider: siliconflow
+rerank_model: Qwen/Qwen3-Reranker-8B
+rerank_api_base: https://api.siliconflow.cn/v1
+rerank_api_key_env: SILICONFLOW_API_KEY
+rerank_fallback_provider: siliconflow
+rerank_fallback_model: ""
+rerank_fallback_api_base: ""
+rerank_fallback_api_key_env: ""
+llm_timeout_ms: 60000
+answer_llm_timeout_ms: 60000
+answer_stream_enabled: true
+llm_max_retries: 1
+llm_fallback_enabled: true
+llm_use_litellm_sdk: true
+llm_use_legacy_client: false
+llm_router_retry: 1
+llm_router_cooldown_sec: 60
+llm_router_failure_threshold: 2
+evidence_policy_enforced: true
+sufficiency_gate_enabled: true
+sufficiency_topic_match_threshold: 0.15
+sufficiency_semantic_policy: balanced
+sufficiency_semantic_threshold_strict: 0.35
+sufficiency_semantic_threshold_balanced: 0.25
+sufficiency_semantic_threshold_explore: 0.15
+sufficiency_key_element_min_coverage: 1.0
+assistant_mode_enabled: true
+assistant_mode_force_legacy_gate: false
+assistant_mode_clarify_limit: 2
+assistant_mode_force_partial_answer_on_limit: true
+session_store_backend: redis
+session_redis_url: redis://localhost:6379/0
+session_redis_ttl_sec: 86400
+session_redis_key_prefix: rag
+session_redis_fallback_to_file: true
+session_recent_turns_window: 3
+session_memory_summary_enabled: true
+session_memory_semantic_enabled: true
+intent_router_enabled: true
+intent_router_semantic_enabled: true
+intent_control_min_confidence: 0.75
+style_control_reuse_last_topic: true
+style_control_max_turn_distance: 3
+max_context_tokens: 6000
+rewrite_max_keywords: 12
+rewrite_synonyms:
+  citation: ["reference", "bibliography", "source"]
+  reference: ["citation", "bibliography", "source"]
+  method: ["approach", "technique"]
+  dataset: ["corpus", "benchmark"]
+  evaluation: ["metric", "assessment"]
+  引用: ["reference", "citation"]
+  方法: ["method", "approach"]
+  实验: ["experiment", "evaluation"]
+rewrite_meta_patterns:
+  - "\\bwhy (?:does|did)? .*?(?:lack|without|missing).*(?:evidence|proof)s?\\b"
+  - "\\black of evidences?\\b"
+  - "\\bnot enough evidences?\\b"
+  - "\\bwhy (?:no|not)\\b.*\\b(answer|evidence)\\b"
+  - "为什么.*(?:没|没有).*(?:证据|回答|答全)"
+  - "你没回答全"
+  - "再找找"
+  - "补充证据"
+  - "没有证据"
+  - "没找到证据"
+  - "回答不完整"
+  - "\\bstill no proof\\b"
+  - "\\bno proof\\b"
+  - "find more concrete components"
+rewrite_meta_noise_terms:
+  - "lack"
+  - "evidence"
+  - "evidences"
+  - "proof"
+  - "为什么"
+  - "没证据"
+  - "没有证据"
+  - "没回答全"
+  - "答全"
+  - "再找找"

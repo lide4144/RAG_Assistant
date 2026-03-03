@@ -1,0 +1,99 @@
+{
+  "samples": "reports/paper_assistant_questions_v1.jsonl",
+  "legacy_config": "configs/paper_assistant_growth_legacy.yaml",
+  "growth_config": "configs/paper_assistant_growth.yaml",
+  "config_comparable": true,
+  "config_errors": [],
+  "legacy_config_snapshot": {
+    "dense_backend": "tfidf",
+    "embedding.enabled": false,
+    "rerank.enabled": true,
+    "rerank.provider": "mock",
+    "rerank.top_n": 8,
+    "answer_use_llm": false,
+    "evidence_policy_enforced": false,
+    "sufficiency_gate_enabled": true,
+    "sufficiency_topic_match_threshold": 0.0,
+    "sufficiency_key_element_min_coverage": 0.0,
+    "assistant_mode_enabled": true,
+    "assistant_mode_force_legacy_gate": true,
+    "assistant_mode_clarify_limit": 2,
+    "assistant_mode_force_partial_answer_on_limit": true,
+    "intent_router_enabled": true,
+    "intent_control_min_confidence": 0.75,
+    "style_control_reuse_last_topic": true,
+    "style_control_max_turn_distance": 3
+  },
+  "growth_config_snapshot": {
+    "dense_backend": "tfidf",
+    "embedding.enabled": false,
+    "rerank.enabled": true,
+    "rerank.provider": "mock",
+    "rerank.top_n": 8,
+    "answer_use_llm": false,
+    "evidence_policy_enforced": false,
+    "sufficiency_gate_enabled": true,
+    "sufficiency_topic_match_threshold": 0.0,
+    "sufficiency_key_element_min_coverage": 0.0,
+    "assistant_mode_enabled": true,
+    "assistant_mode_force_legacy_gate": false,
+    "assistant_mode_clarify_limit": 2,
+    "assistant_mode_force_partial_answer_on_limit": true,
+    "intent_router_enabled": true,
+    "intent_control_min_confidence": 0.75,
+    "style_control_reuse_last_topic": true,
+    "style_control_max_turn_distance": 3
+  },
+  "gate_ok": false,
+  "gate_errors": [
+    "A_open_summary answer_with_citation_rate below growth threshold",
+    "A_open_summary refuse_rate above growth threshold",
+    "B_multi_turn chain_has_answer_with_citation_in_two_rate below threshold",
+    "B_multi_turn max_consecutive_clarify exceeds threshold",
+    "B_multi_turn third_turn_force_answer_rate below threshold",
+    "C_control_mixed control_misroute_rate above threshold",
+    "C_control_mixed control_recovery_rate below threshold",
+    "D_ooc answer_rate above threshold",
+    "D_ooc unsafe_ooc_answer_rate above threshold",
+    "hard guard no_citation_answer_rate above threshold",
+    "delta answer_with_citation_rate improvement below threshold",
+    "delta refuse_rate reduction below threshold"
+  ],
+  "passed": false,
+  "legacy": {
+    "total": 0
+  },
+  "growth": {
+    "total": 0
+  },
+  "legacy_bucket": {
+    "A_open_summary": {
+      "total": 0
+    },
+    "B_multi_turn": {
+      "total": 0
+    },
+    "C_control_mixed": {
+      "total": 0
+    },
+    "D_ooc": {
+      "total": 0
+    }
+  },
+  "growth_bucket": {
+    "A_open_summary": {
+      "total": 0
+    },
+    "B_multi_turn": {
+      "total": 0
+    },
+    "C_control_mixed": {
+      "total": 0
+    },
+    "D_ooc": {
+      "total": 0
+    }
+  },
+  "legacy_rows": [],
+  "growth_rows": []
+}

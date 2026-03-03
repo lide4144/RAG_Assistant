@@ -1,0 +1,7 @@
+[
+  {"id":"q1","ranked_source_ids":["chunk-1","chunk-3","chunk-9"],"citation_coverage":0.92,"clarify":false,"first_token_latency_ms":1280},
+  {"id":"q2","ranked_source_ids":["chunk-11","chunk-77"],"citation_coverage":0.74,"clarify":true,"first_token_latency_ms":1430},
+  {"id":"q3","ranked_source_ids":["chunk-22","chunk-23","chunk-21"],"citation_coverage":0.88,"clarify":false,"first_token_latency_ms":1190},
+  {"id":"q4","ranked_source_ids":["chunk-30"],"citation_coverage":1.0,"clarify":false,"first_token_latency_ms":980},
+  {"id":"q5","ranked_source_ids":["chunk-41","chunk-40"],"citation_coverage":0.83,"clarify":false,"first_token_latency_ms":1340}
+]

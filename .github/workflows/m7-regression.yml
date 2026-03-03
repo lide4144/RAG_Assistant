@@ -1,0 +1,32 @@
+name: m7-regression
+
+on:
+  push:
+    paths:
+      - "app/**"
+      - "tests/**"
+      - "scripts/**"
+      - "configs/**"
+      - ".github/workflows/m7-regression.yml"
+  pull_request:
+    paths:
+      - "app/**"
+      - "tests/**"
+      - "scripts/**"
+      - "configs/**"
+      - ".github/workflows/m7-regression.yml"
+
+jobs:
+  test-m7:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+      - name: Run M7 regression unit tests
+        run: |
+          python -m unittest tests.test_m7_evidence_policy tests.test_runlog_and_config
+      - name: Run rewrite + routing quality eval
+        run: |
+          python scripts/eval_rewrite_routing_quality.py

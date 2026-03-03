@@ -1,0 +1,63 @@
+{"id":"A01","session_id":"a_open_01","turn_index":1,"question":"帮我总结这个知识库最值得关注的方向","bucket":"A_open_summary","same_topic":true,"is_out_of_corpus":false}
+{"id":"A02","session_id":"a_open_02","turn_index":1,"question":"先给我一个主题地图，再告诉我怎么追问","bucket":"A_open_summary","same_topic":true,"is_out_of_corpus":false}
+{"id":"A03","session_id":"a_open_03","turn_index":1,"question":"请概览一下这些论文主要在解决什么问题","bucket":"A_open_summary","same_topic":true,"is_out_of_corpus":false}
+{"id":"A04","session_id":"a_open_04","turn_index":1,"question":"你会优先关注哪几个研究方向？","bucket":"A_open_summary","same_topic":true,"is_out_of_corpus":false}
+{"id":"A05","session_id":"a_open_05","turn_index":1,"question":"按主题总结并给我下一步问题建议","bucket":"A_open_summary","same_topic":true,"is_out_of_corpus":false}
+{"id":"A06","session_id":"a_open_06","turn_index":1,"question":"从方法和实验两个角度做个总览","bucket":"A_open_summary","same_topic":true,"is_out_of_corpus":false}
+{"id":"A07","session_id":"a_open_07","turn_index":1,"question":"如果我要快速入门，这个知识库该先看什么","bucket":"A_open_summary","same_topic":true,"is_out_of_corpus":false}
+{"id":"A08","session_id":"a_open_08","turn_index":1,"question":"先帮我抓重点，再给我三个深入追问","bucket":"A_open_summary","same_topic":true,"is_out_of_corpus":false}
+{"id":"A09","session_id":"a_open_09","turn_index":1,"question":"有哪些共识趋势和分歧点","bucket":"A_open_summary","same_topic":true,"is_out_of_corpus":false}
+{"id":"A10","session_id":"a_open_10","turn_index":1,"question":"做一个可追溯的方向总结","bucket":"A_open_summary","same_topic":true,"is_out_of_corpus":false}
+{"id":"A11","session_id":"a_open_11","turn_index":1,"question":"What are the most important directions in this corpus?","bucket":"A_open_summary","same_topic":true,"is_out_of_corpus":false}
+{"id":"A12","session_id":"a_open_12","turn_index":1,"question":"Give me a map of themes and suggest what to ask next.","bucket":"A_open_summary","same_topic":true,"is_out_of_corpus":false}
+
+{"id":"B01_T1","session_id":"b_chain_01","turn_index":1,"question":"帮我总结这个知识库重点方向","bucket":"B_multi_turn","same_topic":true,"is_out_of_corpus":false}
+{"id":"B01_T2","session_id":"b_chain_01","turn_index":2,"question":"先展开方法类方向","bucket":"B_multi_turn","same_topic":true,"is_out_of_corpus":false}
+{"id":"B01_T3","session_id":"b_chain_01","turn_index":3,"question":"继续，给更具体的追问建议","bucket":"B_multi_turn","same_topic":true,"is_out_of_corpus":false}
+{"id":"B02_T1","session_id":"b_chain_02","turn_index":1,"question":"先做主题总览","bucket":"B_multi_turn","same_topic":true,"is_out_of_corpus":false}
+{"id":"B02_T2","session_id":"b_chain_02","turn_index":2,"question":"我更关心实验设置","bucket":"B_multi_turn","same_topic":true,"is_out_of_corpus":false}
+{"id":"B02_T3","session_id":"b_chain_02","turn_index":3,"question":"继续围绕实验设置给建议","bucket":"B_multi_turn","same_topic":true,"is_out_of_corpus":false}
+{"id":"B03_T1","session_id":"b_chain_03","turn_index":1,"question":"总结一下研究方向","bucket":"B_multi_turn","same_topic":true,"is_out_of_corpus":false}
+{"id":"B03_T2","session_id":"b_chain_03","turn_index":2,"question":"那结果指标方面呢","bucket":"B_multi_turn","same_topic":true,"is_out_of_corpus":false}
+{"id":"B03_T3","session_id":"b_chain_03","turn_index":3,"question":"继续说结果这条线","bucket":"B_multi_turn","same_topic":true,"is_out_of_corpus":false}
+{"id":"B04_T1","session_id":"b_chain_04","turn_index":1,"question":"先给我主题地图","bucket":"B_multi_turn","same_topic":true,"is_out_of_corpus":false}
+{"id":"B04_T2","session_id":"b_chain_04","turn_index":2,"question":"细化一下方法差异","bucket":"B_multi_turn","same_topic":true,"is_out_of_corpus":false}
+{"id":"B04_T3","session_id":"b_chain_04","turn_index":3,"question":"继续细化并给可执行提问","bucket":"B_multi_turn","same_topic":true,"is_out_of_corpus":false}
+{"id":"B05_T1","session_id":"b_chain_05","turn_index":1,"question":"请先总结关键方向","bucket":"B_multi_turn","same_topic":true,"is_out_of_corpus":false}
+{"id":"B05_T2","session_id":"b_chain_05","turn_index":2,"question":"我想先追问数据集相关","bucket":"B_multi_turn","same_topic":true,"is_out_of_corpus":false}
+{"id":"B05_T3","session_id":"b_chain_05","turn_index":3,"question":"继续围绕数据集给我问题清单","bucket":"B_multi_turn","same_topic":true,"is_out_of_corpus":false}
+{"id":"B06_T1","session_id":"b_chain_06","turn_index":1,"question":"概述这些论文关注点","bucket":"B_multi_turn","same_topic":true,"is_out_of_corpus":false}
+{"id":"B06_T2","session_id":"b_chain_06","turn_index":2,"question":"先说应用场景方向","bucket":"B_multi_turn","same_topic":true,"is_out_of_corpus":false}
+{"id":"B06_T3","session_id":"b_chain_06","turn_index":3,"question":"继续应用场景并给下一问","bucket":"B_multi_turn","same_topic":true,"is_out_of_corpus":false}
+{"id":"B07_T1","session_id":"b_chain_07","turn_index":1,"question":"Give me a high-level summary of the corpus.","bucket":"B_multi_turn","same_topic":true,"is_out_of_corpus":false}
+{"id":"B07_T2","session_id":"b_chain_07","turn_index":2,"question":"Focus on method innovations first.","bucket":"B_multi_turn","same_topic":true,"is_out_of_corpus":false}
+{"id":"B07_T3","session_id":"b_chain_07","turn_index":3,"question":"Continue and suggest concrete follow-up questions.","bucket":"B_multi_turn","same_topic":true,"is_out_of_corpus":false}
+{"id":"B08_T1","session_id":"b_chain_08","turn_index":1,"question":"先做一个可追溯总览","bucket":"B_multi_turn","same_topic":true,"is_out_of_corpus":false}
+{"id":"B08_T2","session_id":"b_chain_08","turn_index":2,"question":"再看评测协议方向","bucket":"B_multi_turn","same_topic":true,"is_out_of_corpus":false}
+{"id":"B08_T3","session_id":"b_chain_08","turn_index":3,"question":"继续评测协议方向","bucket":"B_multi_turn","same_topic":true,"is_out_of_corpus":false}
+{"id":"B09_T1","session_id":"b_chain_09","turn_index":1,"question":"帮我抓知识库主线","bucket":"B_multi_turn","same_topic":true,"is_out_of_corpus":false}
+{"id":"B09_T2","session_id":"b_chain_09","turn_index":2,"question":"主线里先看误差分析","bucket":"B_multi_turn","same_topic":true,"is_out_of_corpus":false}
+{"id":"B09_T3","session_id":"b_chain_09","turn_index":3,"question":"继续误差分析并建议追问","bucket":"B_multi_turn","same_topic":true,"is_out_of_corpus":false}
+{"id":"B10_T1","session_id":"b_chain_10","turn_index":1,"question":"总结主要方向","bucket":"B_multi_turn","same_topic":true,"is_out_of_corpus":false}
+{"id":"B10_T2","session_id":"b_chain_10","turn_index":2,"question":"我先看鲁棒性相关","bucket":"B_multi_turn","same_topic":true,"is_out_of_corpus":false}
+{"id":"B10_T3","session_id":"b_chain_10","turn_index":3,"question":"继续鲁棒性方向","bucket":"B_multi_turn","same_topic":true,"is_out_of_corpus":false}
+
+{"id":"C01","session_id":"c_mix_01","turn_index":1,"question":"用中文回答我","bucket":"C_control_mixed","same_topic":false,"is_out_of_corpus":false}
+{"id":"C02","session_id":"c_mix_02","turn_index":1,"question":"Please answer in bullet points only.","bucket":"C_control_mixed","same_topic":false,"is_out_of_corpus":false}
+{"id":"C03","session_id":"c_mix_03","turn_index":1,"question":"继续","bucket":"C_control_mixed","same_topic":false,"is_out_of_corpus":false}
+{"id":"C04","session_id":"c_mix_04","turn_index":1,"question":"简短一点","bucket":"C_control_mixed","same_topic":false,"is_out_of_corpus":false}
+{"id":"C05","session_id":"c_mix_05","turn_index":1,"question":"先别展开细节","bucket":"C_control_mixed","same_topic":false,"is_out_of_corpus":false}
+{"id":"C06","session_id":"c_mix_06","turn_index":1,"question":"just give the answer in Chinese","bucket":"C_control_mixed","same_topic":false,"is_out_of_corpus":false}
+{"id":"C07","session_id":"c_mix_07","turn_index":1,"question":"换一种表达方式","bucket":"C_control_mixed","same_topic":false,"is_out_of_corpus":false}
+{"id":"C08","session_id":"c_mix_08","turn_index":1,"question":"继续上一条，用列表格式","bucket":"C_control_mixed","same_topic":false,"is_out_of_corpus":false}
+
+{"id":"D01","session_id":"d_ooc_01","turn_index":1,"question":"纽约明天会下雨吗","bucket":"D_ooc","same_topic":false,"is_out_of_corpus":true}
+{"id":"D02","session_id":"d_ooc_02","turn_index":1,"question":"帮我推荐一家上海火锅店","bucket":"D_ooc","same_topic":false,"is_out_of_corpus":true}
+{"id":"D03","session_id":"d_ooc_03","turn_index":1,"question":"How much is Bitcoin today?","bucket":"D_ooc","same_topic":false,"is_out_of_corpus":true}
+{"id":"D04","session_id":"d_ooc_04","turn_index":1,"question":"给我写一个Java登录接口","bucket":"D_ooc","same_topic":false,"is_out_of_corpus":true}
+{"id":"D05","session_id":"d_ooc_05","turn_index":1,"question":"今天NBA谁赢了","bucket":"D_ooc","same_topic":false,"is_out_of_corpus":true}
+{"id":"D06","session_id":"d_ooc_06","turn_index":1,"question":"请翻译这段法语","bucket":"D_ooc","same_topic":false,"is_out_of_corpus":true}
+{"id":"D07","session_id":"d_ooc_07","turn_index":1,"question":"苹果公司最新市值是多少","bucket":"D_ooc","same_topic":false,"is_out_of_corpus":true}
+{"id":"D08","session_id":"d_ooc_08","turn_index":1,"question":"写一首七言绝句","bucket":"D_ooc","same_topic":false,"is_out_of_corpus":true}
+{"id":"D09","session_id":"d_ooc_09","turn_index":1,"question":"明天北京空气质量如何","bucket":"D_ooc","same_topic":false,"is_out_of_corpus":true}
+{"id":"D10","session_id":"d_ooc_10","turn_index":1,"question":"What is the best laptop under $1000?","bucket":"D_ooc","same_topic":false,"is_out_of_corpus":true}

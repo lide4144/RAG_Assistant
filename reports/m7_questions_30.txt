@@ -1,0 +1,30 @@
+this work 的主要贡献是什么？
+this work 的局限性有哪些？
+这篇论文的方法是什么？
+该研究使用了什么数据集？
+实验结果中最关键的指标是什么？
+作者如何定义核心任务？
+该方法与基线相比提升了什么？
+文中是否给出了消融实验结论？
+研究问题是如何被形式化定义的？
+论文报告了哪些失败案例？
+What is the main contribution of this paper?
+What limitations are reported in the study?
+How is the task definition described?
+Which metric is emphasized in the experiments?
+Does the paper provide ablation evidence?
+What evidence supports the final conclusion?
+How do authors define retrieval quality?
+What numerical result is highlighted most?
+Which section discusses method assumptions?
+How is robustness evaluated in experiments?
+该论文是否说明了适用场景边界？
+文中给出的关键数字结果是什么？
+这项工作如何定义“证据充分”？
+作者在结论中强调了哪些发现？
+该方法在实验设置中有哪些前提？
+有哪些证据支持论文的主要论点？
+论文如何解释结果的不确定性？
+研究中如何定义评估协议？
+该工作与已有方法的差异是什么？
+文中有哪些可复现实验信息？
