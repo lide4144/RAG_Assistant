@@ -45,10 +45,13 @@ temp/
 .playwright/
 .playwright-cli/
 .playwright-browsers/
+.codex/
+.opencode/
 
 # Project runtime artifacts
 runs/
 output/
+frontend/test-results/
 
 # Data strategy: ignore heavy or reproducible artifacts
 data/indexes/
@@ -56,10 +59,19 @@ data/raw/
 data/papers/
 data/processed/chunks.jsonl
 data/processed/chunks_clean.jsonl
+data/processed/.ingest.lock
 data/session_store.json
 
-# Keep lightweight metadata in data/
-!data/**/*.md
-!data/**/*.json
-!data/**/*.yaml
-!data/**/*.yml
+# Local examples / personal docs
+Documents/
+example_projects/
+
+# Local non-code asset folders
+截图/
+论文/
+
+# Keep selected lightweight metadata in data/
+!data/library_topics.json
+!data/processed/graph.json
+!data/processed/paper_summary.json
+!data/processed/papers.json
