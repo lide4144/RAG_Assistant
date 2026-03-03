@@ -1,0 +1,84 @@
+{
+  "total_samples": 5,
+  "rewrite_entity_keep_rate": 1.0,
+  "rewrite_no_concat_rate": 1.0,
+  "route_accuracy": 1.0,
+  "thresholds": {
+    "rewrite_entity_keep_rate_min": 0.9,
+    "route_accuracy_min": 0.85
+  },
+  "alerts": [],
+  "passed": true,
+  "rows": [
+    {
+      "id": "r1",
+      "query": "沿着刚才那个问题继续讲下去",
+      "rewritten_query": "沿着刚才那个问题继续讲下去",
+      "expected_intent": "continuation_control",
+      "predicted_intent": "continuation_control",
+      "route_confidence": 0.88,
+      "route_source": "semantic_model",
+      "route_correct": true,
+      "no_mechanical_concat": true,
+      "kept_entities": [],
+      "lost_entities": []
+    },
+    {
+      "id": "r2",
+      "query": "能改成 markdown 表格展示吗",
+      "rewritten_query": "能改成 markdown 表格展示吗",
+      "expected_intent": "format_control",
+      "predicted_intent": "format_control",
+      "route_confidence": 0.78,
+      "route_source": "semantic_model",
+      "route_correct": true,
+      "no_mechanical_concat": true,
+      "kept_entities": [],
+      "lost_entities": []
+    },
+    {
+      "id": "r3",
+      "query": "请用中文回答",
+      "rewritten_query": "请用中文回答",
+      "expected_intent": "style_control",
+      "predicted_intent": "style_control",
+      "route_confidence": 1.0,
+      "route_source": "semantic_model",
+      "route_correct": true,
+      "no_mechanical_concat": true,
+      "kept_entities": [],
+      "lost_entities": []
+    },
+    {
+      "id": "r4",
+      "query": "BERT 在 GLUE 上的准确率是多少？",
+      "rewritten_query": "BERT 在 GLUE 上的准确率是多少？",
+      "expected_intent": "retrieval_query",
+      "predicted_intent": "retrieval_query",
+      "route_confidence": 1.0,
+      "route_source": "semantic_model",
+      "route_correct": true,
+      "no_mechanical_concat": true,
+      "kept_entities": [
+        "BERT",
+        "GLUE"
+      ],
+      "lost_entities": []
+    },
+    {
+      "id": "r5",
+      "query": "为什么你没回答全，再找找证据",
+      "rewritten_query": "Transformer 详细架构 内部组件 机制",
+      "expected_intent": "retrieval_query",
+      "predicted_intent": "retrieval_query",
+      "route_confidence": 1.0,
+      "route_source": "semantic_model",
+      "route_correct": true,
+      "no_mechanical_concat": true,
+      "kept_entities": [
+        "Transformer"
+      ],
+      "lost_entities": []
+    }
+  ]
+}

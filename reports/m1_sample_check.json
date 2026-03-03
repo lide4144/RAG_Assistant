@@ -1,0 +1,147 @@
+{
+  "sampled_papers": 3,
+  "chunks_per_paper_target": 5,
+  "results": [
+    {
+      "paper_id": "a93f6b46f22f",
+      "title": "Learning Visuomotor Policies for Aerial Navigation",
+      "path": "data/papers/Learning Visuomotor Policies for Aerial Navigation Using Cross-Modal Representations.pdf",
+      "checks": [
+        {
+          "chunk_id": "a93f6b46f22f:00036",
+          "page_start": 5,
+          "readable": true,
+          "page_match": true,
+          "chunk_preview": "Yaw r [m] θ [◦] φ [◦] ψ [◦] qreg 0.41 ± 0.013 2.4 ± 0.14 2.5 ± 0.14 11 ± 0.67 qu",
+          "overlap_ratio": 1.0
+        },
+        {
+          "chunk_id": "a93f6b46f22f:00032",
+          "page_start": 5,
+          "readable": true,
+          "page_match": true,
+          "chunk_preview": "AVERAGE AND STANDARD ERRORS FOR ENCODING GATE POSES q",
+          "overlap_ratio": 1.0
+        },
+        {
+          "chunk_id": "a93f6b46f22f:00029",
+          "page_start": 4,
+          "readable": true,
+          "page_match": true,
+          "chunk_preview": "Intuitively, our single cross-modal latent space should lead to such smooth late",
+          "overlap_ratio": 1.0
+        },
+        {
+          "chunk_id": "a93f6b46f22f:00018",
+          "page_start": 3,
+          "readable": true,
+          "page_match": true,
+          "chunk_preview": "VAE) to train a single latent space using multiple sources of data representatio",
+          "overlap_ratio": 1.0
+        },
+        {
+          "chunk_id": "a93f6b46f22f:00014",
+          "page_start": 3,
+          "readable": true,
+          "page_match": true,
+          "chunk_preview": "This work addresses the problem of robust autonomous navigation through a set of",
+          "overlap_ratio": 1.0
+        }
+      ]
+    },
+    {
+      "paper_id": "fc2bcb75ba3e",
+      "title": "Aplikasi Game Strategi Menggunakan Metode Algoritma",
+      "path": "data/papers/Aplikasi Game Strategi Menggunakan Metode Algoritma.pdf",
+      "checks": [
+        {
+          "chunk_id": "fc2bcb75ba3e:00174",
+          "page_start": 5,
+          "readable": true,
+          "page_match": true,
+          "chunk_preview": "Musketeer memiliki tipe serangan Bullet yang merupakan kelemahan dari tipe armor",
+          "overlap_ratio": 1.0
+        },
+        {
+          "chunk_id": "fc2bcb75ba3e:00190",
+          "page_start": 5,
+          "readable": true,
+          "page_match": true,
+          "chunk_preview": "Used 265 250 200 245 -65 -5",
+          "overlap_ratio": 1.0
+        },
+        {
+          "chunk_id": "fc2bcb75ba3e:00229",
+          "page_start": 6,
+          "readable": true,
+          "page_match": true,
+          "chunk_preview": "Unit Loss 14 (5.84) 24 (10) 8 2 2.16 -8",
+          "overlap_ratio": 1.0
+        },
+        {
+          "chunk_id": "fc2bcb75ba3e:00140",
+          "page_start": 5,
+          "readable": false,
+          "page_match": true,
+          "chunk_preview": "Mus:    0",
+          "overlap_ratio": 1.0
+        },
+        {
+          "chunk_id": "fc2bcb75ba3e:00023",
+          "page_start": 1,
+          "readable": true,
+          "page_match": true,
+          "chunk_preview": "Pada tahun 1621 Mataram mulai menjalin hubungan dengan VOC. Akan tetapi, VOC ter",
+          "overlap_ratio": 1.0
+        }
+      ]
+    },
+    {
+      "paper_id": "44768e6771d3",
+      "title": "A Survey on Large Language Model Based Game Agents",
+      "path": "data/papers/2404.02039v2.pdf",
+      "checks": [
+        {
+          "chunk_id": "44768e6771d3:00303",
+          "page_start": 17,
+          "readable": false,
+          "page_match": true,
+          "chunk_preview": "Competition Texas Hold’em",
+          "overlap_ratio": 1.0
+        },
+        {
+          "chunk_id": "44768e6771d3:00217",
+          "page_start": 17,
+          "readable": false,
+          "page_match": true,
+          "chunk_preview": "Txt CanPlayWell [145]",
+          "overlap_ratio": 1.0
+        },
+        {
+          "chunk_id": "44768e6771d3:00017",
+          "page_start": 1,
+          "readable": true,
+          "page_match": true,
+          "chunk_preview": "ACM 1557-735X/2018/8-ART111 https://doi.org/XXXXXXX.XXXXXXX J. ACM, Vol. 37, No.",
+          "overlap_ratio": 0.778
+        },
+        {
+          "chunk_id": "44768e6771d3:00016",
+          "page_start": 1,
+          "readable": true,
+          "page_match": true,
+          "chunk_preview": "Permission to make digital or hard copies of all or part of this work for person",
+          "overlap_ratio": 1.0
+        },
+        {
+          "chunk_id": "44768e6771d3:00048",
+          "page_start": 3,
+          "readable": false,
+          "page_match": true,
+          "chunk_preview": "Reasoning",
+          "overlap_ratio": 1.0
+        }
+      ]
+    }
+  ]
+}

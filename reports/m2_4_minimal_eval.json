@@ -1,0 +1,79 @@
+{
+  "question": "What evidence describes method limitations and evaluation outcomes?",
+  "sample_chunks": 73,
+  "index_stats": {
+    "bm25_docs": 73,
+    "tfidf_docs": 73,
+    "embed_docs": 73,
+    "embed_build_cache_hits": 0,
+    "embed_build_cache_miss": 73,
+    "embed_build_api_calls": 3,
+    "embed_build_failed_items": 0
+  },
+  "runs": [
+    {
+      "mode": "bm25",
+      "run_dir": "runs/20260218_153300",
+      "retrieval_count": 51,
+      "top_evidence_chunk_ids": [
+        "1a0a22c1909a:00019",
+        "1a0a22c1909a:00023",
+        "1a5b25a5e857:00016",
+        "1a5b25a5e857:00006"
+      ],
+      "embedding_query_time_ms": 0,
+      "embedding_api_calls": 0,
+      "embedding_cache_hits": 0,
+      "embedding_cache_miss": 0,
+      "dense_score_type": "cosine"
+    },
+    {
+      "mode": "dense",
+      "run_dir": "runs/20260218_153300_01",
+      "retrieval_count": 51,
+      "top_evidence_chunk_ids": [
+        "1a0a22c1909a:00024",
+        "1a0a22c1909a:00023",
+        "1a5b25a5e857:00038",
+        "1a5b25a5e857:00028"
+      ],
+      "embedding_query_time_ms": 382,
+      "embedding_api_calls": 1,
+      "embedding_cache_hits": 0,
+      "embedding_cache_miss": 1,
+      "dense_score_type": "cosine"
+    },
+    {
+      "mode": "hybrid",
+      "run_dir": "runs/20260218_153300_02",
+      "retrieval_count": 52,
+      "top_evidence_chunk_ids": [
+        "1a0a22c1909a:00023",
+        "1a0a22c1909a:00019",
+        "1a5b25a5e857:00038",
+        "1a5b25a5e857:00028"
+      ],
+      "embedding_query_time_ms": 0,
+      "embedding_api_calls": 0,
+      "embedding_cache_hits": 1,
+      "embedding_cache_miss": 0,
+      "dense_score_type": "cosine"
+    },
+    {
+      "mode": "dense",
+      "run_dir": "runs/20260218_153301",
+      "retrieval_count": 53,
+      "top_evidence_chunk_ids": [
+        "1a0a22c1909a:00019",
+        "1a0a22c1909a:00033",
+        "1a5b25a5e857:00006",
+        "1a5b25a5e857:00016"
+      ],
+      "embedding_query_time_ms": 0,
+      "embedding_api_calls": 0,
+      "embedding_cache_hits": 0,
+      "embedding_cache_miss": 0,
+      "dense_score_type": "cosine"
+    }
+  ]
+}

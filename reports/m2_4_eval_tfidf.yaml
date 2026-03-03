@@ -1,0 +1,39 @@
+chunk_size: 400
+overlap: 50
+top_k_retrieval: 20
+alpha_expansion: 0.3
+top_n_evidence: 8
+fusion_weight: 0.6
+RRF_k: 60
+sufficiency_threshold: 0.7
+dense_backend: tfidf
+embedding:
+  enabled: false
+  provider: siliconflow
+  base_url: https://api.siliconflow.cn/v1
+  model: BAAI/bge-large-zh-v1.5
+  api_key_env: SILICONFLOW_API_KEY
+  batch_size: 8
+  normalize: true
+  cache_enabled: true
+  cache_path: reports/m2_4_embedding_cache.jsonl
+table_list_downweight: 0.5
+front_matter_downweight: 0.3
+reference_downweight: 0.3
+graph_path: "data/processed/graph.json"
+graph_expand_alpha: 2.0
+graph_expand_max_candidates: 200
+graph_expand_author_keywords: ["author", "authors", "affiliation", "institute", "institution", "university", "corresponding", "email", "作者", "单位", "机构", "通讯作者", "邮箱"]
+graph_expand_reference_keywords: ["reference", "citation", "source", "appendix", "validate", "verification", "scale", "questionnaire", "引用", "出处", "参考文献", "验证", "量表"]
+rewrite_enabled: true
+rewrite_use_llm: false
+rewrite_max_keywords: 12
+rewrite_synonyms:
+  citation: ["reference", "bibliography", "source"]
+  reference: ["citation", "bibliography", "source"]
+  method: ["approach", "technique"]
+  dataset: ["corpus", "benchmark"]
+  evaluation: ["metric", "assessment"]
+  引用: ["reference", "citation"]
+  方法: ["method", "approach"]
+  实验: ["experiment", "evaluation"]

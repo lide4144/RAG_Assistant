@@ -1,0 +1,7 @@
+dense_backend: tfidf
+embedding:
+  enabled: false
+rerank:
+  enabled: true
+  provider: mock
+  top_n: 8
