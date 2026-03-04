@@ -287,7 +287,7 @@ class ConfigTests(unittest.TestCase):
     def test_validate_config_rewrite_fields(self) -> None:
         invalid = PipelineConfig(
             rewrite_max_keywords=0,
-            rewrite_synonyms={"k": "v"},
+            rewrite_synonyms={"k": "v"},  # type: ignore[arg-type]
             rewrite_meta_patterns=["", "  "],
             rewrite_meta_noise_terms="bad-type",  # type: ignore[arg-type]
             llm_timeout_ms=0,
@@ -350,6 +350,24 @@ class ConfigTests(unittest.TestCase):
         self.assertEqual(validated.graph_path, "data/processed/graph.json")
         self.assertTrue(validated.graph_expand_author_keywords)
         self.assertTrue(validated.graph_expand_reference_keywords)
+        self.assertGreaterEqual(len(warnings), 1)
+
+    def test_validate_config_graph_entity_llm_fields(self) -> None:
+        invalid = PipelineConfig(
+            graph_entity_llm_base_url="",
+            graph_entity_llm_api_key_env="",
+            graph_entity_llm_model="",
+            graph_entity_llm_timeout_ms=0,
+            graph_entity_llm_max_concurrency=0,
+            graph_entity_llm_max_retries=-1,
+        )
+        validated, warnings = validate_config(invalid)
+        self.assertEqual(validated.graph_entity_llm_base_url, "https://api.siliconflow.cn/v1")
+        self.assertEqual(validated.graph_entity_llm_api_key_env, "SILICONFLOW_API_KEY")
+        self.assertEqual(validated.graph_entity_llm_model, "Pro/deepseek-ai/DeepSeek-V3.2")
+        self.assertEqual(validated.graph_entity_llm_timeout_ms, 12000)
+        self.assertEqual(validated.graph_entity_llm_max_concurrency, 4)
+        self.assertEqual(validated.graph_entity_llm_max_retries, 1)
         self.assertGreaterEqual(len(warnings), 1)
 
 

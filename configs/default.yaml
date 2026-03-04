@@ -41,6 +41,12 @@ table_list_downweight: 0.5
 front_matter_downweight: 0.3
 reference_downweight: 0.3
 graph_path: "data/processed/graph.json"
+graph_entity_llm_base_url: https://api.siliconflow.cn/v1
+graph_entity_llm_api_key_env: SILICONFLOW_API_KEY
+graph_entity_llm_model: Pro/deepseek-ai/DeepSeek-V3.2
+graph_entity_llm_timeout_ms: 12000
+graph_entity_llm_max_concurrency: 4
+graph_entity_llm_max_retries: 1
 graph_expand_alpha: 2.0
 graph_expand_max_candidates: 200
 graph_expand_author_keywords: ["author", "authors", "affiliation", "institute", "institution", "university", "corresponding", "email", "作者", "单位", "机构", "通讯作者", "邮箱"]
