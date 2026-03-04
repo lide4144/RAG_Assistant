@@ -1,14 +1,63 @@
 from __future__ import annotations
 
+import asyncio
 import json
+import os
 import tempfile
 import unittest
 from pathlib import Path
+from typing import cast
+from unittest.mock import patch
 
-from app.graph_build import build_graph, load_graph, run_graph_build
+import httpx
+
+from app.graph_build import (
+    EntityExtractionResult,
+    LLMExtractionMetrics,
+    LLMEntityExtractionConfig,
+    build_graph,
+    extract_entities_from_text_llm,
+    load_graph,
+    run_graph_build,
+)
 
 
 class GraphBuildTests(unittest.TestCase):
+    async def _fake_extractor(self, clean_text: str, _cfg: LLMEntityExtractionConfig) -> EntityExtractionResult:
+        entities: list[dict[str, str]] = []
+        if "PLA" in clean_text:
+            entities.append({"entity_name": "PLA", "entity_type": "METHOD"})
+        if "GUESS-18" in clean_text:
+            entities.append({"entity_name": "GUESS-18", "entity_type": "MODEL"})
+        if "GameUserExperience" in clean_text:
+            entities.append({"entity_name": "GameUserExperience", "entity_type": "CONCEPT"})
+        return EntityExtractionResult.model_validate({"entities": entities})
+
+    async def _failing_extractor(self, _clean_text: str, _cfg: LLMEntityExtractionConfig) -> EntityExtractionResult:
+        raise RuntimeError("simulated llm failure")
+
+    class _FakeResponse:
+        def __init__(self, status_code: int, body: dict | None = None) -> None:
+            self.status_code = status_code
+            self._body = body or {}
+
+        def json(self) -> dict:
+            return self._body
+
+    class _FakeAsyncClient:
+        def __init__(self, responses: list["GraphBuildTests._FakeResponse"]) -> None:
+            self._responses = list(responses)
+
+        async def post(self, _endpoint: str, *, headers: dict, json: dict) -> "GraphBuildTests._FakeResponse":
+            _ = headers
+            _ = json
+            if not self._responses:
+                raise AssertionError("No fake response available")
+            return self._responses.pop(0)
+
+        async def aclose(self) -> None:
+            return None
+
     def test_filter_rules_default_exclude_front_matter(self) -> None:
         rows = [
             {
@@ -83,12 +132,138 @@ class GraphBuildTests(unittest.TestCase):
             {"chunk_id": "p1:00003", "paper_id": "p1", "page_start": 3, "clean_text": "PLA variant", "content_type": "body"},
             {"chunk_id": "p1:00004", "paper_id": "p1", "page_start": 4, "clean_text": "PLA extended", "content_type": "body"},
         ]
-        graph = build_graph(rows, entity_top_m=2)
+        graph = build_graph(
+            rows,
+            entity_top_m=2,
+            llm_entity_extractor=self._fake_extractor,
+            llm_entity_config=LLMEntityExtractionConfig(max_concurrency=2),
+        )
         entities = graph.nodes["p1:00001"].entities
         self.assertIn("PLA", entities)
         self.assertIn("GUESS-18", entities)
         self.assertIn("GameUserExperience", entities)
         self.assertLessEqual(len(graph.neighbors("p1:00001", type="entity")), 2)
+
+    def test_entity_llm_failure_fallback_does_not_break_graph(self) -> None:
+        rows = [
+            {"chunk_id": "p1:00001", "paper_id": "p1", "page_start": 1, "clean_text": "PLA", "content_type": "body"},
+            {"chunk_id": "p1:00002", "paper_id": "p1", "page_start": 2, "clean_text": "PLA", "content_type": "body"},
+        ]
+        graph = build_graph(
+            rows,
+            llm_entity_extractor=self._failing_extractor,
+            llm_entity_config=LLMEntityExtractionConfig(max_concurrency=2),
+        )
+        self.assertEqual(graph.neighbors("p1:00001", type="entity"), [])
+        self.assertIn("p1:00002", graph.neighbors("p1:00001", type="adjacent"))
+        self.assertGreaterEqual(graph.stats.llm_entity_failures, 1)
+
+    def test_extract_entities_429_retries_then_fallback(self) -> None:
+        cfg = LLMEntityExtractionConfig(api_key_env="TEST_API_KEY", max_retries=1)
+        metrics = LLMExtractionMetrics()
+        client = self._FakeAsyncClient(
+            [
+                self._FakeResponse(429, body={}),
+                self._FakeResponse(429, body={}),
+            ]
+        )
+
+        with patch.dict(os.environ, {"TEST_API_KEY": "token"}, clear=False):
+            result = asyncio.run(
+                extract_entities_from_text_llm(
+                    "text for rate limit",
+                    cfg,
+                    client=cast(httpx.AsyncClient, client),
+                    metrics=metrics,
+                )
+            )
+
+        self.assertEqual(result.entities, [])
+        self.assertEqual(metrics.calls, 2)
+        self.assertEqual(metrics.rate_limits, 2)
+        self.assertEqual(metrics.retries, 1)
+        self.assertEqual(metrics.failures, 1)
+        self.assertEqual(metrics.fallback_empty, 1)
+
+    def test_extract_entities_invalid_json_retries_then_fallback(self) -> None:
+        cfg = LLMEntityExtractionConfig(api_key_env="TEST_API_KEY", max_retries=1)
+        metrics = LLMExtractionMetrics()
+        client = self._FakeAsyncClient(
+            [
+                self._FakeResponse(
+                    200,
+                    body={"choices": [{"message": {"content": "not-a-json"}}]},
+                ),
+                self._FakeResponse(
+                    200,
+                    body={"choices": [{"message": {"content": "still-not-json"}}]},
+                ),
+            ]
+        )
+
+        with patch.dict(os.environ, {"TEST_API_KEY": "token"}, clear=False):
+            result = asyncio.run(
+                extract_entities_from_text_llm(
+                    "text for invalid json",
+                    cfg,
+                    client=cast(httpx.AsyncClient, client),
+                    metrics=metrics,
+                )
+            )
+
+        self.assertEqual(result.entities, [])
+        self.assertEqual(metrics.calls, 2)
+        self.assertEqual(metrics.retries, 1)
+        self.assertEqual(metrics.failures, 1)
+        self.assertEqual(metrics.fallback_empty, 1)
+
+    def test_extract_entities_schema_validation_error_retries_then_fallback(self) -> None:
+        cfg = LLMEntityExtractionConfig(api_key_env="TEST_API_KEY", max_retries=1)
+        metrics = LLMExtractionMetrics()
+        client = self._FakeAsyncClient(
+            [
+                self._FakeResponse(
+                    200,
+                    body={
+                        "choices": [
+                            {
+                                "message": {
+                                    "content": json.dumps({"entities": [{"entity_name": "PLA"}]})
+                                }
+                            }
+                        ]
+                    },
+                ),
+                self._FakeResponse(
+                    200,
+                    body={
+                        "choices": [
+                            {
+                                "message": {
+                                    "content": json.dumps({"entities": [{"entity_name": "PLA"}]})
+                                }
+                            }
+                        ]
+                    },
+                ),
+            ]
+        )
+
+        with patch.dict(os.environ, {"TEST_API_KEY": "token"}, clear=False):
+            result = asyncio.run(
+                extract_entities_from_text_llm(
+                    "text for schema error",
+                    cfg,
+                    client=cast(httpx.AsyncClient, client),
+                    metrics=metrics,
+                )
+            )
+
+        self.assertEqual(result.entities, [])
+        self.assertEqual(metrics.calls, 2)
+        self.assertEqual(metrics.retries, 1)
+        self.assertEqual(metrics.failures, 1)
+        self.assertEqual(metrics.fallback_empty, 1)
 
     def test_entity_threshold_boundary_no_edge_when_below_threshold(self) -> None:
         rows = [
@@ -101,8 +276,22 @@ class GraphBuildTests(unittest.TestCase):
 
     def test_save_load_and_neighbors_with_weight(self) -> None:
         rows = [
-            {"chunk_id": "p1:00001", "paper_id": "p1", "page_start": 1, "clean_text": "PLA", "content_type": "body"},
-            {"chunk_id": "p1:00002", "paper_id": "p1", "page_start": 2, "clean_text": "PLA", "content_type": "body"},
+            {
+                "chunk_id": "p1:00001",
+                "paper_id": "p1",
+                "page_start": 1,
+                "clean_text": "PLA",
+                "entities": ["PLA"],
+                "content_type": "body",
+            },
+            {
+                "chunk_id": "p1:00002",
+                "paper_id": "p1",
+                "page_start": 2,
+                "clean_text": "PLA",
+                "entities": ["PLA"],
+                "content_type": "body",
+            },
         ]
         graph = build_graph(rows)
         with tempfile.TemporaryDirectory() as tmp:

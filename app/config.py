@@ -147,6 +147,12 @@ class PipelineConfig:
     embedding: EmbeddingConfig = field(default_factory=EmbeddingConfig)
     rerank: RerankConfig = field(default_factory=RerankConfig)
     graph_path: str = "data/processed/graph.json"
+    graph_entity_llm_base_url: str = "https://api.siliconflow.cn/v1"
+    graph_entity_llm_api_key_env: str = "SILICONFLOW_API_KEY"
+    graph_entity_llm_model: str = "Pro/deepseek-ai/DeepSeek-V3.2"
+    graph_entity_llm_timeout_ms: int = 12000
+    graph_entity_llm_max_concurrency: int = 4
+    graph_entity_llm_max_retries: int = 1
     graph_expand_alpha: float = 2.0
     graph_expand_max_candidates: int = 200
     graph_expand_author_keywords: list[str] = field(
@@ -880,6 +886,34 @@ def validate_config(config: PipelineConfig) -> tuple[PipelineConfig, list[str]]:
     if not isinstance(validated.graph_path, str) or not validated.graph_path.strip():
         warnings.append(f"Invalid graph_path={validated.graph_path}; fallback to {defaults.graph_path}.")
         validated.graph_path = defaults.graph_path
+
+    if not isinstance(validated.graph_entity_llm_base_url, str) or not validated.graph_entity_llm_base_url.strip():
+        warnings.append("Invalid graph_entity_llm_base_url; fallback to defaults.")
+        validated.graph_entity_llm_base_url = defaults.graph_entity_llm_base_url
+    if not isinstance(validated.graph_entity_llm_api_key_env, str) or not validated.graph_entity_llm_api_key_env.strip():
+        warnings.append("Invalid graph_entity_llm_api_key_env; fallback to defaults.")
+        validated.graph_entity_llm_api_key_env = defaults.graph_entity_llm_api_key_env
+    if not isinstance(validated.graph_entity_llm_model, str) or not validated.graph_entity_llm_model.strip():
+        warnings.append("Invalid graph_entity_llm_model; fallback to defaults.")
+        validated.graph_entity_llm_model = defaults.graph_entity_llm_model
+    if validated.graph_entity_llm_timeout_ms <= 0:
+        warnings.append(
+            f"Invalid graph_entity_llm_timeout_ms={validated.graph_entity_llm_timeout_ms}; "
+            f"fallback to {defaults.graph_entity_llm_timeout_ms} (must be > 0)."
+        )
+        validated.graph_entity_llm_timeout_ms = defaults.graph_entity_llm_timeout_ms
+    if validated.graph_entity_llm_max_concurrency <= 0:
+        warnings.append(
+            f"Invalid graph_entity_llm_max_concurrency={validated.graph_entity_llm_max_concurrency}; "
+            f"fallback to {defaults.graph_entity_llm_max_concurrency} (must be > 0)."
+        )
+        validated.graph_entity_llm_max_concurrency = defaults.graph_entity_llm_max_concurrency
+    if validated.graph_entity_llm_max_retries < 0:
+        warnings.append(
+            f"Invalid graph_entity_llm_max_retries={validated.graph_entity_llm_max_retries}; "
+            f"fallback to {defaults.graph_entity_llm_max_retries} (must be >= 0)."
+        )
+        validated.graph_entity_llm_max_retries = defaults.graph_entity_llm_max_retries
 
     if not isinstance(validated.graph_expand_author_keywords, list) or not validated.graph_expand_author_keywords:
         warnings.append("Invalid graph_expand_author_keywords; fallback to defaults.")
