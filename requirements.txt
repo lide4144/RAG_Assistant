@@ -2,4 +2,5 @@ streamlit==1.54.0
 fastapi==0.115.0
 uvicorn==0.30.6
 httpx==0.28.1
+pydantic>=2,<3
 litellm==1.74.9
