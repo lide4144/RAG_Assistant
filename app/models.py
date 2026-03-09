@@ -11,6 +11,9 @@ class PaperRecord:
     path: str
     source_type: str = "pdf"
     source_uri: str = ""
+    parser_engine: str = "legacy"
+    title_source: str = ""
+    title_confidence: float = 0.0
     imported_at: str = ""
     status: str = "active"
     fingerprint: str = ""

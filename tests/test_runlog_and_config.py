@@ -354,6 +354,7 @@ class ConfigTests(unittest.TestCase):
 
     def test_validate_config_graph_entity_llm_fields(self) -> None:
         invalid = PipelineConfig(
+            graph_entity_llm_provider="",
             graph_entity_llm_base_url="",
             graph_entity_llm_api_key_env="",
             graph_entity_llm_model="",
@@ -362,6 +363,7 @@ class ConfigTests(unittest.TestCase):
             graph_entity_llm_max_retries=-1,
         )
         validated, warnings = validate_config(invalid)
+        self.assertEqual(validated.graph_entity_llm_provider, "siliconflow")
         self.assertEqual(validated.graph_entity_llm_base_url, "https://api.siliconflow.cn/v1")
         self.assertEqual(validated.graph_entity_llm_api_key_env, "SILICONFLOW_API_KEY")
         self.assertEqual(validated.graph_entity_llm_model, "Pro/deepseek-ai/DeepSeek-V3.2")
@@ -369,6 +371,20 @@ class ConfigTests(unittest.TestCase):
         self.assertEqual(validated.graph_entity_llm_max_concurrency, 4)
         self.assertEqual(validated.graph_entity_llm_max_retries, 1)
         self.assertGreaterEqual(len(warnings), 1)
+
+    def test_validate_config_marker_fields(self) -> None:
+        invalid = PipelineConfig(
+            marker_timeout_sec=0,
+            title_confidence_threshold=2.0,
+            title_blacklist_patterns=[],
+        )
+        validated, warnings = validate_config(invalid)
+        self.assertEqual(validated.marker_timeout_sec, 30.0)
+        self.assertEqual(validated.title_confidence_threshold, 0.6)
+        self.assertTrue(validated.title_blacklist_patterns)
+        self.assertTrue(any("marker_timeout_sec" in w for w in warnings))
+        self.assertTrue(any("title_confidence_threshold" in w for w in warnings))
+        self.assertTrue(any("title_blacklist_patterns" in w for w in warnings))
 
 
 if __name__ == "__main__":

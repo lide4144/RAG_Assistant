@@ -5,3 +5,6 @@ httpx==0.28.1
 pydantic>=2,<3
 PyYAML>=6,<7
 litellm==1.74.9
+python-multipart==0.0.20
+# Optional for PDF structured parsing. If unavailable, ingest will fallback to legacy parser.
+marker-pdf>=1.0.0

@@ -42,6 +42,13 @@ From repository root:
 scripts/dev-up.sh
 ```
 
+`scripts/dev-up.sh` will inject
+`NEXT_PUBLIC_KERNEL_BASE_URL=http://<KERNEL_HOST>:<KERNEL_PORT>` for frontend.
+For frontend `/api/admin/*` calls, routing priority is:
+
+1. `NEXT_PUBLIC_KERNEL_BASE_URL` (explicit)
+2. Next.js rewrite fallback to kernel
+
 ## Health checks
 
 ```bash

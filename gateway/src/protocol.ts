@@ -1,21 +1,9 @@
 import type { KernelSource } from './types/kernel.js';
-import type { ClientChatRequestEvent } from './types/events.js';
+import type { ClientInboundEvent, ClientChatRequestEvent, ClientTaskStartGraphBuildEvent } from './types/events.js';
 
 const allowedModes = new Set(['local', 'web', 'hybrid']);
 
-export function parseClientEvent(raw: string): ClientChatRequestEvent {
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(raw);
-  } catch {
-    throw new Error('Client event must be valid JSON');
-  }
-
-  if (!parsed || typeof parsed !== 'object') {
-    throw new Error('Client event must be an object');
-  }
-
-  const maybeEvent = parsed as Partial<ClientChatRequestEvent>;
+function parseChatEvent(maybeEvent: Partial<ClientChatRequestEvent>): ClientChatRequestEvent {
   if (maybeEvent.type !== 'chat' || !maybeEvent.payload) {
     throw new Error('Client event must use type=chat and include payload');
   }
@@ -40,6 +28,39 @@ export function parseClientEvent(raw: string): ClientChatRequestEvent {
       history
     }
   };
+}
+
+function parseTaskStartEvent(maybeEvent: Partial<ClientTaskStartGraphBuildEvent>): ClientTaskStartGraphBuildEvent {
+  const payload = maybeEvent.payload ?? {};
+  if (payload && typeof payload !== 'object') {
+    throw new Error('payload for task_start_graph_build must be an object');
+  }
+  return {
+    type: 'task_start_graph_build',
+    payload: payload as ClientTaskStartGraphBuildEvent['payload']
+  };
+}
+
+export function parseClientEvent(raw: string): ClientInboundEvent {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    throw new Error('Client event must be valid JSON');
+  }
+
+  if (!parsed || typeof parsed !== 'object') {
+    throw new Error('Client event must be an object');
+  }
+
+  const maybeEvent = parsed as Partial<ClientInboundEvent>;
+  if (maybeEvent.type === 'chat') {
+    return parseChatEvent(maybeEvent as Partial<ClientChatRequestEvent>);
+  }
+  if (maybeEvent.type === 'task_start_graph_build') {
+    return parseTaskStartEvent(maybeEvent as Partial<ClientTaskStartGraphBuildEvent>);
+  }
+  throw new Error('Client event type must be chat or task_start_graph_build');
 }
 
 export function normalizeSources(sources: KernelSource[]): KernelSource[] {

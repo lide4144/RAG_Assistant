@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
+from typing import Any
 
 from app.models import ChunkRecord, PageText
 
@@ -62,6 +63,59 @@ def split_into_segments(pages: list[PageText]) -> list[Segment]:
     return segments
 
 
+def split_structured_segments(blocks: list[dict[str, Any]] | None) -> list[Segment]:
+    if not blocks:
+        return []
+    active_lines: list[str] = []
+    active_page = 1
+    active_heading_mode = False
+
+    def flush_active() -> None:
+        nonlocal active_lines, active_page, active_heading_mode
+        if not active_lines:
+            return
+        merged = "\n".join(active_lines).strip()
+        if merged:
+            segments.append(Segment(page_start=active_page, text=merged))
+        active_lines = []
+        active_page = 1
+        active_heading_mode = False
+
+    segments: list[Segment] = []
+    for block in blocks:
+        if not isinstance(block, dict):
+            continue
+        text = str(block.get("text", "")).strip()
+        if not text:
+            continue
+        page_num_raw = block.get("page")
+        try:
+            page_num = int(page_num_raw)
+        except Exception:
+            page_num = 1
+        page_num = max(1, page_num)
+        heading_level_raw = block.get("heading_level")
+        heading_level = heading_level_raw if isinstance(heading_level_raw, int) and heading_level_raw > 0 else None
+
+        # Prefer heading levels as section boundaries when present.
+        if heading_level is not None:
+            flush_active()
+            active_lines = [text]
+            active_page = page_num
+            active_heading_mode = True
+            continue
+
+        if active_heading_mode:
+            active_lines.append(text)
+            continue
+
+        # For non-heading blocks, preserve block boundary behavior.
+        segments.append(Segment(page_start=page_num, text=text))
+
+    flush_active()
+    return segments
+
+
 def sliding_window_chunk(
     paper_id: str,
     segments: list[Segment],
@@ -113,12 +167,12 @@ def build_chunks(
     pages: list[PageText],
     chunk_size: int,
     overlap: int,
+    structured_segments: list[dict[str, Any]] | None = None,
 ) -> list[ChunkRecord]:
-    segments = split_into_segments(pages)
+    segments = split_structured_segments(structured_segments) or split_into_segments(pages)
     return sliding_window_chunk(
         paper_id=paper_id,
         segments=segments,
         chunk_size=chunk_size,
         overlap=overlap,
     )
-

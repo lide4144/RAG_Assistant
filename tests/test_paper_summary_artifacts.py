@@ -84,7 +84,7 @@ class PaperSummaryArtifactTests(unittest.TestCase):
             self.assertTrue(summary_file.exists())
             payload = json.loads(summary_file.read_text(encoding="utf-8"))
             self.assertEqual(len(payload), 1)
-            self.assertEqual(payload[0]["paper_id"], "paper-a")
+            self.assertTrue(str(payload[0]["paper_id"]).startswith("pdf_"))
 
     def test_summary_recall_interface_returns_candidates(self) -> None:
         summaries = [

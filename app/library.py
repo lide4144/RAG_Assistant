@@ -225,6 +225,9 @@ def run_import_workflow(
                     "next_steps": ["请等待当前知识库准备任务完成后重试。"],
                     "message": "知识库准备冲突，请稍后重试。",
                     "import_summary": ingest_report.get("import_summary", {}),
+                    "fallback_reason": ingest_report.get("fallback_reason"),
+                    "fallback_path": ingest_report.get("fallback_path"),
+                    "confidence_note": ingest_report.get("confidence_note"),
                     "index_stage": {
                         "status": "conflict",
                         "duration_sec": round(time.perf_counter() - index_started, 3),
@@ -243,6 +246,9 @@ def run_import_workflow(
                 ],
                 "message": "论文已导入，但知识库准备失败，请稍后重试。",
                 "import_summary": ingest_report.get("import_summary", {}),
+                "fallback_reason": ingest_report.get("fallback_reason"),
+                "fallback_path": ingest_report.get("fallback_path"),
+                "confidence_note": ingest_report.get("confidence_note"),
                 "index_stage": {
                     "status": index_status,
                     "duration_sec": round(time.perf_counter() - index_started, 3),
@@ -268,6 +274,9 @@ def run_import_workflow(
         "failed_count": failed_count,
         "failure_reasons": failure_reasons,
         "import_summary": ingest_report.get("import_summary", {}),
+        "fallback_reason": ingest_report.get("fallback_reason"),
+        "fallback_path": ingest_report.get("fallback_path"),
+        "confidence_note": ingest_report.get("confidence_note"),
         "import_outcomes": ingest_report.get("import_outcomes", []),
         "index_stage": {"status": "success", "duration_sec": index_duration},
         "next_steps": [

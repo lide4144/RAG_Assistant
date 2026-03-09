@@ -1,5 +1,15 @@
 chunk_size: 400
 overlap: 50
+marker_enabled: true
+marker_timeout_sec: 1200
+title_confidence_threshold: 0.6
+title_blacklist_patterns:
+  - "^\\s*preprint\\.?\\s+under\\s+review\\.?\\s*$"
+  - "all rights reserved"
+  - "copyright"
+  - "arxiv preprint"
+  - "provided proper attribution is provided"
+  - "hereby grants permission to"
 top_k_retrieval: 20
 alpha_expansion: 0.3
 top_n_evidence: 8
@@ -41,12 +51,13 @@ table_list_downweight: 0.5
 front_matter_downweight: 0.3
 reference_downweight: 0.3
 graph_path: "data/processed/graph.json"
+graph_entity_llm_provider: siliconflow
 graph_entity_llm_base_url: https://api.siliconflow.cn/v1
 graph_entity_llm_api_key_env: SILICONFLOW_API_KEY
 graph_entity_llm_model: Pro/deepseek-ai/DeepSeek-V3.2
-graph_entity_llm_timeout_ms: 12000
-graph_entity_llm_max_concurrency: 4
-graph_entity_llm_max_retries: 1
+graph_entity_llm_timeout_ms: 30000
+graph_entity_llm_max_concurrency: 2
+graph_entity_llm_max_retries: 3
 graph_expand_alpha: 2.0
 graph_expand_max_candidates: 200
 graph_expand_author_keywords: ["author", "authors", "affiliation", "institute", "institution", "university", "corresponding", "email", "作者", "单位", "机构", "通讯作者", "邮箱"]
