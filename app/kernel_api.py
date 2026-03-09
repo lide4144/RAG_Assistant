@@ -1,24 +1,42 @@
 from __future__ import annotations
 
 import argparse
+from dataclasses import asdict
 import json
 import os
+import re
 import threading
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 from queue import Empty, Queue
+from tempfile import TemporaryDirectory
 from typing import Any, Callable, Iterator, Literal
 from uuid import uuid4
 
 import httpx
-from fastapi import FastAPI, HTTPException
+from starlette.datastructures import UploadFile as StarletteUploadFile
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
 from app.admin_llm_config import load_runtime_llm_config, mask_api_key, normalize_api_base, save_runtime_llm_config
 from app.config import load_and_validate_config
+from app.graph_build import run_graph_build
+from app.library import load_papers, run_import_workflow
 from app.llm_routing import build_stage_policy, get_last_stage_failure
+from app.pipeline_runtime_config import (
+    default_marker_llm,
+    default_marker_tuning,
+    load_pipeline_runtime_config,
+    mask_marker_llm_secrets,
+    resolve_effective_marker_llm,
+    save_pipeline_runtime_config,
+    validate_marker_llm_payload,
+    validate_marker_tuning_payload,
+    resolve_effective_marker_tuning,
+)
 from app.paths import CONFIGS_DIR, DATA_DIR, RUNS_DIR
 from app.index_vec import load_vec_index
 from app.qa import parse_args, run_qa
@@ -94,6 +112,8 @@ class AdminSaveLLMConfigRequest(BaseModel):
     answer: AdminStageConfigRequest | None = None
     embedding: AdminStageConfigRequest | None = None
     rerank: AdminStageConfigRequest | None = None
+    rewrite: AdminStageConfigRequest | None = None
+    graph_entity: AdminStageConfigRequest | None = None
     # Legacy flat stage fields kept for backward compatibility.
     answer_provider: str | None = None
     answer_api_base: str | None = None
@@ -107,6 +127,193 @@ class AdminSaveLLMConfigRequest(BaseModel):
     rerank_api_base: str | None = None
     rerank_api_key: str | None = None
     rerank_model: str | None = None
+    rewrite_provider: str | None = None
+    rewrite_api_base: str | None = None
+    rewrite_api_key: str | None = None
+    rewrite_model: str | None = None
+    graph_entity_provider: str | None = None
+    graph_entity_api_base: str | None = None
+    graph_entity_api_key: str | None = None
+    graph_entity_model: str | None = None
+
+
+class MarkerTuningPayload(BaseModel):
+    recognition_batch_size: int = Field(default=2)
+    detector_batch_size: int = Field(default=2)
+    layout_batch_size: int = Field(default=2)
+    ocr_error_batch_size: int = Field(default=1)
+    table_rec_batch_size: int = Field(default=1)
+    model_dtype: str = Field(default="float16")
+
+
+class MarkerLLMPayload(BaseModel):
+    use_llm: bool = False
+    llm_service: str = ""
+    gemini_api_key: str = ""
+    vertex_project_id: str = ""
+    ollama_base_url: str = "http://127.0.0.1:11434"
+    ollama_model: str = ""
+    claude_api_key: str = ""
+    claude_model_name: str = ""
+    openai_api_key: str = ""
+    openai_model: str = ""
+    openai_base_url: str = "https://api.openai.com/v1"
+    azure_endpoint: str = ""
+    azure_api_key: str = ""
+    deployment_name: str = ""
+
+
+class AdminSavePipelineConfigRequest(BaseModel):
+    marker_tuning: MarkerTuningPayload
+    marker_llm: MarkerLLMPayload = Field(default_factory=MarkerLLMPayload)
+
+
+TaskState = Literal["idle", "queued", "running", "succeeded", "failed", "cancelled"]
+TaskKind = Literal["graph_build"]
+
+
+class GraphBuildTaskStartRequest(BaseModel):
+    input_path: str = str(DATA_DIR / "processed" / "chunks_clean.jsonl")
+    output_path: str = str(DATA_DIR / "processed" / "graph.json")
+    threshold: int = 1
+    top_m: int = 30
+    include_front_matter: bool = False
+    force_new: bool = False
+    llm_max_concurrency: int | None = Field(default=None, ge=1, le=32)
+
+
+class TaskErrorInfo(BaseModel):
+    stage: str
+    message: str
+    recovery: str
+
+
+class TaskProgressInfo(BaseModel):
+    stage: str
+    processed: int = 0
+    total: int = 0
+    elapsed_ms: int = 0
+    message: str = ""
+
+
+class TaskStatusResponse(BaseModel):
+    task_id: str
+    task_kind: TaskKind
+    state: TaskState
+    created_at: str
+    updated_at: str
+    accepted: bool = True
+    progress: TaskProgressInfo | None = None
+    error: TaskErrorInfo | None = None
+    result: dict[str, Any] | None = None
+
+
+_TASKS_LOCK = threading.Lock()
+_TASKS: dict[str, TaskStatusResponse] = {}
+_TASK_CANCEL_EVENTS: dict[str, threading.Event] = {}
+_PIPELINE_STATUS_PATH = DATA_DIR / "processed" / "pipeline_status_latest.json"
+_ARTIFACT_INDEX = (
+    ("indexes:bmp25", DATA_DIR / "indexes" / "bm25_index.json", "bm25-index", "index"),
+    ("indexes:vec", DATA_DIR / "indexes" / "vec_index.json", "vector-index", "index"),
+    ("indexes:embed", DATA_DIR / "indexes" / "vec_index_embed.json", "embedding-index", "index"),
+    ("processed:chunks", DATA_DIR / "processed" / "chunks.jsonl", "chunks", "import"),
+    ("processed:chunks_clean", DATA_DIR / "processed" / "chunks_clean.jsonl", "clean-chunks", "clean"),
+    ("processed:papers", DATA_DIR / "processed" / "papers.json", "papers-catalog", "import"),
+    ("processed:paper_summary", DATA_DIR / "processed" / "paper_summary.json", "paper-summary", "clean"),
+    ("processed:graph", DATA_DIR / "processed" / "graph.json", "graph", "graph_build"),
+)
+
+
+class TaskCancelResponse(BaseModel):
+    task_id: str
+    task_kind: TaskKind
+    state: TaskState
+    cancelled: bool
+    updated_at: str
+    message: str
+
+
+class ImportLatestResultResponse(BaseModel):
+    added: int = 0
+    skipped: int = 0
+    failed: int = 0
+    total_papers: int = 0
+    failure_reasons: list[str] = Field(default_factory=list)
+    pipeline_stages: list["PipelineStageStatus"] = Field(default_factory=list)
+    report_path: str | None = None
+    updated_at: str | None = None
+    degraded: bool = False
+    fallback_reason: str | None = None
+    fallback_path: str | None = None
+    confidence_note: str | None = None
+    artifact_summary: dict[str, Any] = Field(default_factory=dict)
+    parser_diagnostics: list[dict[str, Any]] = Field(default_factory=list)
+
+
+class LibraryImportResponse(BaseModel):
+    ok: bool
+    success_count: int = 0
+    failed_count: int = 0
+    failure_reasons: list[str] = Field(default_factory=list)
+    next_steps: list[str] = Field(default_factory=list)
+    message: str = ""
+    import_summary: dict[str, Any] = Field(default_factory=dict)
+    import_outcomes: list[dict[str, Any]] = Field(default_factory=list)
+    index_stage: dict[str, Any] = Field(default_factory=dict)
+
+
+class ImportHistoryEntryResponse(BaseModel):
+    run_id: str
+    updated_at: str
+    added: int = 0
+    skipped: int = 0
+    failed: int = 0
+    total_candidates: int = 0
+    report_path: str
+
+
+class LibraryImportFromDirRequest(BaseModel):
+    source_dir: str = Field(min_length=1)
+    topic: str = ""
+
+
+class PipelineStageStatus(BaseModel):
+    stage: Literal["import", "clean", "index", "graph_build"]
+    state: str
+    updated_at: str | None = None
+    message: str | None = None
+    detail: str | None = None
+
+
+class MarkerArtifactActionResponse(BaseModel):
+    kind: Literal["copy_path", "rebuild", "delete"]
+    enabled: bool = True
+    label: str
+    confirm_title: str | None = None
+    confirm_message: str | None = None
+
+
+class MarkerArtifactEntryResponse(BaseModel):
+    key: str
+    group: Literal["indexes", "processed"]
+    path: str
+    file_name: str
+    artifact_type: str
+    related_stage: Literal["import", "clean", "index", "graph_build"]
+    exists: bool
+    status: Literal["healthy", "missing", "stale"]
+    size_bytes: int | None = None
+    updated_at: str | None = None
+    health_message: str | None = None
+    actions: list[MarkerArtifactActionResponse] = Field(default_factory=list)
+
+
+class MarkerArtifactDeleteRequest(BaseModel):
+    key: str = Field(min_length=1)
+
+
+class _TaskCancelledError(RuntimeError):
+    pass
 
 
 def _map_kernel_mode_to_qa_mode(mode: str) -> str:
@@ -295,10 +502,219 @@ def _build_stage_payload(
 
 def _extract_stage_from_error_message(message: str) -> str | None:
     normalized = str(message or "").strip().lower()
-    for stage in ("answer", "embedding", "rerank"):
+    for stage in ("answer", "embedding", "rerank", "rewrite", "graph_entity"):
         if normalized.startswith(f"{stage}."):
             return stage
     return None
+
+
+def _runtime_stage_entry(raw: Any) -> dict[str, Any]:
+    if not isinstance(raw, dict):
+        return {"provider": "", "model": "", "configured": False}
+    provider = str(raw.get("provider", "")).strip()
+    model = str(raw.get("model", "")).strip()
+    return {"provider": provider, "model": model, "configured": bool(provider and model)}
+
+
+def _mask_value(field: str, value: Any) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    if "key" in field or "token" in field:
+        return mask_marker_llm_secrets({field: text}).get(field, "")
+    return text
+
+
+def _marker_llm_runtime_entry(raw: Any, effective_source: dict[str, str] | None = None) -> dict[str, Any]:
+    if not isinstance(raw, dict):
+        raw = {}
+    use_llm = bool(raw.get("use_llm"))
+    llm_service = str(raw.get("llm_service", "")).strip()
+    required_errors: list[str] = []
+    try:
+        _, field_errors = validate_marker_llm_payload(raw)
+        required_errors = [f"{field}: {message}" for field, message in field_errors.items()]
+    except ValueError as exc:
+        required_errors = [str(exc)]
+
+    summary_fields = []
+    for field in (
+        "vertex_project_id",
+        "ollama_base_url",
+        "ollama_model",
+        "claude_model_name",
+        "openai_model",
+        "openai_base_url",
+        "azure_endpoint",
+        "deployment_name",
+    ):
+        value = _mask_value(field, raw.get(field))
+        if value:
+            summary_fields.append({"field": field, "value": value, "source": (effective_source or {}).get(field, "default")})
+
+    configured = use_llm and not required_errors and bool(llm_service)
+    status = "disabled"
+    if use_llm:
+        status = "ready" if configured else "degraded"
+    return {
+        "use_llm": use_llm,
+        "llm_service": llm_service,
+        "configured": configured,
+        "status": status,
+        "required_errors": required_errors,
+        "summary_fields": summary_fields,
+        "effective_source": effective_source or {},
+    }
+
+
+def _artifact_status_from_path(path: Path, *, latest_updated_at: str | None) -> tuple[str, str | None, int | None, str | None]:
+    if not path.exists():
+        return "missing", "文件不存在", None, None
+    updated_at = datetime.fromtimestamp(path.stat().st_mtime, timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
+    size_bytes = int(path.stat().st_size)
+    if latest_updated_at:
+        try:
+            latest_dt = datetime.fromisoformat(latest_updated_at.replace("Z", "+00:00"))
+            file_dt = datetime.fromisoformat(updated_at.replace("Z", "+00:00"))
+            if file_dt < latest_dt:
+                return "stale", "产物早于最近一次运行，建议检查是否需要重建", size_bytes, updated_at
+        except Exception:
+            pass
+    return "healthy", "产物可用", size_bytes, updated_at
+
+
+def _build_marker_artifacts(*, latest_updated_at: str | None = None) -> list[MarkerArtifactEntryResponse]:
+    artifacts: list[MarkerArtifactEntryResponse] = []
+    for key, path, artifact_type, related_stage in _ARTIFACT_INDEX:
+        group = "indexes" if key.startswith("indexes:") else "processed"
+        status, health_message, size_bytes, updated_at = _artifact_status_from_path(path, latest_updated_at=latest_updated_at)
+        artifacts.append(
+            MarkerArtifactEntryResponse(
+                key=key,
+                group=group,  # type: ignore[arg-type]
+                path=str(path),
+                file_name=path.name,
+                artifact_type=artifact_type,
+                related_stage=related_stage,  # type: ignore[arg-type]
+                exists=path.exists(),
+                status=status,  # type: ignore[arg-type]
+                size_bytes=size_bytes,
+                updated_at=updated_at,
+                health_message=health_message,
+                actions=[
+                    MarkerArtifactActionResponse(kind="copy_path", label="复制路径"),
+                    MarkerArtifactActionResponse(kind="rebuild", label="重建入口"),
+                    MarkerArtifactActionResponse(
+                        kind="delete",
+                        label="删除产物",
+                        confirm_title=f"删除 {path.name}",
+                        confirm_message=f"删除后会影响 {related_stage} 阶段，可能需要重新导入或重建。确认继续吗？",
+                    ),
+                ],
+            )
+        )
+    return artifacts
+
+
+def _summarize_marker_artifacts(artifacts: list[MarkerArtifactEntryResponse]) -> dict[str, Any]:
+    groups: dict[str, list[dict[str, Any]]] = {"indexes": [], "processed": []}
+    counts = {"healthy": 0, "missing": 0, "stale": 0}
+    for artifact in artifacts:
+        groups[artifact.group].append(artifact.model_dump())
+        counts[artifact.status] = counts.get(artifact.status, 0) + 1
+    return {"counts": counts, "groups": groups}
+
+
+def _extract_ingest_degradation(payload: dict[str, Any]) -> dict[str, Any]:
+    rows = payload.get("parser_observability")
+    if not isinstance(rows, list):
+        rows = []
+    fallback_rows = [row for row in rows if isinstance(row, dict) and bool(row.get("parser_fallback"))]
+    if not fallback_rows:
+        return {
+            "degraded": False,
+            "fallback_reason": None,
+            "fallback_path": None,
+            "confidence_note": "最近一次导入未检测到 Marker 降级路径。",
+        }
+    first = fallback_rows[0]
+    reason = str(first.get("parser_fallback_reason", "")).strip() or "marker parser fallback"
+    stage = str(first.get("parser_fallback_stage", "")).strip() or "unknown"
+    return {
+        "degraded": True,
+        "fallback_reason": reason,
+        "fallback_path": f"marker -> legacy ({stage})",
+        "confidence_note": "当前结果来自降级导入路径，建议检查 Marker LLM/解析配置后重跑以恢复最佳结构化质量。",
+    }
+
+
+def _extract_parser_diagnostics(payload: dict[str, Any]) -> list[dict[str, Any]]:
+    rows = payload.get("parser_observability")
+    if not isinstance(rows, list):
+        return []
+    diagnostics: list[dict[str, Any]] = []
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        marker_timing = row.get("marker_timing")
+        if not isinstance(marker_timing, dict):
+            marker_timing = {}
+        diagnostics.append(
+            {
+                "paper_id": str(row.get("paper_id", "")).strip(),
+                "source_uri": str(row.get("source_uri", "")).strip(),
+                "parser_engine": str(row.get("parser_engine", "")).strip() or "legacy",
+                "parser_fallback": bool(row.get("parser_fallback")),
+                "parser_fallback_stage": str(row.get("parser_fallback_stage", "")).strip() or None,
+                "parser_fallback_reason": str(row.get("parser_fallback_reason", "")).strip() or None,
+                "marker_attempt_duration_sec": round(float(marker_timing.get("attempt_duration_sec", 0.0) or 0.0), 3),
+                "marker_stage_timings": marker_timing.get("stage_timings", {}) if isinstance(marker_timing.get("stage_timings"), dict) else {},
+            }
+        )
+    diagnostics.sort(key=lambda item: float(item.get("marker_attempt_duration_sec", 0.0) or 0.0), reverse=True)
+    return diagnostics[:10]
+
+
+def _build_runtime_status(
+    *,
+    llm: dict[str, Any],
+    marker_source: dict[str, str],
+    marker_warnings: list[str],
+    marker_llm: dict[str, Any],
+    artifact_summary: dict[str, Any],
+    ingest_degradation: dict[str, Any],
+) -> tuple[str, list[str]]:
+    reasons: list[str] = []
+    answer = llm.get("answer", {})
+    if not isinstance(answer, dict) or not bool(answer.get("configured")):
+        reasons.append("answer stage is not configured")
+        return "BLOCKED", reasons
+
+    for stage in ("rerank", "rewrite"):
+        stage_payload = llm.get(stage, {})
+        if not isinstance(stage_payload, dict) or not bool(stage_payload.get("configured")):
+            reasons.append(f"{stage} stage is not configured")
+
+    default_fallback_fields = sorted([field for field, source in marker_source.items() if source == "default"])
+    if default_fallback_fields:
+        reasons.append(f"marker tuning fallback to default: {', '.join(default_fallback_fields)}")
+    if bool(marker_llm.get("use_llm")) and not bool(marker_llm.get("configured")):
+        reasons.append("marker llm service is enabled but configuration is incomplete")
+    if bool(ingest_degradation.get("degraded")):
+        reasons.append(str(ingest_degradation.get("fallback_reason") or "marker ingest degraded"))
+    artifact_counts = artifact_summary.get("counts", {}) if isinstance(artifact_summary, dict) else {}
+    missing = int(artifact_counts.get("missing", 0) or 0)
+    stale = int(artifact_counts.get("stale", 0) or 0)
+    if missing > 0:
+        reasons.append(f"{missing} marker artifacts are missing")
+    if stale > 0:
+        reasons.append(f"{stale} marker artifacts are stale")
+    if marker_warnings:
+        reasons.extend(marker_warnings)
+
+    if reasons:
+        return "DEGRADED", reasons
+    return "READY", reasons
 
 
 @app.post("/api/admin/detect-models", response_model=AdminDetectModelsResponse)
@@ -351,6 +767,312 @@ async def detect_models(payload: AdminDetectModelsRequest) -> AdminDetectModelsR
 
 def _iso_now() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
+
+
+def _task_snapshot(task: TaskStatusResponse) -> TaskStatusResponse:
+    # Pydantic model copy to avoid mutating shared state outside lock.
+    return TaskStatusResponse.model_validate(task.model_dump())
+
+
+def _find_active_task(task_kind: TaskKind) -> TaskStatusResponse | None:
+    with _TASKS_LOCK:
+        for task in _TASKS.values():
+            if task.task_kind == task_kind and task.state in {"queued", "running"}:
+                return _task_snapshot(task)
+    return None
+
+
+def _save_task(task: TaskStatusResponse) -> None:
+    with _TASKS_LOCK:
+        _TASKS[task.task_id] = task
+
+
+def _extract_import_failure_reasons(report: dict[str, Any]) -> list[str]:
+    reasons: list[str] = []
+    outcomes = report.get("import_outcomes")
+    if isinstance(outcomes, list):
+        for row in outcomes:
+            if not isinstance(row, dict):
+                continue
+            if str(row.get("status", "")).strip() != "failed":
+                continue
+            reason = str(row.get("reason", "")).strip()
+            if reason:
+                reasons.append(reason)
+    if reasons:
+        return reasons
+
+    failed_rows = report.get("paper_failures")
+    if isinstance(failed_rows, list):
+        for reason in failed_rows:
+            text = str(reason).strip()
+            if text:
+                reasons.append(text)
+    return reasons
+
+
+def _latest_task(task_kind: TaskKind) -> TaskStatusResponse | None:
+    with _TASKS_LOCK:
+        candidates = [task for task in _TASKS.values() if task.task_kind == task_kind]
+    if not candidates:
+        return None
+    latest = max(candidates, key=lambda item: item.updated_at)
+    return _task_snapshot(latest)
+
+
+def _resolve_import_stage_state(import_summary: dict[str, Any]) -> str:
+    added = max(0, int(import_summary.get("added", 0) or 0))
+    skipped = max(0, int(import_summary.get("skipped", 0) or 0))
+    failed = max(0, int(import_summary.get("failed", 0) or 0))
+    degraded = bool(import_summary.get("degraded"))
+    if degraded and (added > 0 or skipped > 0):
+        return "failed_with_fallback"
+    if added > 0 or skipped > 0:
+        return "succeeded"
+    if failed > 0:
+        return "failed"
+    return "unknown"
+
+
+def _resolve_index_stage_state(index_stage: dict[str, Any]) -> str:
+    status = str(index_stage.get("status", "")).strip().lower()
+    if status in {"success", "succeeded"}:
+        return "succeeded"
+    if status in {"degraded", "failed_with_fallback"}:
+        return "failed_with_fallback"
+    if status in {"running", "queued"}:
+        return status
+    if status in {"failed", "conflict"}:
+        return "failed"
+    return "unknown"
+
+
+def _fallback_index_state() -> str:
+    bm25 = DATA_DIR / "indexes" / "bm25_index.json"
+    vec = DATA_DIR / "indexes" / "vec_index.json"
+    embed = DATA_DIR / "indexes" / "vec_index_embed.json"
+    if bm25.exists() and vec.exists() and embed.exists():
+        return "succeeded"
+    return "unknown"
+
+
+def _fallback_graph_state() -> tuple[str, str | None, str | None]:
+    graph_path = DATA_DIR / "processed" / "graph.json"
+    if graph_path.exists():
+        updated_at = datetime.fromtimestamp(graph_path.stat().st_mtime, timezone.utc).isoformat(timespec="seconds").replace(
+            "+00:00",
+            "Z",
+        )
+        return "succeeded", updated_at, f"已检测到图文件: {graph_path.name}"
+    return "not_started", None, "尚未启动图构建任务"
+
+
+def _build_pipeline_stages(*, report: dict[str, Any], updated_at: str | None) -> list[PipelineStageStatus]:
+    import_summary = report.get("import_summary")
+    if not isinstance(import_summary, dict):
+        import_summary = {}
+    import_state = _resolve_import_stage_state(import_summary) if report else "not_started"
+    index_stage = report.get("index_stage")
+    index_state = _resolve_index_stage_state(index_stage) if isinstance(index_stage, dict) else _fallback_index_state()
+
+    latest_graph_task = _latest_task("graph_build")
+    if latest_graph_task is not None:
+        graph_state = latest_graph_task.state
+        graph_updated_at = latest_graph_task.updated_at
+        graph_message = latest_graph_task.progress.message if latest_graph_task.progress else None
+    else:
+        graph_state, graph_updated_at, graph_message = _fallback_graph_state()
+
+    degradation = _extract_ingest_degradation(report if isinstance(report, dict) else {})
+    detail = str(degradation.get("fallback_reason") or "").strip() or None
+
+    return [
+        PipelineStageStatus(stage="import", state=import_state, updated_at=updated_at, detail=detail),
+        PipelineStageStatus(stage="clean", state=import_state, updated_at=updated_at, detail=detail),
+        PipelineStageStatus(stage="index", state=index_state, updated_at=updated_at),
+        PipelineStageStatus(
+            stage="graph_build",
+            state=graph_state,
+            updated_at=graph_updated_at,
+            message=graph_message,
+        ),
+    ]
+
+
+def _write_latest_pipeline_status(*, result: dict[str, Any], updated_at: str) -> None:
+    payload = {
+        "updated_at": updated_at,
+        "import_summary": result.get("import_summary", {}),
+        "index_stage": result.get("index_stage", {}),
+        "failure_reasons": result.get("failure_reasons", []),
+        "fallback_reason": result.get("fallback_reason"),
+        "fallback_path": result.get("fallback_path"),
+        "confidence_note": result.get("confidence_note"),
+    }
+    try:
+        _PIPELINE_STATUS_PATH.parent.mkdir(parents=True, exist_ok=True)
+        _PIPELINE_STATUS_PATH.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    except Exception:
+        # best effort only
+        pass
+
+
+def _read_latest_pipeline_status() -> dict[str, Any] | None:
+    if not _PIPELINE_STATUS_PATH.exists():
+        return None
+    try:
+        payload = json.loads(_PIPELINE_STATUS_PATH.read_text(encoding="utf-8"))
+    except Exception:
+        return None
+    return payload if isinstance(payload, dict) else None
+
+
+def _safe_upload_name(raw: str, idx: int) -> str:
+    name = Path(raw or f"upload-{idx}.pdf").name
+    cleaned = re.sub(r"[^A-Za-z0-9._-]+", "-", name).strip("-")
+    if not cleaned:
+        cleaned = f"upload-{idx}.pdf"
+    if not cleaned.lower().endswith(".pdf"):
+        cleaned = f"{cleaned}.pdf"
+    return cleaned
+
+
+def _load_latest_import_result() -> ImportLatestResultResponse:
+    total_papers = len(load_papers())
+    if total_papers == 0:
+        return ImportLatestResultResponse(
+            total_papers=0,
+            added=0,
+            skipped=0,
+            failed=0,
+            failure_reasons=[],
+            pipeline_stages=_build_pipeline_stages(report={}, updated_at=None),
+            report_path=None,
+            updated_at=None,
+            artifact_summary=_summarize_marker_artifacts(_build_marker_artifacts()),
+            parser_diagnostics=[],
+        )
+    report_paths = sorted(
+        RUNS_DIR.glob("import_*/ingest_report.json"),
+        key=lambda path: path.stat().st_mtime,
+        reverse=True,
+    )
+    if not report_paths:
+        return ImportLatestResultResponse(
+            total_papers=total_papers,
+            pipeline_stages=_build_pipeline_stages(report={}, updated_at=None),
+            artifact_summary=_summarize_marker_artifacts(_build_marker_artifacts()),
+            parser_diagnostics=[],
+        )
+
+    latest = report_paths[0]
+    try:
+        payload = json.loads(latest.read_text(encoding="utf-8"))
+    except Exception:
+        return ImportLatestResultResponse(
+            total_papers=total_papers,
+            report_path=str(latest),
+            pipeline_stages=_build_pipeline_stages(report={}, updated_at=None),
+            artifact_summary=_summarize_marker_artifacts(_build_marker_artifacts()),
+            parser_diagnostics=[],
+        )
+
+    import_summary = payload.get("import_summary")
+    if not isinstance(import_summary, dict):
+        import_summary = {}
+    failure_reasons = _extract_import_failure_reasons(payload)
+    updated_at = datetime.fromtimestamp(latest.stat().st_mtime, timezone.utc).isoformat(timespec="seconds").replace(
+        "+00:00",
+        "Z",
+    )
+    latest_pipeline = _read_latest_pipeline_status()
+    if latest_pipeline is not None:
+        recent_summary = latest_pipeline.get("import_summary")
+        if isinstance(recent_summary, dict):
+            import_summary = recent_summary
+        recent_index_stage = latest_pipeline.get("index_stage")
+        if isinstance(recent_index_stage, dict):
+            payload["index_stage"] = recent_index_stage
+        recent_failure_reasons = latest_pipeline.get("failure_reasons")
+        if isinstance(recent_failure_reasons, list):
+            failure_reasons = [str(item) for item in recent_failure_reasons if str(item).strip()]
+        recent_updated = latest_pipeline.get("updated_at")
+        if isinstance(recent_updated, str) and recent_updated.strip():
+            updated_at = recent_updated.strip()
+        for key in ("fallback_reason", "fallback_path", "confidence_note"):
+            if latest_pipeline.get(key) is not None:
+                payload[key] = latest_pipeline.get(key)
+
+    degradation = _extract_ingest_degradation(payload)
+    diagnostics = _extract_parser_diagnostics(payload)
+    artifacts = _build_marker_artifacts(latest_updated_at=updated_at)
+
+    return ImportLatestResultResponse(
+        added=max(0, int(import_summary.get("added", 0) or 0)),
+        skipped=max(0, int(import_summary.get("skipped", 0) or 0)),
+        failed=max(0, int(import_summary.get("failed", 0) or 0)),
+        total_papers=total_papers,
+        failure_reasons=failure_reasons,
+        pipeline_stages=_build_pipeline_stages(report=payload, updated_at=updated_at),
+        report_path=str(latest),
+        updated_at=updated_at,
+        degraded=bool(degradation["degraded"]),
+        fallback_reason=degradation["fallback_reason"],
+        fallback_path=degradation["fallback_path"],
+        confidence_note=degradation["confidence_note"],
+        artifact_summary=_summarize_marker_artifacts(artifacts),
+        parser_diagnostics=diagnostics,
+    )
+
+
+def _load_import_history(limit: int = 20) -> list[ImportHistoryEntryResponse]:
+    safe_limit = max(1, min(100, int(limit)))
+    report_paths = sorted(
+        RUNS_DIR.glob("import_*/ingest_report.json"),
+        key=lambda path: path.stat().st_mtime,
+        reverse=True,
+    )[:safe_limit]
+    out: list[ImportHistoryEntryResponse] = []
+    for path in report_paths:
+        run_id = path.parent.name
+        updated_at = datetime.fromtimestamp(path.stat().st_mtime, timezone.utc).isoformat(timespec="seconds").replace(
+            "+00:00",
+            "Z",
+        )
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except Exception:
+            out.append(
+                ImportHistoryEntryResponse(
+                    run_id=run_id,
+                    updated_at=updated_at,
+                    report_path=str(path),
+                )
+            )
+            continue
+        summary = payload.get("import_summary")
+        if not isinstance(summary, dict):
+            summary = {}
+        out.append(
+            ImportHistoryEntryResponse(
+                run_id=run_id,
+                updated_at=updated_at,
+                added=max(0, int(summary.get("added", 0) or 0)),
+                skipped=max(0, int(summary.get("skipped", 0) or 0)),
+                failed=max(0, int(summary.get("failed", 0) or 0)),
+                total_candidates=max(0, int(summary.get("total_candidates", 0) or 0)),
+                report_path=str(path),
+            )
+        )
+    return out
+
+
+def _get_task_or_404(task_id: str) -> TaskStatusResponse:
+    with _TASKS_LOCK:
+        task = _TASKS.get(task_id)
+    if task is None:
+        raise HTTPException(status_code=404, detail={"code": "TASK_NOT_FOUND", "message": f"task_id not found: {task_id}"})
+    return _task_snapshot(task)
 
 
 def _stage_health_entry(*, stage: str, provider: str, model: str, reason: str | None = None) -> dict[str, Any]:
@@ -461,6 +1183,18 @@ def get_admin_llm_config() -> dict[str, Any]:
             "model": cfg.rerank.model,
             "api_key_masked": mask_api_key(cfg.rerank.api_key),
         },
+        "rewrite": {
+            "provider": cfg.rewrite.provider,
+            "api_base": cfg.rewrite.api_base,
+            "model": cfg.rewrite.model,
+            "api_key_masked": mask_api_key(cfg.rewrite.api_key),
+        },
+        "graph_entity": {
+            "provider": cfg.graph_entity.provider,
+            "api_base": cfg.graph_entity.api_base,
+            "model": cfg.graph_entity.model,
+            "api_key_masked": mask_api_key(cfg.graph_entity.api_key),
+        },
         "updated_at": cfg.updated_at,
     }
 
@@ -495,14 +1229,34 @@ def save_admin_llm_config(payload: AdminSaveLLMConfigRequest) -> dict[str, Any]:
             model=payload.rerank_model,
             default_provider="siliconflow",
         )
+        rewrite_stage = _build_stage_payload(
+            stage_name="rewrite",
+            stage_payload=payload.rewrite,
+            provider=payload.rewrite_provider,
+            api_base=payload.rewrite_api_base,
+            api_key=payload.rewrite_api_key,
+            model=payload.rewrite_model,
+            default_provider="siliconflow",
+        )
+        graph_entity_stage = _build_stage_payload(
+            stage_name="graph_entity",
+            stage_payload=payload.graph_entity,
+            provider=payload.graph_entity_provider,
+            api_base=payload.graph_entity_api_base,
+            api_key=payload.graph_entity_api_key,
+            model=payload.graph_entity_model,
+            default_provider="siliconflow",
+        )
 
-        if answer_stage is not None or embedding_stage is not None or rerank_stage is not None:
-            if answer_stage is None or embedding_stage is None or rerank_stage is None:
-                raise ValueError("answer/embedding/rerank stage payloads are all required")
+        if any(stage is not None for stage in (answer_stage, embedding_stage, rerank_stage, rewrite_stage, graph_entity_stage)):
+            if any(stage is None for stage in (answer_stage, embedding_stage, rerank_stage, rewrite_stage, graph_entity_stage)):
+                raise ValueError("answer/embedding/rerank/rewrite/graph_entity stage payloads are all required")
             saved = save_runtime_llm_config(
                 answer=answer_stage,
                 embedding=embedding_stage,
                 rerank=rerank_stage,
+                rewrite=rewrite_stage,
+                graph_entity=graph_entity_stage,
             )
         else:
             api_base = _normalize_admin_api_base(str(payload.api_base or ""))
@@ -542,14 +1296,458 @@ def save_admin_llm_config(payload: AdminSaveLLMConfigRequest) -> dict[str, Any]:
                 "model": saved.rerank.model,
                 "api_key_masked": mask_api_key(saved.rerank.api_key),
             },
+            "rewrite": {
+                "provider": saved.rewrite.provider,
+                "api_base": saved.rewrite.api_base,
+                "model": saved.rewrite.model,
+                "api_key_masked": mask_api_key(saved.rewrite.api_key),
+            },
+            "graph_entity": {
+                "provider": saved.graph_entity.provider,
+                "api_base": saved.graph_entity.api_base,
+                "model": saved.graph_entity.model,
+                "api_key_masked": mask_api_key(saved.graph_entity.api_key),
+            },
             "updated_at": saved.updated_at,
         },
+    }
+
+
+@app.get("/api/admin/pipeline-config")
+def get_admin_pipeline_config() -> dict[str, Any]:
+    saved, err = load_pipeline_runtime_config()
+    if err:
+        raise HTTPException(status_code=500, detail={"code": "CONFIG_INVALID", "message": err})
+    effective = resolve_effective_marker_tuning()
+    effective_llm = resolve_effective_marker_llm()
+    saved_values = asdict(saved.marker_tuning) if saved is not None else asdict(default_marker_tuning())
+    saved_marker_llm = asdict(saved.marker_llm) if saved is not None else asdict(default_marker_llm())
+    return {
+        "configured": saved is not None,
+        "saved": {
+            "marker_tuning": saved_values,
+            "marker_llm": mask_marker_llm_secrets(saved_marker_llm),
+        },
+        "effective": {
+            "marker_tuning": asdict(effective.values),
+            "marker_llm": mask_marker_llm_secrets(asdict(effective_llm.values)),
+        },
+        "effective_source": {"marker_tuning": effective.source, "marker_llm": effective_llm.source},
+        "warnings": effective.warnings + effective_llm.warnings,
+        "updated_at": saved.updated_at if saved is not None else None,
+    }
+
+
+@app.post("/api/admin/pipeline-config")
+def save_admin_pipeline_config(payload: AdminSavePipelineConfigRequest) -> dict[str, Any]:
+    marker_payload = payload.marker_tuning.model_dump()
+    marker_llm_payload = payload.marker_llm.model_dump()
+    _, field_errors = validate_marker_tuning_payload(marker_payload)
+    _, marker_llm_errors = validate_marker_llm_payload(marker_llm_payload)
+    merged_errors = {**field_errors, **marker_llm_errors}
+    if merged_errors:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "code": "INVALID_PARAMS",
+                "message": "pipeline runtime validation failed",
+                "field_errors": merged_errors,
+            },
+        )
+    try:
+        saved = save_pipeline_runtime_config(marker_tuning=marker_payload, marker_llm=marker_llm_payload)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail={"code": "INVALID_PARAMS", "message": str(exc)}) from exc
+    except Exception as exc:  # pragma: no cover - defensive
+        raise HTTPException(status_code=500, detail={"code": "CONFIG_SAVE_FAILED", "message": str(exc)}) from exc
+
+    effective = resolve_effective_marker_tuning()
+    effective_llm = resolve_effective_marker_llm()
+    return {
+        "ok": True,
+        "config": {
+            "marker_tuning": asdict(saved.marker_tuning),
+            "marker_llm": mask_marker_llm_secrets(saved.marker_llm),
+            "updated_at": saved.updated_at,
+        },
+        "effective": {
+            "marker_tuning": asdict(effective.values),
+            "marker_llm": mask_marker_llm_secrets(asdict(effective_llm.values)),
+        },
+        "effective_source": {"marker_tuning": effective.source, "marker_llm": effective_llm.source},
+        "warnings": effective.warnings + effective_llm.warnings,
+    }
+
+
+@app.get("/api/admin/runtime-overview")
+def get_runtime_overview() -> dict[str, Any]:
+    llm_cfg, llm_err = load_runtime_llm_config()
+    if llm_err:
+        return {
+            "llm": {},
+            "pipeline": {},
+            "status": {"level": "ERROR", "reasons": [llm_err]},
+            "updated_at": _iso_now(),
+        }
+
+    llm = {
+        "answer": _runtime_stage_entry(asdict(llm_cfg.answer) if llm_cfg is not None else {}),
+        "embedding": _runtime_stage_entry(asdict(llm_cfg.embedding) if llm_cfg is not None else {}),
+        "rerank": _runtime_stage_entry(asdict(llm_cfg.rerank) if llm_cfg is not None else {}),
+        "rewrite": _runtime_stage_entry(asdict(llm_cfg.rewrite) if llm_cfg is not None else {}),
+        "graph_entity": _runtime_stage_entry(asdict(llm_cfg.graph_entity) if llm_cfg is not None else {}),
+    }
+    effective = resolve_effective_marker_tuning()
+    effective_llm = resolve_effective_marker_llm()
+    marker_llm_entry = _marker_llm_runtime_entry(asdict(effective_llm.values), effective_llm.source)
+    latest_import = _load_latest_import_result()
+    artifact_summary = latest_import.artifact_summary if latest_import.updated_at else {"counts": {}}
+    status_level, reasons = _build_runtime_status(
+        llm=llm,
+        marker_source=effective.source,
+        marker_warnings=effective.warnings,
+        marker_llm=marker_llm_entry,
+        artifact_summary=artifact_summary,
+        ingest_degradation={
+            "degraded": latest_import.degraded,
+            "fallback_reason": latest_import.fallback_reason,
+            "fallback_path": latest_import.fallback_path,
+        },
+    )
+    return {
+        "llm": llm,
+        "pipeline": {
+            "marker_tuning": asdict(effective.values),
+            "effective_source": {"marker_tuning": effective.source},
+            "marker_llm": marker_llm_entry,
+            "last_ingest": {
+                "degraded": latest_import.degraded,
+                "fallback_reason": latest_import.fallback_reason,
+                "fallback_path": latest_import.fallback_path,
+                "confidence_note": latest_import.confidence_note,
+                "updated_at": latest_import.updated_at,
+            },
+            "artifacts": artifact_summary,
+        },
+        "status": {
+            "level": status_level,
+            "reasons": reasons,
+        },
+        "updated_at": _iso_now(),
     }
 
 
 @app.get("/health")
 def health() -> dict[str, str]:
     return {"status": "ok", "service": "python-kernel-fastapi"}
+
+
+@app.post("/api/tasks/graph-build/start", response_model=TaskStatusResponse)
+def start_graph_build_task(payload: GraphBuildTaskStartRequest) -> TaskStatusResponse:
+    active = _find_active_task("graph_build")
+    if active is not None and not payload.force_new:
+        active.accepted = False
+        return active
+
+    task_id = f"task_graph_build_{uuid4().hex}"
+    now = _iso_now()
+    task = TaskStatusResponse(
+        task_id=task_id,
+        task_kind="graph_build",
+        state="queued",
+        created_at=now,
+        updated_at=now,
+        progress=TaskProgressInfo(stage="queued", processed=0, total=0, elapsed_ms=0, message="任务已排队"),
+    )
+    _save_task(task)
+    cancel_event = threading.Event()
+    with _TASKS_LOCK:
+        _TASK_CANCEL_EVENTS[task_id] = cancel_event
+
+    def worker() -> None:
+        started = time.perf_counter()
+        latest_stage = "queued"
+        try:
+            with _TASKS_LOCK:
+                local = _TASKS[task_id]
+                local.state = "running"
+                local.updated_at = _iso_now()
+                local.progress = TaskProgressInfo(
+                    stage="running",
+                    processed=0,
+                    total=0,
+                    elapsed_ms=0,
+                    message="图构建任务已启动",
+                )
+                _TASKS[task_id] = local
+
+            def on_progress(progress: dict[str, Any]) -> None:
+                nonlocal latest_stage
+                if cancel_event.is_set():
+                    raise _TaskCancelledError("task cancelled by user")
+                stage = str(progress.get("stage", "") or "running")
+                latest_stage = stage
+                processed = int(progress.get("processed", 0) or 0)
+                total = int(progress.get("total", 0) or 0)
+                elapsed_ms = int((time.perf_counter() - started) * 1000)
+                message = str(progress.get("message", "") or "")
+                with _TASKS_LOCK:
+                    local = _TASKS[task_id]
+                    if local.state == "cancelled":
+                        raise _TaskCancelledError("task cancelled by user")
+                    local.progress = TaskProgressInfo(
+                        stage=stage,
+                        processed=max(0, processed),
+                        total=max(0, total),
+                        elapsed_ms=max(0, elapsed_ms),
+                        message=message,
+                    )
+                    local.updated_at = _iso_now()
+                    _TASKS[task_id] = local
+
+            run_kwargs: dict[str, Any] = {
+                "threshold": max(1, int(payload.threshold)),
+                "top_m": max(1, int(payload.top_m)),
+                "include_front_matter": bool(payload.include_front_matter),
+                "on_progress": on_progress,
+            }
+            if payload.llm_max_concurrency is not None:
+                run_kwargs["llm_max_concurrency"] = max(1, int(payload.llm_max_concurrency))
+            code = run_graph_build(
+                payload.input_path,
+                payload.output_path,
+                **run_kwargs,
+            )
+            with _TASKS_LOCK:
+                local = _TASKS[task_id]
+                is_cancelled = cancel_event.is_set() or local.state == "cancelled"
+                local.state = "cancelled" if is_cancelled else ("succeeded" if code == 0 else "failed")
+                local.updated_at = _iso_now()
+                local.result = {"output_path": payload.output_path, "code": int(code)}
+                if local.progress is None:
+                    local.progress = TaskProgressInfo(
+                        stage="cancelled" if is_cancelled else "done",
+                        processed=0 if is_cancelled else 1,
+                        total=1,
+                        elapsed_ms=int((time.perf_counter() - started) * 1000),
+                        message="图构建已取消" if is_cancelled else "图构建已结束",
+                    )
+                elif is_cancelled:
+                    local.progress = TaskProgressInfo(
+                        stage="cancelled",
+                        processed=local.progress.processed,
+                        total=local.progress.total,
+                        elapsed_ms=int((time.perf_counter() - started) * 1000),
+                        message="图构建已取消",
+                    )
+                _TASKS[task_id] = local
+        except _TaskCancelledError:
+            with _TASKS_LOCK:
+                local = _TASKS[task_id]
+                local.state = "cancelled"
+                local.updated_at = _iso_now()
+                if local.progress is None:
+                    local.progress = TaskProgressInfo(
+                        stage="cancelled",
+                        processed=0,
+                        total=0,
+                        elapsed_ms=int((time.perf_counter() - started) * 1000),
+                        message="图构建已取消",
+                    )
+                else:
+                    local.progress = TaskProgressInfo(
+                        stage="cancelled",
+                        processed=local.progress.processed,
+                        total=local.progress.total,
+                        elapsed_ms=int((time.perf_counter() - started) * 1000),
+                        message="图构建已取消",
+                    )
+                _TASKS[task_id] = local
+        except Exception as exc:  # pragma: no cover - defensive
+            with _TASKS_LOCK:
+                local = _TASKS[task_id]
+                local.state = "failed"
+                local.updated_at = _iso_now()
+                local.error = TaskErrorInfo(
+                    stage=latest_stage or "unknown",
+                    message=str(exc),
+                    recovery="请检查输入文件与模型配置后重试",
+                )
+                if local.progress is None:
+                    local.progress = TaskProgressInfo(
+                        stage=latest_stage or "failed",
+                        processed=0,
+                        total=0,
+                        elapsed_ms=int((time.perf_counter() - started) * 1000),
+                        message="图构建失败",
+                    )
+                _TASKS[task_id] = local
+        finally:
+            with _TASKS_LOCK:
+                _TASK_CANCEL_EVENTS.pop(task_id, None)
+
+    thread = threading.Thread(target=worker, daemon=True)
+    thread.start()
+    return _task_snapshot(task)
+
+
+@app.get("/api/tasks/{task_id}", response_model=TaskStatusResponse)
+def get_task_status(task_id: str) -> TaskStatusResponse:
+    return _get_task_or_404(task_id)
+
+
+@app.post("/api/tasks/{task_id}/cancel", response_model=TaskCancelResponse)
+def cancel_task(task_id: str) -> TaskCancelResponse:
+    with _TASKS_LOCK:
+        task = _TASKS.get(task_id)
+        if task is None:
+            raise HTTPException(
+                status_code=404,
+                detail={"code": "TASK_NOT_FOUND", "message": f"task_id not found: {task_id}"},
+            )
+        if task.state in {"succeeded", "failed", "cancelled"}:
+            return TaskCancelResponse(
+                task_id=task.task_id,
+                task_kind=task.task_kind,
+                state=task.state,
+                cancelled=False,
+                updated_at=task.updated_at,
+                message=f"任务已处于终态：{task.state}",
+            )
+
+        task.state = "cancelled"
+        task.updated_at = _iso_now()
+        task.progress = TaskProgressInfo(
+            stage="cancelled",
+            processed=task.progress.processed if task.progress else 0,
+            total=task.progress.total if task.progress else 0,
+            elapsed_ms=task.progress.elapsed_ms if task.progress else 0,
+            message="图构建已取消",
+        )
+        _TASKS[task_id] = task
+        cancel_event = _TASK_CANCEL_EVENTS.get(task_id)
+        if cancel_event is not None:
+            cancel_event.set()
+
+        return TaskCancelResponse(
+            task_id=task.task_id,
+            task_kind=task.task_kind,
+            state=task.state,
+            cancelled=True,
+            updated_at=task.updated_at,
+            message="任务取消请求已接收",
+        )
+
+
+@app.get("/api/tasks", response_model=list[TaskStatusResponse])
+def list_tasks(limit: int = 20) -> list[TaskStatusResponse]:
+    safe_limit = max(1, min(100, int(limit)))
+    with _TASKS_LOCK:
+        tasks = list(_TASKS.values())
+    tasks.sort(key=lambda item: item.updated_at, reverse=True)
+    return [_task_snapshot(item) for item in tasks[:safe_limit]]
+
+
+@app.get("/api/library/import-latest", response_model=ImportLatestResultResponse)
+def get_latest_import_result() -> ImportLatestResultResponse:
+    return _load_latest_import_result()
+
+
+@app.get("/api/library/import-history", response_model=list[ImportHistoryEntryResponse])
+def get_import_history(limit: int = 20) -> list[ImportHistoryEntryResponse]:
+    return _load_import_history(limit=limit)
+
+
+@app.get("/api/library/marker-artifacts")
+def get_marker_artifacts() -> dict[str, Any]:
+    latest = _load_latest_import_result()
+    artifacts = _build_marker_artifacts(latest_updated_at=latest.updated_at)
+    return {
+        "items": [artifact.model_dump() for artifact in artifacts],
+        "summary": _summarize_marker_artifacts(artifacts),
+        "updated_at": latest.updated_at,
+    }
+
+
+@app.post("/api/library/marker-artifacts/delete")
+def delete_marker_artifact(payload: MarkerArtifactDeleteRequest) -> dict[str, Any]:
+    allowed = {key: path for key, path, _artifact_type, _stage in _ARTIFACT_INDEX}
+    target = allowed.get(payload.key)
+    if target is None:
+        raise HTTPException(status_code=404, detail={"code": "ARTIFACT_NOT_FOUND", "message": "artifact key not found"})
+    if not target.exists():
+        raise HTTPException(status_code=404, detail={"code": "ARTIFACT_MISSING", "message": "artifact file does not exist"})
+    try:
+        target.unlink()
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail={"code": "ARTIFACT_DELETE_FAILED", "message": str(exc)}) from exc
+    return {
+        "ok": True,
+        "deleted": payload.key,
+        "path": str(target),
+        "message": f"已删除 {target.name}",
+    }
+
+
+@app.post("/api/library/import", response_model=LibraryImportResponse)
+async def import_library_files(request: Request) -> LibraryImportResponse:
+    try:
+        form = await request.form()
+    except RuntimeError as exc:
+        raise HTTPException(
+            status_code=500,
+            detail={"code": "MULTIPART_UNAVAILABLE", "message": f"multipart form parsing unavailable: {exc}"},
+        ) from exc
+
+    topic = str(form.get("topic", "") or "")
+    # request.form() returns Starlette UploadFile objects; use Starlette type to avoid dropping valid files.
+    files = [item for item in form.getlist("files") if isinstance(item, StarletteUploadFile)]
+    if not files:
+        raise HTTPException(status_code=400, detail={"code": "NO_FILES", "message": "未上传文件"})
+
+    with TemporaryDirectory() as tmp:
+        tmp_dir = Path(tmp)
+        upload_paths: list[Path] = []
+        for idx, file in enumerate(files, start=1):
+            safe_name = _safe_upload_name(file.filename or "", idx)
+            dst = tmp_dir / f"{idx:03d}-{safe_name}"
+            data = await file.read()
+            dst.write_bytes(data)
+            upload_paths.append(dst)
+
+        result = run_import_workflow(
+            uploaded_files=upload_paths,
+            topic=topic,
+        )
+    _write_latest_pipeline_status(result=result, updated_at=_iso_now())
+    return LibraryImportResponse.model_validate(result)
+
+
+@app.post("/api/library/import-from-dir", response_model=LibraryImportResponse)
+def import_library_from_dir(payload: LibraryImportFromDirRequest) -> LibraryImportResponse:
+    raw_dir = payload.source_dir.strip()
+    source_dir = Path(raw_dir).expanduser()
+    if not source_dir.is_absolute():
+        source_dir = (Path.cwd() / source_dir).resolve()
+    if not source_dir.exists() or not source_dir.is_dir():
+        raise HTTPException(
+            status_code=400,
+            detail={"code": "DIR_NOT_FOUND", "message": f"目录不存在: {source_dir}"},
+        )
+
+    pdf_paths = sorted(path for path in source_dir.rglob("*") if path.is_file() and path.suffix.lower() == ".pdf")
+    if not pdf_paths:
+        raise HTTPException(
+            status_code=400,
+            detail={"code": "NO_PDF_FILES", "message": f"目录中未找到 PDF: {source_dir}"},
+        )
+
+    result = run_import_workflow(
+        uploaded_files=pdf_paths,
+        topic=payload.topic,
+    )
+    _write_latest_pipeline_status(result=result, updated_at=_iso_now())
+    return LibraryImportResponse.model_validate(result)
 
 
 @app.post("/qa", response_model=KernelChatResponse)

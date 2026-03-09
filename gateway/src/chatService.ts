@@ -10,9 +10,12 @@ import { normalizeSources, parseClientEvent } from './protocol.js';
 import type { OutboundEvent, WebProviderMeta } from './types/events.js';
 import type { ChatMode, KernelChatRequest, KernelChatResponse } from './types/kernel.js';
 import {
+  getKernelTaskStatus as getKernelTaskStatusDefault,
   requestKernelAnswer as requestKernelAnswerDefault,
+  startGraphBuildTask as startGraphBuildTaskDefault,
   streamKernelAnswer as streamKernelAnswerDefault,
-  type KernelStreamEvent
+  type KernelStreamEvent,
+  type KernelTaskStatus
 } from './adapters/pythonKernelClient.js';
 import { searchWeb, WebProviderError, type WebSearchResult } from './web/providers.js';
 
@@ -22,6 +25,17 @@ export interface ChatServiceDeps {
     payload: KernelChatRequest,
     onEvent: (event: KernelStreamEvent) => void
   ) => Promise<void>;
+  startGraphBuildTask: (
+    payload?: {
+      input_path?: string;
+      output_path?: string;
+      threshold?: number;
+      top_m?: number;
+      include_front_matter?: boolean;
+      force_new?: boolean;
+    }
+  ) => Promise<KernelTaskStatus>;
+  getKernelTaskStatus: (taskId: string) => Promise<KernelTaskStatus>;
   searchWeb: (query: string) => Promise<WebSearchResult>;
   sleep: (ms: number) => Promise<void>;
   now: () => number;
@@ -115,6 +129,8 @@ export function createChatService(overrides: Partial<ChatServiceDeps> = {}) {
   const deps: ChatServiceDeps = {
     requestKernelAnswer: overrides.requestKernelAnswer ?? requestKernelAnswerDefault,
     streamKernelAnswer: overrides.streamKernelAnswer ?? streamKernelAnswerDefault,
+    startGraphBuildTask: overrides.startGraphBuildTask ?? startGraphBuildTaskDefault,
+    getKernelTaskStatus: overrides.getKernelTaskStatus ?? getKernelTaskStatusDefault,
     searchWeb: overrides.searchWeb ?? searchWeb,
     sleep: overrides.sleep ?? ((ms: number) => new Promise((resolve) => setTimeout(resolve, ms))),
     now: overrides.now ?? Date.now,
@@ -127,6 +143,67 @@ export function createChatService(overrides: Partial<ChatServiceDeps> = {}) {
 
     try {
       const event = parseClientEvent(raw);
+      if (event.type === 'task_start_graph_build') {
+        const startedTask = await deps.startGraphBuildTask(event.payload);
+        sendEvent({
+          type: 'taskState',
+          taskId: startedTask.task_id,
+          taskKind: startedTask.task_kind,
+          state: startedTask.state,
+          accepted: startedTask.accepted,
+          updatedAt: startedTask.updated_at
+        });
+
+        const terminal = new Set(['succeeded', 'failed', 'cancelled']);
+        let current = startedTask;
+        while (!terminal.has(current.state)) {
+          await deps.sleep(250);
+          current = await deps.getKernelTaskStatus(current.task_id);
+          sendEvent({
+            type: 'taskState',
+            taskId: current.task_id,
+            taskKind: current.task_kind,
+            state: current.state,
+            accepted: current.accepted,
+            updatedAt: current.updated_at
+          });
+          if (current.progress) {
+            sendEvent({
+              type: 'taskProgress',
+              taskId: current.task_id,
+              taskKind: current.task_kind,
+              state: current.state,
+              stage: current.progress.stage,
+              processed: current.progress.processed,
+              total: current.progress.total,
+              elapsedMs: current.progress.elapsed_ms,
+              message: current.progress.message,
+              updatedAt: current.updated_at
+            });
+          }
+        }
+        if (current.state === 'failed' && current.error) {
+          sendEvent({
+            type: 'taskError',
+            taskId: current.task_id,
+            taskKind: current.task_kind,
+            state: 'failed',
+            error: current.error,
+            updatedAt: current.updated_at
+          });
+        }
+        sendEvent({
+          type: 'taskResult',
+          taskId: current.task_id,
+          taskKind: current.task_kind,
+          state: current.state,
+          result: current.result,
+          error: current.error,
+          updatedAt: current.updated_at
+        });
+        return;
+      }
+
       const payload = {
         sessionId: event.payload.sessionId,
         query: event.payload.query,
