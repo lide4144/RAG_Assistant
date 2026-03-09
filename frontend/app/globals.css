@@ -1,3 +1,6 @@
+@import 'katex/dist/katex.min.css';
+@import 'highlight.js/styles/github.css';
+
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
@@ -6,13 +9,159 @@
   color-scheme: light;
 }
 
-body {
-  margin: 0;
-  font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, sans-serif;
-  background: radial-gradient(circle at 20% 10%, #fff9db 0%, #f4f1e8 35%, #e8ecf1 100%);
-  color: #141923;
-}
-
 * {
   box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  font-family: 'Noto Sans SC', 'PingFang SC', 'Microsoft YaHei', system-ui, -apple-system, sans-serif;
+  background: #f8fafc;
+  color: #0f172a;
+}
+
+.bento-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+}
+
+@media (max-width: 1024px) {
+  .bento-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 640px) {
+  .bento-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+.status-dot {
+  display: inline-flex;
+  width: 10px;
+  height: 10px;
+  border-radius: 999px;
+}
+
+.status-dot-idle {
+  background: #94a3b8;
+}
+
+.status-dot-running {
+  background: #0ea5e9;
+  box-shadow: 0 0 0 rgba(14, 165, 233, 0.45);
+  animation: pulse-running 1.2s infinite;
+}
+
+.status-dot-success {
+  background: #16a34a;
+}
+
+.status-dot-failed {
+  background: #dc2626;
+}
+
+@keyframes pulse-running {
+  0% {
+    box-shadow: 0 0 0 0 rgba(14, 165, 233, 0.45);
+  }
+  70% {
+    box-shadow: 0 0 0 8px rgba(14, 165, 233, 0);
+  }
+  100% {
+    box-shadow: 0 0 0 0 rgba(14, 165, 233, 0);
+  }
+}
+
+.magic-card {
+  position: relative;
+  background: linear-gradient(125deg, #e2e8f0, #bae6fd, #e2e8f0);
+  background-size: 300% 300%;
+  animation: magic-border 6s ease-in-out infinite;
+}
+
+@keyframes magic-border {
+  0% {
+    background-position: 0% 50%;
+  }
+  50% {
+    background-position: 100% 50%;
+  }
+  100% {
+    background-position: 0% 50%;
+  }
+}
+
+.shimmer-btn {
+  position: relative;
+  overflow: hidden;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  border-radius: 12px;
+  border: 1px solid #0f172a;
+  background: #0f172a;
+  color: #fff;
+  padding: 10px 16px;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.shimmer-btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.shimmer-btn::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: -160%;
+  width: 140%;
+  height: 100%;
+  transform: skewX(-22deg);
+  background: linear-gradient(90deg, rgba(255, 255, 255, 0), rgba(255, 255, 255, 0.28), rgba(255, 255, 255, 0));
+  animation: shimmer 2.2s infinite;
+}
+
+.terminal-scrollbar {
+  scrollbar-width: thin;
+  scrollbar-color: #475569 #0f172a;
+}
+
+.terminal-scrollbar::-webkit-scrollbar {
+  width: 10px;
+}
+
+.terminal-scrollbar::-webkit-scrollbar-track {
+  background: #0f172a;
+}
+
+.terminal-scrollbar::-webkit-scrollbar-thumb {
+  background: #475569;
+  border-radius: 999px;
+  border: 2px solid #0f172a;
+}
+
+@keyframes shimmer {
+  0% {
+    left: -160%;
+  }
+  100% {
+    left: 180%;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .status-dot-running,
+  .magic-card,
+  .shimmer-btn::after {
+    animation: none !important;
+  }
+
+  .shimmer-btn::after {
+    left: -200%;
+  }
 }

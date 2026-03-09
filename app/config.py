@@ -53,6 +53,19 @@ class RerankConfig:
 class PipelineConfig:
     chunk_size: int = 400
     overlap: int = 50
+    marker_enabled: bool = True
+    marker_timeout_sec: float = 30.0
+    title_confidence_threshold: float = 0.6
+    title_blacklist_patterns: list[str] = field(
+        default_factory=lambda: [
+            r"^\s*preprint\.?\s+under\s+review\.?\s*$",
+            r"all rights reserved",
+            r"copyright",
+            r"arxiv preprint",
+            r"provided proper attribution is provided",
+            r"hereby grants permission to",
+        ]
+    )
     top_k_retrieval: int = 20
     alpha_expansion: float = 0.3
     top_n_evidence: int = 8
@@ -147,6 +160,7 @@ class PipelineConfig:
     embedding: EmbeddingConfig = field(default_factory=EmbeddingConfig)
     rerank: RerankConfig = field(default_factory=RerankConfig)
     graph_path: str = "data/processed/graph.json"
+    graph_entity_llm_provider: str = "siliconflow"
     graph_entity_llm_base_url: str = "https://api.siliconflow.cn/v1"
     graph_entity_llm_api_key_env: str = "SILICONFLOW_API_KEY"
     graph_entity_llm_model: str = "Pro/deepseek-ai/DeepSeek-V3.2"
@@ -529,6 +543,30 @@ def validate_config(config: PipelineConfig) -> tuple[PipelineConfig, list[str]]:
         if validated.overlap >= validated.chunk_size:
             validated.chunk_size = defaults.chunk_size
 
+    if validated.marker_timeout_sec <= 0:
+        warnings.append(
+            f"Invalid marker_timeout_sec={validated.marker_timeout_sec}; "
+            f"fallback to {defaults.marker_timeout_sec} (must be > 0)."
+        )
+        validated.marker_timeout_sec = defaults.marker_timeout_sec
+
+    if validated.title_confidence_threshold < 0 or validated.title_confidence_threshold > 1:
+        warnings.append(
+            f"Invalid title_confidence_threshold={validated.title_confidence_threshold}; "
+            f"fallback to {defaults.title_confidence_threshold} (must satisfy 0 <= value <= 1)."
+        )
+        validated.title_confidence_threshold = defaults.title_confidence_threshold
+
+    if not isinstance(validated.title_blacklist_patterns, list):
+        warnings.append("Invalid title_blacklist_patterns; fallback to defaults.")
+        validated.title_blacklist_patterns = list(defaults.title_blacklist_patterns)
+    else:
+        normalized_patterns = [str(item).strip() for item in validated.title_blacklist_patterns if str(item).strip()]
+        if not normalized_patterns:
+            warnings.append("Empty title_blacklist_patterns; fallback to defaults.")
+            normalized_patterns = list(defaults.title_blacklist_patterns)
+        validated.title_blacklist_patterns = normalized_patterns
+
     if validated.table_list_downweight <= 0 or validated.table_list_downweight > 1:
         warnings.append(
             f"Invalid table_list_downweight={validated.table_list_downweight}; "
@@ -887,6 +925,9 @@ def validate_config(config: PipelineConfig) -> tuple[PipelineConfig, list[str]]:
         warnings.append(f"Invalid graph_path={validated.graph_path}; fallback to {defaults.graph_path}.")
         validated.graph_path = defaults.graph_path
 
+    if not isinstance(validated.graph_entity_llm_provider, str) or not validated.graph_entity_llm_provider.strip():
+        warnings.append("Invalid graph_entity_llm_provider; fallback to defaults.")
+        validated.graph_entity_llm_provider = defaults.graph_entity_llm_provider
     if not isinstance(validated.graph_entity_llm_base_url, str) or not validated.graph_entity_llm_base_url.strip():
         warnings.append("Invalid graph_entity_llm_base_url; fallback to defaults.")
         validated.graph_entity_llm_base_url = defaults.graph_entity_llm_base_url
@@ -1011,18 +1052,17 @@ def load_and_validate_config(path: str | Path = DEFAULT_CONFIG_PATH) -> tuple[Pi
         answer_env = f"{RUNTIME_LLM_API_KEY_ENV}_ANSWER"
         embedding_env = f"{RUNTIME_LLM_API_KEY_ENV}_EMBEDDING"
         rerank_env = f"{RUNTIME_LLM_API_KEY_ENV}_RERANK"
+        rewrite_env = f"{RUNTIME_LLM_API_KEY_ENV}_REWRITE"
+        graph_entity_env = f"{RUNTIME_LLM_API_KEY_ENV}_GRAPH_ENTITY"
         os.environ[answer_env] = runtime_cfg.answer.api_key
         os.environ[embedding_env] = runtime_cfg.embedding.api_key
         os.environ[rerank_env] = runtime_cfg.rerank.api_key
+        os.environ[rewrite_env] = runtime_cfg.rewrite.api_key
+        os.environ[graph_entity_env] = runtime_cfg.graph_entity.api_key
 
-        # Keep rewrite aligned with answer runtime route for backward compatibility.
-        merged.rewrite_llm_provider = runtime_cfg.answer.provider
         merged.answer_llm_provider = runtime_cfg.answer.provider
-        merged.rewrite_llm_api_base = runtime_cfg.answer.api_base
         merged.answer_llm_api_base = runtime_cfg.answer.api_base
-        merged.rewrite_llm_model = runtime_cfg.answer.model
         merged.answer_llm_model = runtime_cfg.answer.model
-        merged.rewrite_llm_api_key_env = answer_env
         merged.answer_llm_api_key_env = answer_env
 
         merged.embedding_provider = runtime_cfg.embedding.provider
@@ -1034,6 +1074,16 @@ def load_and_validate_config(path: str | Path = DEFAULT_CONFIG_PATH) -> tuple[Pi
         merged.rerank_api_base = runtime_cfg.rerank.api_base
         merged.rerank_model = runtime_cfg.rerank.model
         merged.rerank_api_key_env = rerank_env
+
+        merged.rewrite_llm_provider = runtime_cfg.rewrite.provider
+        merged.rewrite_llm_api_base = runtime_cfg.rewrite.api_base
+        merged.rewrite_llm_model = runtime_cfg.rewrite.model
+        merged.rewrite_llm_api_key_env = rewrite_env
+
+        merged.graph_entity_llm_provider = runtime_cfg.graph_entity.provider
+        merged.graph_entity_llm_base_url = runtime_cfg.graph_entity.api_base
+        merged.graph_entity_llm_api_key_env = graph_entity_env
+        merged.graph_entity_llm_model = runtime_cfg.graph_entity.model
 
     validated, rule_warnings = validate_config(merged)
     warnings.extend(rule_warnings)

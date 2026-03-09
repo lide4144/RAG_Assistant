@@ -178,6 +178,7 @@ class ChunkGraph:
 
 @dataclass
 class LLMEntityExtractionConfig:
+    provider: str = "siliconflow"
     base_url: str = "https://api.siliconflow.cn/v1"
     api_key_env: str = "SILICONFLOW_API_KEY"
     model: str = "Pro/deepseek-ai/DeepSeek-V3.2"
@@ -206,6 +207,7 @@ class EntityExtractionResult(BaseModel):
 
 
 EntityExtractor = Callable[[str, LLMEntityExtractionConfig], Awaitable[EntityExtractionResult]]
+ProgressCallback = Callable[[dict[str, Any]], None]
 
 
 
@@ -221,9 +223,16 @@ def _chunk_sort_key(chunk_id: str) -> tuple[str, int]:
 
 
 
-def _chat_completions_endpoint(base_url: str) -> str:
+def _chat_completions_endpoint(base_url: str, provider: str = "siliconflow") -> str:
     base = str(base_url or "").strip().rstrip("/")
     if not base:
+        normalized = str(provider or "").strip().lower()
+        if normalized == "openai":
+            return "https://api.openai.com/v1/chat/completions"
+        if normalized == "ollama":
+            return "http://127.0.0.1:11434/v1/chat/completions"
+        if normalized == "siliconflow":
+            return "https://api.siliconflow.cn/v1/chat/completions"
         return "https://api.siliconflow.cn/v1/chat/completions"
     if base.endswith("/chat/completions"):
         return base
@@ -251,6 +260,7 @@ async def extract_entities_from_text_llm(
     *,
     client: httpx.AsyncClient | None = None,
     metrics: LLMExtractionMetrics | None = None,
+    on_failure: Callable[[str, str | None], None] | None = None,
 ) -> EntityExtractionResult:
     if not clean_text.strip():
         return EntityExtractionResult()
@@ -260,6 +270,8 @@ async def extract_entities_from_text_llm(
         if metrics is not None:
             metrics.failures += 1
             metrics.fallback_empty += 1
+        if on_failure is not None:
+            on_failure("missing_api_key", f"env={cfg.api_key_env}")
         return EntityExtractionResult()
 
     prompt = (
@@ -277,7 +289,7 @@ async def extract_entities_from_text_llm(
             {"role": "user", "content": prompt},
         ],
     }
-    endpoint = _chat_completions_endpoint(cfg.base_url)
+    endpoint = _chat_completions_endpoint(cfg.base_url, cfg.provider)
     timeout_s = max(0.1, float(cfg.timeout_ms) / 1000.0)
     own_client = client is None
     active_client = client or httpx.AsyncClient(timeout=timeout_s)
@@ -307,6 +319,8 @@ async def extract_entities_from_text_llm(
                 if metrics is not None:
                     metrics.failures += 1
                     metrics.fallback_empty += 1
+                if on_failure is not None:
+                    on_failure("timeout_or_transport", "request timeout/transport after retries")
                 return EntityExtractionResult()
 
             if response.status_code == 429:
@@ -320,12 +334,16 @@ async def extract_entities_from_text_llm(
                 if metrics is not None:
                     metrics.failures += 1
                     metrics.fallback_empty += 1
+                if on_failure is not None:
+                    on_failure("http_429", "rate limited after retries")
                 return EntityExtractionResult()
 
             if response.status_code >= 400:
                 if metrics is not None:
                     metrics.failures += 1
                     metrics.fallback_empty += 1
+                if on_failure is not None:
+                    on_failure(f"http_{response.status_code}", response.text[:200])
                 return EntityExtractionResult()
 
             try:
@@ -349,10 +367,14 @@ async def extract_entities_from_text_llm(
                 if metrics is not None:
                     metrics.failures += 1
                     metrics.fallback_empty += 1
+                if on_failure is not None:
+                    on_failure("invalid_json_or_schema", "model payload is not valid JSON schema")
                 return EntityExtractionResult()
         if metrics is not None:
             metrics.failures += 1
             metrics.fallback_empty += 1
+        if on_failure is not None:
+            on_failure("unknown_failure", "extraction failed without explicit branch")
         return EntityExtractionResult()
     finally:
         if own_client:
@@ -364,6 +386,8 @@ async def extract_entities_for_chunks_async(
     cfg: LLMEntityExtractionConfig,
     *,
     extractor: EntityExtractor | None = None,
+    on_progress: Callable[[int, int], None] | None = None,
+    collect_failures: list[dict[str, Any]] | None = None,
 ) -> tuple[dict[str, list[str]], LLMExtractionMetrics]:
     out: dict[str, list[str]] = {}
     metrics = LLMExtractionMetrics()
@@ -375,9 +399,25 @@ async def extract_entities_for_chunks_async(
 
     async def _one(chunk_id: str, clean_text: str) -> tuple[str, list[str]]:
         async with sem:
+            failure_recorded = False
+
+            def _record_failure(reason: str, detail: str | None) -> None:
+                nonlocal failure_recorded
+                failure_recorded = True
+                if collect_failures is None:
+                    return
+                collect_failures.append(
+                    {
+                        "chunk_id": chunk_id,
+                        "reason": reason,
+                        "detail": detail or "",
+                        "text_len": len(clean_text),
+                    }
+                )
+
             try:
                 if extractor is None:
-                    result = await extract_entities_from_text_llm(clean_text, cfg, metrics=metrics)
+                    result = await extract_entities_from_text_llm(clean_text, cfg, metrics=metrics, on_failure=_record_failure)
                 else:
                     result = await use_extractor(clean_text, cfg)
                 if isinstance(result, EntityExtractionResult):
@@ -388,19 +428,26 @@ async def extract_entities_for_chunks_async(
             except Exception:
                 metrics.failures += 1
                 metrics.fallback_empty += 1
+                if not failure_recorded:
+                    _record_failure("extractor_exception", "unexpected exception in extractor")
                 return chunk_id, []
 
     started = time.perf_counter()
     tasks = [_one(cid, text) for cid, text in chunk_inputs]
-    gathered = await asyncio.gather(*tasks, return_exceptions=True)
-    metrics.elapsed_ms += int((time.perf_counter() - started) * 1000)
-    for item in gathered:
+    total = len(tasks)
+    processed = 0
+    for future in asyncio.as_completed(tasks):
+        item = await future
+        processed += 1
+        if on_progress is not None:
+            on_progress(processed, total)
         if isinstance(item, BaseException):
             metrics.failures += 1
             metrics.fallback_empty += 1
             continue
         chunk_id, entities = item
         out[chunk_id] = entities
+    metrics.elapsed_ms += int((time.perf_counter() - started) * 1000)
     return out, metrics
 
 
@@ -409,8 +456,18 @@ def extract_entities_for_chunks(
     cfg: LLMEntityExtractionConfig,
     *,
     extractor: EntityExtractor | None = None,
+    on_progress: Callable[[int, int], None] | None = None,
+    collect_failures: list[dict[str, Any]] | None = None,
 ) -> tuple[dict[str, list[str]], LLMExtractionMetrics]:
-    return asyncio.run(extract_entities_for_chunks_async(chunk_inputs, cfg, extractor=extractor))
+    return asyncio.run(
+        extract_entities_for_chunks_async(
+            chunk_inputs,
+            cfg,
+            extractor=extractor,
+            on_progress=on_progress,
+            collect_failures=collect_failures,
+        )
+    )
 
 
 
@@ -437,7 +494,20 @@ def build_graph(
     include_front_matter: bool = False,
     llm_entity_config: LLMEntityExtractionConfig | None = None,
     llm_entity_extractor: EntityExtractor | None = None,
+    on_progress: ProgressCallback | None = None,
+    llm_failure_records_out: list[dict[str, Any]] | None = None,
 ) -> ChunkGraph:
+    started = time.perf_counter()
+    if on_progress is not None:
+        on_progress(
+            {
+                "stage": "load_rows",
+                "processed": 0,
+                "total": len(rows),
+                "elapsed_ms": 0,
+                "message": "已加载输入 rows",
+            }
+        )
     stats = GraphBuildStats(input_total=len(rows))
 
     nodes: dict[str, GraphNode] = {}
@@ -459,6 +529,16 @@ def build_graph(
             clean_text = str(row.get("clean_text", ""))
             pending_llm_chunks.append((chunk_id, clean_text))
             pending_llm_ids.add(chunk_id)
+    if on_progress is not None:
+        on_progress(
+            {
+                "stage": "filter_rows",
+                "processed": len(rows),
+                "total": len(rows),
+                "elapsed_ms": int((time.perf_counter() - started) * 1000),
+                "message": f"筛选完成，待抽取实体 chunk 数={len(pending_llm_chunks)}",
+            }
+        )
 
     llm_entities_by_chunk: dict[str, list[str]] = {}
     if pending_llm_chunks:
@@ -467,6 +547,20 @@ def build_graph(
             pending_llm_chunks,
             llm_cfg,
             extractor=llm_entity_extractor,
+            collect_failures=llm_failure_records_out,
+            on_progress=(
+                (lambda processed, total: on_progress(
+                    {
+                        "stage": "extract_entities",
+                        "processed": processed,
+                        "total": total,
+                        "elapsed_ms": int((time.perf_counter() - started) * 1000),
+                        "message": f"实体抽取进行中 {processed}/{total}",
+                    }
+                ))
+                if on_progress is not None
+                else None
+            ),
         )
         stats.llm_entity_calls += llm_metrics.calls
         stats.llm_entity_failures += llm_metrics.failures
@@ -520,6 +614,17 @@ def build_graph(
         nodes[chunk_id] = node
         by_paper[paper_id].append(node)
 
+    if on_progress is not None:
+        on_progress(
+            {
+                "stage": "build_nodes",
+                "processed": len(nodes),
+                "total": max(1, len(rows)),
+                "elapsed_ms": int((time.perf_counter() - started) * 1000),
+                "message": f"节点构建完成，节点数={len(nodes)}",
+            }
+        )
+
     stats.kept_nodes = len(nodes)
 
     adjacent_sets: dict[str, set[str]] = {cid: set() for cid in nodes}
@@ -536,6 +641,16 @@ def build_graph(
             adjacent_sets[right.chunk_id].add(left.chunk_id)
 
     stats.adjacent_edges_undirected = sum(len(v) for v in adjacent_sets.values()) // 2
+    if on_progress is not None:
+        on_progress(
+            {
+                "stage": "build_adjacent_edges",
+                "processed": stats.adjacent_edges_undirected,
+                "total": stats.adjacent_edges_undirected,
+                "elapsed_ms": int((time.perf_counter() - started) * 1000),
+                "message": f"相邻边构建完成，边数={stats.adjacent_edges_undirected}",
+            }
+        )
 
     # entity co-occurrence edges (within same paper)
     pair_counts: dict[tuple[str, str], int] = defaultdict(int)
@@ -568,6 +683,16 @@ def build_graph(
         entity_adj[cid] = ranked[:entity_top_m]
 
     stats.entity_edges_directed = sum(len(v) for v in entity_adj.values())
+    if on_progress is not None:
+        on_progress(
+            {
+                "stage": "build_entity_edges",
+                "processed": stats.entity_edges_directed,
+                "total": stats.entity_edges_directed,
+                "elapsed_ms": int((time.perf_counter() - started) * 1000),
+                "message": f"实体边构建完成，边数={stats.entity_edges_directed}",
+            }
+        )
 
     adjacent = {cid: sorted(neigh) for cid, neigh in adjacent_sets.items()}
     graph = ChunkGraph(
@@ -616,25 +741,74 @@ def run_graph_build(
     threshold: int = 1,
     top_m: int = 30,
     include_front_matter: bool = False,
+    llm_max_concurrency: int | None = None,
+    on_progress: ProgressCallback | None = None,
 ) -> int:
     cfg = load_config()
     rows = load_chunk_rows(input_path)
     llm_entity_cfg = LLMEntityExtractionConfig(
+        provider=str(getattr(cfg, "graph_entity_llm_provider", "siliconflow")),
         base_url=str(getattr(cfg, "graph_entity_llm_base_url", "https://api.siliconflow.cn/v1")),
         api_key_env=str(getattr(cfg, "graph_entity_llm_api_key_env", "SILICONFLOW_API_KEY")),
         model=str(getattr(cfg, "graph_entity_llm_model", "Pro/deepseek-ai/DeepSeek-V3.2")),
         timeout_ms=max(1000, int(getattr(cfg, "graph_entity_llm_timeout_ms", 12000))),
-        max_concurrency=max(1, int(getattr(cfg, "graph_entity_llm_max_concurrency", 4))),
+        max_concurrency=max(
+            1,
+            int(
+                llm_max_concurrency
+                if llm_max_concurrency is not None
+                else getattr(cfg, "graph_entity_llm_max_concurrency", 4)
+            ),
+        ),
         max_retries=max(0, int(getattr(cfg, "graph_entity_llm_max_retries", 1))),
     )
+    llm_failure_records: list[dict[str, Any]] = []
     graph = build_graph(
         rows,
         entity_overlap_threshold=max(1, threshold),
         entity_top_m=max(1, top_m),
         include_front_matter=include_front_matter,
         llm_entity_config=llm_entity_cfg,
+        llm_failure_records_out=llm_failure_records,
+        on_progress=on_progress,
     )
+    if on_progress is not None:
+        on_progress(
+            {
+                "stage": "persist_graph",
+                "processed": 0,
+                "total": 1,
+                "elapsed_ms": int(graph.stats.llm_entity_elapsed_ms),
+                "message": "正在写入图文件",
+            }
+        )
     save_graph(graph, output_path)
+    if llm_failure_records:
+        reason_counts: dict[str, int] = {}
+        for row in llm_failure_records:
+            reason = str(row.get("reason", "unknown"))
+            reason_counts[reason] = reason_counts.get(reason, 0) + 1
+        failure_report_path = Path(output_path).with_suffix(".llm_failures.json")
+        payload = {
+            "generated_at": int(time.time()),
+            "graph_output_path": str(output_path),
+            "summary": {
+                "total_failures": len(llm_failure_records),
+                "reason_counts": reason_counts,
+            },
+            "failures": llm_failure_records[:1000],
+        }
+        failure_report_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    if on_progress is not None:
+        on_progress(
+            {
+                "stage": "done",
+                "processed": 1,
+                "total": 1,
+                "elapsed_ms": int(graph.stats.llm_entity_elapsed_ms),
+                "message": "图构建已完成",
+            }
+        )
     print(f"Graph built: nodes={graph.stats.kept_nodes}, adjacent_edges={graph.stats.adjacent_edges_undirected}, entity_edges_directed={graph.stats.entity_edges_directed}")
     print(f"Entity sparse chunks={graph.stats.entity_empty_chunks}, clipped_neighbors={graph.stats.entity_neighbors_clipped}")
     print(
@@ -643,6 +817,8 @@ def run_graph_build(
         f"rate_limits={graph.stats.llm_entity_rate_limits}, retries={graph.stats.llm_entity_retries}, "
         f"fallback_empty={graph.stats.llm_entity_fallback_empty}, elapsed_ms={graph.stats.llm_entity_elapsed_ms}"
     )
+    if llm_failure_records:
+        print(f"LLM failure report: {Path(output_path).with_suffix('.llm_failures.json')}")
     print(f"Output: {output_path}")
     return 0
 

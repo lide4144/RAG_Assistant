@@ -10,15 +10,23 @@
     "test:e2e": "playwright test"
   },
   "dependencies": {
+    "katex": "^0.16.35",
+    "lucide-react": "^0.577.0",
     "next": "14.1.4",
     "react": "18.2.0",
-    "react-dom": "18.2.0"
+    "react-dom": "18.2.0",
+    "react-markdown": "^10.1.0",
+    "rehype-highlight": "^7.0.2",
+    "rehype-katex": "^7.0.1",
+    "remark-gfm": "^4.0.1",
+    "remark-math": "^6.0.0",
+    "sonner": "^2.0.7"
   },
   "devDependencies": {
+    "@playwright/test": "1.54.2",
     "@types/node": "20.11.30",
     "@types/react": "18.2.66",
     "@types/react-dom": "18.2.22",
-    "@playwright/test": "1.54.2",
     "autoprefixer": "10.4.17",
     "postcss": "8.4.35",
     "tailwindcss": "3.4.1",

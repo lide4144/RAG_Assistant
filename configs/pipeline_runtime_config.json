@@ -1,0 +1,27 @@
+{
+  "marker_tuning": {
+    "recognition_batch_size": 1,
+    "detector_batch_size": 1,
+    "layout_batch_size": 1,
+    "ocr_error_batch_size": 1,
+    "table_rec_batch_size": 1,
+    "model_dtype": "float16"
+  },
+  "marker_llm": {
+    "use_llm": false,
+    "llm_service": "marker.services.openai.OpenAIService",
+    "gemini_api_key": "",
+    "vertex_project_id": "",
+    "ollama_base_url": "http://127.0.0.1:11434",
+    "ollama_model": "",
+    "claude_api_key": "",
+    "claude_model_name": "",
+    "openai_api_key": "sk-uoijizemjbmqxcaycjuumqzcjuhstjawjtwmoagwoiszznnv",
+    "openai_model": "Pro/moonshotai/Kimi-K2.5",
+    "openai_base_url": "https://api.siliconflow.cn/v1",
+    "azure_endpoint": "",
+    "azure_api_key": "",
+    "deployment_name": ""
+  },
+  "updated_at": "2026-03-09T16:00:37Z"
+}

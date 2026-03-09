@@ -11,6 +11,7 @@ from unittest.mock import patch
 
 import httpx
 
+from app.config import RUNTIME_LLM_API_KEY_ENV
 from app.graph_build import (
     EntityExtractionResult,
     LLMExtractionMetrics,
@@ -303,6 +304,9 @@ class GraphBuildTests(unittest.TestCase):
             self.assertEqual(weighted[0]["edge_type"], "entity")
 
     def test_cli_run_graph_build(self) -> None:
+        async def _fake_extract(_clean_text: str, _cfg: LLMEntityExtractionConfig, **_kwargs: object) -> EntityExtractionResult:
+            return EntityExtractionResult.model_validate({"entities": []})
+
         with tempfile.TemporaryDirectory() as tmp:
             input_path = Path(tmp) / "chunks_clean.jsonl"
             output_path = Path(tmp) / "graph.pkl"
@@ -313,11 +317,82 @@ class GraphBuildTests(unittest.TestCase):
             with input_path.open("w", encoding="utf-8") as f:
                 for row in rows:
                     f.write(json.dumps(row, ensure_ascii=False) + "\n")
-            code = run_graph_build(input_path, output_path, threshold=1, top_m=30)
+            with patch("app.graph_build.extract_entities_from_text_llm", new=_fake_extract):
+                code = run_graph_build(input_path, output_path, threshold=1, top_m=30)
             self.assertEqual(code, 0)
             self.assertTrue(output_path.exists())
             loaded = load_graph(output_path)
             self.assertIn("p1:00002", loaded.neighbors("p1:00001", type="adjacent"))
+
+    def test_run_graph_build_applies_runtime_graph_entity_config(self) -> None:
+        captured: dict[str, str] = {}
+
+        async def _fake_extract(_clean_text: str, cfg: LLMEntityExtractionConfig, **_kwargs: object) -> EntityExtractionResult:
+            captured["provider"] = cfg.provider
+            captured["base_url"] = cfg.base_url
+            captured["model"] = cfg.model
+            captured["api_key_env"] = cfg.api_key_env
+            return EntityExtractionResult.model_validate({"entities": []})
+
+        with tempfile.TemporaryDirectory() as tmp:
+            input_path = Path(tmp) / "chunks_clean.jsonl"
+            output_path = Path(tmp) / "graph.pkl"
+            runtime_path = Path(tmp) / "llm_runtime_config.json"
+            runtime_path.write_text(
+                json.dumps(
+                    {
+                        "answer": {
+                            "provider": "openai",
+                            "api_base": "https://answer.example.com/v1",
+                            "api_key": "answer-secret",
+                            "model": "gpt-4.1-mini",
+                        },
+                        "embedding": {
+                            "provider": "siliconflow",
+                            "api_base": "https://emb.example.com/v1",
+                            "api_key": "embedding-secret",
+                            "model": "BAAI/bge-m3",
+                        },
+                        "rerank": {
+                            "provider": "siliconflow",
+                            "api_base": "https://rerank.example.com/v1",
+                            "api_key": "rerank-secret",
+                            "model": "Qwen/Qwen3-Reranker-8B",
+                        },
+                        "rewrite": {
+                            "provider": "ollama",
+                            "api_base": "http://127.0.0.1:11434/v1",
+                            "api_key": "rewrite-secret",
+                            "model": "Qwen2.5-3B-Instruct",
+                        },
+                        "graph_entity": {
+                            "provider": "openai",
+                            "api_base": "https://graph.example.com/v1",
+                            "api_key": "graph-secret",
+                            "model": "gpt-4o-mini",
+                        },
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+            rows = [
+                {"chunk_id": "p1:00001", "paper_id": "p1", "page_start": 1, "clean_text": "PLA", "content_type": "body"},
+                {"chunk_id": "p1:00002", "paper_id": "p1", "page_start": 2, "clean_text": "PLA", "content_type": "body"},
+            ]
+            with input_path.open("w", encoding="utf-8") as f:
+                for row in rows:
+                    f.write(json.dumps(row, ensure_ascii=False) + "\n")
+            with (
+                patch("app.admin_llm_config.RUNTIME_LLM_CONFIG_PATH", runtime_path),
+                patch("app.graph_build.extract_entities_from_text_llm", new=_fake_extract),
+            ):
+                code = run_graph_build(input_path, output_path, threshold=1, top_m=30)
+            self.assertEqual(code, 0)
+            self.assertEqual(captured.get("provider"), "openai")
+            self.assertEqual(captured.get("base_url"), "https://graph.example.com/v1")
+            self.assertEqual(captured.get("model"), "gpt-4o-mini")
+            self.assertEqual(captured.get("api_key_env"), f"{RUNTIME_LLM_API_KEY_ENV}_GRAPH_ENTITY")
 
 
 if __name__ == "__main__":
