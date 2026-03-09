@@ -27,6 +27,34 @@ export type KernelStreamEvent =
     }
   | { type: 'error'; traceId: string; code: string; message: string };
 
+export type KernelTaskState = 'idle' | 'queued' | 'running' | 'succeeded' | 'failed' | 'cancelled';
+
+export interface KernelTaskProgress {
+  stage: string;
+  processed: number;
+  total: number;
+  elapsed_ms: number;
+  message: string;
+}
+
+export interface KernelTaskError {
+  stage: string;
+  message: string;
+  recovery: string;
+}
+
+export interface KernelTaskStatus {
+  task_id: string;
+  task_kind: 'graph_build';
+  state: KernelTaskState;
+  created_at: string;
+  updated_at: string;
+  accepted: boolean;
+  progress?: KernelTaskProgress;
+  error?: KernelTaskError;
+  result?: Record<string, unknown>;
+}
+
 export async function healthcheckKernel(): Promise<boolean> {
   try {
     const response = await client.get('/health');
@@ -67,6 +95,52 @@ export async function requestKernelAnswer(payload: KernelChatRequest): Promise<K
     }
 
     throw new KernelClientError(KernelErrorCode.UNKNOWN, 'Kernel request failed with unknown error');
+  }
+}
+
+export async function startGraphBuildTask(payload?: {
+  input_path?: string;
+  output_path?: string;
+  threshold?: number;
+  top_m?: number;
+  include_front_matter?: boolean;
+  force_new?: boolean;
+  llm_max_concurrency?: number;
+}): Promise<KernelTaskStatus> {
+  try {
+    const response = await client.post<KernelTaskStatus>('/api/tasks/graph-build/start', payload ?? {});
+    return response.data;
+  } catch (error) {
+    if (error instanceof AxiosError) {
+      if (error.response) {
+        throw new KernelClientError(
+          KernelErrorCode.BAD_RESPONSE,
+          `Kernel task start returned ${error.response.status}`,
+          error.response.status
+        );
+      }
+      throw new KernelClientError(KernelErrorCode.NETWORK, 'Kernel task start failed due to network error');
+    }
+    throw new KernelClientError(KernelErrorCode.UNKNOWN, 'Kernel task start failed with unknown error');
+  }
+}
+
+export async function getKernelTaskStatus(taskId: string): Promise<KernelTaskStatus> {
+  try {
+    const response = await client.get<KernelTaskStatus>(`/api/tasks/${taskId}`);
+    return response.data;
+  } catch (error) {
+    if (error instanceof AxiosError) {
+      if (error.response) {
+        throw new KernelClientError(
+          KernelErrorCode.BAD_RESPONSE,
+          `Kernel task status returned ${error.response.status}`,
+          error.response.status
+        );
+      }
+      throw new KernelClientError(KernelErrorCode.NETWORK, 'Kernel task status failed due to network error');
+    }
+    throw new KernelClientError(KernelErrorCode.UNKNOWN, 'Kernel task status failed with unknown error');
   }
 }
 

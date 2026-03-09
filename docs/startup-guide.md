@@ -26,7 +26,7 @@ cd ../gateway && npm install
 cd .. && venv/bin/python -m pip install -r requirements.txt
 ```
 
-说明：`npm audit` 漏洞提示不会阻塞本地启动；不要直接运行 `npm audit fix --force`，避免破坏性升级。
+说明：`npm audit` 漏洞提示不会阻塞本地启动；不要直接运行 `npm audit fix --force`，避免破坏性升级。`requirements.txt` 已包含可选 `marker-pdf`，安装失败不会阻断 legacy ingest 路径。
 
 ## 4. 一键启动（推荐）
 
@@ -40,6 +40,13 @@ scripts/dev-up.sh
 - `python-kernel-fastapi pid=... url=http://127.0.0.1:8000`
 - `gateway pid=... url=http://127.0.0.1:8080`
 - `frontend pid=... url=http://127.0.0.1:3000`
+
+说明：`scripts/dev-up.sh` 会自动为前端注入
+`NEXT_PUBLIC_KERNEL_BASE_URL=http://127.0.0.1:8000`（或你覆盖后的 `KERNEL_HOST/KERNEL_PORT`）。
+前端管理接口（`/api/admin/*`）路由优先级为：
+
+1. 显式 `NEXT_PUBLIC_KERNEL_BASE_URL`
+2. Next rewrites 兜底转发到 Kernel
 
 ## 5. 健康检查
 
@@ -125,3 +132,16 @@ cd ../frontend && PORT=3000 npx next dev -H 0.0.0.0 -p 3000
 ### 9.2 页面打开但偶发 WebSocket warning
 
 若页面状态显示 `Connected`，且可正常问答，可先忽略该 warning；通常是连接初始化阶段的瞬时日志。
+
+### 9.3 PDF 入库日志出现 marker fallback
+
+- 若日志/报告出现 `marker unavailable`，说明当前环境未安装 Marker，可执行 `venv/bin/python -m pip install marker-pdf`。
+- 若出现 `marker parse timeout`，提高 `marker_timeout_sec` 或先设置 `marker_enabled=false` 回滚到 legacy 解析。
+
+## 10. 本地模型主路径（Ollama）
+
+如需启用本地 `embedding/rerank/rewrite`，请参考：
+
+- `docs/local-llm-bootstrap.md`
+
+包含一键安装脚本、健康检查、vLLM 可选路径和外部 API 回滚步骤。

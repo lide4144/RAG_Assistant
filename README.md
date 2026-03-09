@@ -10,6 +10,8 @@
 - 多服务开发说明（端口/架构）：[docs/multi-service-dev.md](docs/multi-service-dev.md)
 - Streamlit 调试 UI 使用：[`UI_USAGE.md`](UI_USAGE.md)
 - 历史完整版 README（已归档）：[docs/legacy-readme-full.md](docs/legacy-readme-full.md)
+- Pipeline 工作台与任务进度说明：[docs/pipeline-workbench.md](docs/pipeline-workbench.md)
+- PDF Marker 解析与灰度/回滚说明：[docs/marker-ingest-ops.md](docs/marker-ingest-ops.md)
 
 ## 项目结构
 

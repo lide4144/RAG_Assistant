@@ -82,7 +82,7 @@ class AdminLLMConfigApiTests(unittest.TestCase):
         self.assertEqual(payload["config"]["answer"]["model"], "gpt-4o")
         self.assertIn("***", payload["config"]["answer"]["api_key_masked"])
 
-    def test_save_admin_llm_config_accepts_three_stage_contract(self) -> None:
+    def test_save_admin_llm_config_accepts_full_stage_contract(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             runtime_path = Path(tmp) / "llm_runtime_config.json"
             with patch("app.admin_llm_config.RUNTIME_LLM_CONFIG_PATH", runtime_path):
@@ -106,12 +106,26 @@ class AdminLLMConfigApiTests(unittest.TestCase):
                             "api_key": "rerank-secret",
                             "model": "Qwen/Qwen3-Reranker-8B",
                         },
+                        rewrite={
+                            "provider": "ollama",
+                            "api_base": "http://127.0.0.1:11434/v1",
+                            "api_key": "rewrite-secret",
+                            "model": "Qwen2.5-3B-Instruct",
+                        },
+                        graph_entity={
+                            "provider": "siliconflow",
+                            "api_base": "https://graph.example.com/v1",
+                            "api_key": "graph-secret",
+                            "model": "Pro/deepseek-ai/DeepSeek-V3.2",
+                        },
                     )
                 )
         self.assertTrue(payload["ok"])
         self.assertEqual(payload["config"]["answer"]["model"], "gpt-4.1-mini")
         self.assertEqual(payload["config"]["embedding"]["model"], "BAAI/bge-m3")
         self.assertEqual(payload["config"]["rerank"]["model"], "Qwen/Qwen3-Reranker-8B")
+        self.assertEqual(payload["config"]["rewrite"]["model"], "Qwen2.5-3B-Instruct")
+        self.assertEqual(payload["config"]["graph_entity"]["model"], "Pro/deepseek-ai/DeepSeek-V3.2")
         self.assertIn("***", payload["config"]["rerank"]["api_key_masked"])
 
     def test_save_admin_llm_config_rejects_partial_stage_payload(self) -> None:
@@ -153,6 +167,18 @@ class AdminLLMConfigApiTests(unittest.TestCase):
                         "api_key": "rerank-secret",
                         "model": "Qwen/Qwen3-Reranker-8B",
                     },
+                    rewrite={
+                        "provider": "ollama",
+                        "api_base": "http://127.0.0.1:11434/v1",
+                        "api_key": "rewrite-secret",
+                        "model": "Qwen2.5-3B-Instruct",
+                    },
+                    graph_entity={
+                        "provider": "siliconflow",
+                        "api_base": "https://graph.example.com/v1",
+                        "api_key": "graph-secret",
+                        "model": "Pro/deepseek-ai/DeepSeek-V3.2",
+                    },
                 )
             )
         self.assertEqual(getattr(ctx.exception, "status_code", None), 400)
@@ -160,13 +186,15 @@ class AdminLLMConfigApiTests(unittest.TestCase):
         self.assertEqual(getattr(ctx.exception, "detail", {}).get("stage"), "embedding")
         self.assertIn("embedding.api_key is required", getattr(ctx.exception, "detail", {}).get("message", ""))
 
-    def test_get_admin_llm_config_returns_three_stage_summary(self) -> None:
+    def test_get_admin_llm_config_returns_full_stage_summary(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             runtime_path = Path(tmp) / "llm_runtime_config.json"
             runtime_path.write_text(
                 '{"answer":{"provider":"openai","api_base":"https://answer.example.com/v1","api_key":"ak","model":"a-model"},'
                 '"embedding":{"provider":"siliconflow","api_base":"https://emb.example.com/v1","api_key":"ek","model":"e-model"},'
-                '"rerank":{"provider":"siliconflow","api_base":"https://rr.example.com/v1","api_key":"rk","model":"r-model"}}',
+                '"rerank":{"provider":"siliconflow","api_base":"https://rr.example.com/v1","api_key":"rk","model":"r-model"},'
+                '"rewrite":{"provider":"ollama","api_base":"http://127.0.0.1:11434/v1","api_key":"wk","model":"w-model"},'
+                '"graph_entity":{"provider":"siliconflow","api_base":"https://graph.example.com/v1","api_key":"gk","model":"g-model"}}',
                 encoding="utf-8",
             )
             with patch("app.admin_llm_config.RUNTIME_LLM_CONFIG_PATH", runtime_path):
@@ -175,6 +203,8 @@ class AdminLLMConfigApiTests(unittest.TestCase):
         self.assertEqual(payload["answer"]["api_base"], "https://answer.example.com/v1")
         self.assertEqual(payload["embedding"]["model"], "e-model")
         self.assertEqual(payload["rerank"]["provider"], "siliconflow")
+        self.assertEqual(payload["rewrite"]["model"], "w-model")
+        self.assertEqual(payload["graph_entity"]["model"], "g-model")
         self.assertIn("api_key_masked", payload["answer"])
 
 
@@ -195,7 +225,7 @@ class RuntimeLLMConfigPersistenceTests(unittest.TestCase):
         self.assertEqual(saved.answer.model, loaded.answer.model)
         self.assertEqual(saved.answer.api_key, loaded.answer.api_key)
 
-    def test_runtime_config_overrides_static_llm_route(self) -> None:
+    def test_runtime_config_overrides_static_llm_route_with_legacy_payload(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             cfg_path = Path(tmp) / "default.yaml"
             cfg_path.write_text("answer_use_llm: true\nrewrite_use_llm: true\n", encoding="utf-8")
@@ -211,10 +241,13 @@ class RuntimeLLMConfigPersistenceTests(unittest.TestCase):
         self.assertEqual(loaded.answer_llm_model, "gpt-4o-mini")
         self.assertEqual(loaded.rewrite_llm_model, "gpt-4o-mini")
         self.assertEqual(loaded.answer_llm_api_key_env, f"{RUNTIME_LLM_API_KEY_ENV}_ANSWER")
-        self.assertEqual(loaded.rewrite_llm_api_key_env, f"{RUNTIME_LLM_API_KEY_ENV}_ANSWER")
+        self.assertEqual(loaded.rewrite_llm_api_key_env, f"{RUNTIME_LLM_API_KEY_ENV}_REWRITE")
+        self.assertEqual(loaded.graph_entity_llm_provider, "siliconflow")
+        self.assertEqual(loaded.graph_entity_llm_base_url, "https://api.override.com/v1")
+        self.assertEqual(loaded.graph_entity_llm_api_key_env, f"{RUNTIME_LLM_API_KEY_ENV}_GRAPH_ENTITY")
         self.assertEqual(warnings, [])
 
-    def test_runtime_config_overrides_embedding_and_rerank_routes(self) -> None:
+    def test_runtime_config_overrides_full_routes_independently(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             cfg_path = Path(tmp) / "default.yaml"
             cfg_path.write_text("dense_backend: embedding\n", encoding="utf-8")
@@ -222,7 +255,9 @@ class RuntimeLLMConfigPersistenceTests(unittest.TestCase):
             runtime_path.write_text(
                 '{"answer":{"provider":"openai","api_base":"https://answer.example.com/v1","api_key":"ak","model":"a-model"},'
                 '"embedding":{"provider":"siliconflow","api_base":"https://emb.example.com/v1","api_key":"ek","model":"e-model"},'
-                '"rerank":{"provider":"siliconflow","api_base":"https://rr.example.com/v1","api_key":"rk","model":"r-model"}}',
+                '"rerank":{"provider":"siliconflow","api_base":"https://rr.example.com/v1","api_key":"rk","model":"r-model"},'
+                '"rewrite":{"provider":"ollama","api_base":"http://127.0.0.1:11434/v1","api_key":"wk","model":"w-model"},'
+                '"graph_entity":{"provider":"siliconflow","api_base":"https://graph.example.com/v1","api_key":"gk","model":"g-model"}}',
                 encoding="utf-8",
             )
             with patch("app.admin_llm_config.RUNTIME_LLM_CONFIG_PATH", runtime_path):
@@ -231,6 +266,13 @@ class RuntimeLLMConfigPersistenceTests(unittest.TestCase):
         self.assertEqual(loaded.embedding_model, "e-model")
         self.assertEqual(loaded.rerank_api_base, "https://rr.example.com/v1")
         self.assertEqual(loaded.rerank_model, "r-model")
+        self.assertEqual(loaded.rewrite_llm_api_base, "http://127.0.0.1:11434/v1")
+        self.assertEqual(loaded.rewrite_llm_model, "w-model")
+        self.assertEqual(loaded.graph_entity_llm_provider, "siliconflow")
+        self.assertEqual(loaded.graph_entity_llm_base_url, "https://graph.example.com/v1")
+        self.assertEqual(loaded.graph_entity_llm_model, "g-model")
+        self.assertEqual(loaded.answer_llm_model, "a-model")
+        self.assertNotEqual(loaded.rewrite_llm_model, loaded.answer_llm_model)
         self.assertEqual(warnings, [])
 
     def test_runtime_config_invalid_falls_back_with_warning(self) -> None:
