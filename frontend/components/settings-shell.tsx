@@ -4,6 +4,7 @@ import { Eye, EyeOff, Sparkles } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
 import { toast } from 'sonner';
 import { fetchAdminJson } from '../lib/admin-http';
+import { resolveAdminUrl } from '../lib/deployment-endpoints';
 import type { MarkerLlmRuntimeConfig, MarkerTuning, RuntimeOverview, RuntimeSource } from '../lib/types';
 
 type AdminModel = { id: string; owned_by?: string | null };
@@ -237,7 +238,10 @@ export function SettingsShell() {
   const [pipelineGlobalError, setPipelineGlobalError] = useState('');
   const [pipelineConfig, setPipelineConfig] = useState<PipelineConfigPayload | null>(null);
   const [runtimeOverview, setRuntimeOverview] = useState<RuntimeOverview | null>(null);
-  const kernelBaseUrl = process.env.NEXT_PUBLIC_KERNEL_BASE_URL ?? '';
+  const llmConfigUrl = useMemo(() => resolveAdminUrl('/api/admin/llm-config'), []);
+  const detectModelsUrl = useMemo(() => resolveAdminUrl('/api/admin/detect-models'), []);
+  const pipelineConfigUrl = useMemo(() => resolveAdminUrl('/api/admin/pipeline-config'), []);
+  const runtimeOverviewUrl = useMemo(() => resolveAdminUrl('/api/admin/runtime-overview'), []);
   const controlsDisabled = !draftHydrated;
   const visibleMarkerLlmFields = markerLlm.use_llm ? markerLlmFieldOrder[markerLlm.llm_service] ?? [] : [];
 
@@ -383,7 +387,7 @@ export function SettingsShell() {
           graph_entity?: { provider?: string; api_base?: string; model?: string };
           api_base?: string;
           model?: string;
-        }>(`${kernelBaseUrl}/api/admin/llm-config`);
+        }>(llmConfigUrl);
         if (!result.ok || !mounted || !result.data.configured) {
           if (mounted) {
             const merged = applyDraftConfig(initialConfigs);
@@ -439,15 +443,15 @@ export function SettingsShell() {
     return () => {
       mounted = false;
     };
-  }, [kernelBaseUrl]);
+  }, [llmConfigUrl]);
 
   useEffect(() => {
     let mounted = true;
     const loadRuntimePanels = async () => {
       try {
         const [pipelineResult, overviewResult] = await Promise.all([
-          fetchAdminJson<PipelineConfigPayload>(`${kernelBaseUrl}/api/admin/pipeline-config`),
-          fetchAdminJson<RuntimeOverview>(`${kernelBaseUrl}/api/admin/runtime-overview`)
+          fetchAdminJson<PipelineConfigPayload>(pipelineConfigUrl),
+          fetchAdminJson<RuntimeOverview>(runtimeOverviewUrl)
         ]);
         if (!mounted) {
           return;
@@ -486,7 +490,7 @@ export function SettingsShell() {
     return () => {
       mounted = false;
     };
-  }, [kernelBaseUrl]);
+  }, [pipelineConfigUrl, runtimeOverviewUrl]);
 
   useEffect(() => {
     if (!draftHydrated) {
@@ -564,7 +568,7 @@ export function SettingsShell() {
     setGlobalError('');
     setStatusText('');
     try {
-      const result = await fetchAdminJson<{ models?: AdminModel[]; detail?: unknown }>(`${kernelBaseUrl}/api/admin/detect-models`, {
+      const result = await fetchAdminJson<{ models?: AdminModel[]; detail?: unknown }>(detectModelsUrl, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ api_base: apiBase, api_key: apiKey })
@@ -631,7 +635,7 @@ export function SettingsShell() {
     setGlobalError('');
 
     try {
-      const result = await fetchAdminJson<{ detail?: unknown }>(`${kernelBaseUrl}/api/admin/llm-config`, {
+      const result = await fetchAdminJson<{ detail?: unknown }>(llmConfigUrl, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(
@@ -696,7 +700,7 @@ export function SettingsShell() {
           message?: string;
         };
       }>(
-        `${kernelBaseUrl}/api/admin/pipeline-config`,
+        pipelineConfigUrl,
         {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -741,8 +745,8 @@ export function SettingsShell() {
       setPipelineStatusText('Marker Runtime 与 LLM service 配置已保存并生效。');
       toast.success('Marker tuning 保存成功');
       const [pipelineResult, overviewResult] = await Promise.all([
-        fetchAdminJson<PipelineConfigPayload>(`${kernelBaseUrl}/api/admin/pipeline-config`),
-        fetchAdminJson<RuntimeOverview>(`${kernelBaseUrl}/api/admin/runtime-overview`)
+        fetchAdminJson<PipelineConfigPayload>(pipelineConfigUrl),
+        fetchAdminJson<RuntimeOverview>(runtimeOverviewUrl)
       ]);
       if (pipelineResult.ok) {
         setPipelineConfig(pipelineResult.data);
@@ -777,7 +781,7 @@ export function SettingsShell() {
     setPipelineGlobalError('');
     setPipelineStatusText('');
     try {
-      const result = await fetchAdminJson<{ models?: AdminModel[]; detail?: unknown }>(`${kernelBaseUrl}/api/admin/detect-models`, {
+      const result = await fetchAdminJson<{ models?: AdminModel[]; detail?: unknown }>(detectModelsUrl, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ api_base: apiBase, api_key: apiKey })
