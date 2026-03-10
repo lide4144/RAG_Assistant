@@ -425,6 +425,7 @@ def build_embedding_vec_index(
     semaphore = threading.Semaphore(max(1, int(embedding_cfg.max_concurrent_requests)))
 
     batch_size = max(1, int(embedding_cfg.batch_size))
+
     single_items = [x for x in pending if len(x.texts) == 1]
     split_items = [x for x in pending if len(x.texts) > 1]
     total_batches = (len(single_items) + batch_size - 1) // batch_size if single_items else 0

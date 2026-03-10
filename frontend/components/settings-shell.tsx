@@ -99,7 +99,7 @@ const stageMeta: StageMeta[] = [
     title: 'Embedding 模型',
     defaultProvider: 'ollama',
     defaultApiBase: 'http://127.0.0.1:11434/v1',
-    defaultModel: 'bge-m3'
+    defaultModel: 'nomic-embed-text'
   },
   {
     key: 'rerank',

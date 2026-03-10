@@ -3,7 +3,7 @@ set -euo pipefail
 
 OLLAMA_HOST="${OLLAMA_HOST:-http://127.0.0.1:11434}"
 KERNEL_BASE_URL="${KERNEL_BASE_URL:-http://127.0.0.1:8000}"
-EMBED_MODEL="${EMBED_MODEL:-bge-m3}"
+EMBED_MODEL="${EMBED_MODEL:-nomic-embed-text}"
 REWRITE_MODEL="${REWRITE_MODEL:-qwen2.5:3b}"
 
 check_cmd() {
