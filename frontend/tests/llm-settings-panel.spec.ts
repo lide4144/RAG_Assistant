@@ -477,18 +477,18 @@ test('settings page supports marker tuning save and runtime overview panel', asy
   await page.getByTestId('pipeline-recognition_batch_size-input').fill('8');
   await page.getByTestId('pipeline-model-dtype-select').selectOption('float32');
   await page.getByTestId('pipeline-8gb-preset-btn').click();
-  await expect(page.getByTestId('pipeline-recognition_batch_size-input')).toHaveValue('2');
-  await expect(page.getByTestId('pipeline-detector_batch_size-input')).toHaveValue('2');
-  await expect(page.getByTestId('pipeline-layout_batch_size-input')).toHaveValue('2');
+  await expect(page.getByTestId('pipeline-recognition_batch_size-input')).toHaveValue('1');
+  await expect(page.getByTestId('pipeline-detector_batch_size-input')).toHaveValue('1');
+  await expect(page.getByTestId('pipeline-layout_batch_size-input')).toHaveValue('1');
   await expect(page.getByTestId('pipeline-ocr_error_batch_size-input')).toHaveValue('1');
   await expect(page.getByTestId('pipeline-table_rec_batch_size-input')).toHaveValue('1');
   await expect(page.getByTestId('pipeline-model-dtype-select')).toHaveValue('float16');
   await page.getByTestId('pipeline-save-btn').click();
   await expect.poll(() => pipelineSaved).toBeTruthy();
   expect(savedMarkerPayload).toMatchObject({
-    recognition_batch_size: 2,
-    detector_batch_size: 2,
-    layout_batch_size: 2,
+    recognition_batch_size: 1,
+    detector_batch_size: 1,
+    layout_batch_size: 1,
     ocr_error_batch_size: 1,
     table_rec_batch_size: 1,
     model_dtype: 'float16'
