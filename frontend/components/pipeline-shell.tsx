@@ -1,7 +1,8 @@
 'use client';
 
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
+import { resolveGatewayWebSocketUrl, resolveKernelBaseUrl } from '../lib/deployment-endpoints';
 import { PipelineWorkbenchPanel } from './PipelineWorkbenchPanel';
 import { usePipelineWorkbench } from './usePipelineWorkbench';
 
@@ -11,8 +12,8 @@ export function PipelineShell() {
   const router = useRouter();
   const wsRef = useRef<WebSocket | null>(null);
   const [statusText, setStatusText] = useState('Disconnected');
-  const wsUrl = process.env.NEXT_PUBLIC_GATEWAY_WS_URL ?? 'ws://localhost:8080/ws';
-  const kernelBaseUrl = process.env.NEXT_PUBLIC_KERNEL_BASE_URL ?? '';
+  const wsUrl = useMemo(() => resolveGatewayWebSocketUrl(), []);
+  const kernelBaseUrl = useMemo(() => resolveKernelBaseUrl(), []);
 
   const { taskPanel, applyTaskPayload, startGraphBuildTask, retryGraphBuildTask, cancelGraphBuildTask } =
     usePipelineWorkbench({ wsRef, statusText, kernelBaseUrl });
@@ -23,6 +24,11 @@ export function PipelineShell() {
   }, [applyTaskPayload]);
 
   useEffect(() => {
+    if (!wsUrl) {
+      setStatusText('Connection error');
+      return;
+    }
+
     const ws = new WebSocket(wsUrl);
     wsRef.current = ws;
 

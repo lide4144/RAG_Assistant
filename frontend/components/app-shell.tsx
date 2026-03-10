@@ -6,6 +6,7 @@ import { BotMessageSquare, ChevronDown, DatabaseZap, Settings2 } from 'lucide-re
 import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import type { RuntimeLevel, RuntimeOverview } from '../lib/types';
 import { fetchAdminJson } from '../lib/admin-http';
+import { resolveAdminUrl } from '../lib/deployment-endpoints';
 import { mapConnectionStatus, mapRuntimeLevel } from '../lib/status-mapper';
 
 type NavItem = {
@@ -26,7 +27,7 @@ export function AppShell({ children }: { children: ReactNode }) {
   const [statusLoadFailed, setStatusLoadFailed] = useState(false);
   const [alertExpanded, setAlertExpanded] = useState(false);
   const [runtimePollingSuspended, setRuntimePollingSuspended] = useState(false);
-  const kernelBaseUrl = process.env.NEXT_PUBLIC_KERNEL_BASE_URL ?? '';
+  const runtimeOverviewUrl = useMemo(() => resolveAdminUrl('/api/admin/runtime-overview'), []);
   const importBusyEventName = 'pipeline-import-busy';
 
   useEffect(() => {
@@ -36,7 +37,7 @@ export function AppShell({ children }: { children: ReactNode }) {
         return;
       }
       try {
-        const result = await fetchAdminJson<RuntimeOverview>(`${kernelBaseUrl}/api/admin/runtime-overview`);
+        const result = await fetchAdminJson<RuntimeOverview>(runtimeOverviewUrl);
         if (!result.ok) {
           if (mounted) {
             setStatusLoadFailed(true);
@@ -59,7 +60,7 @@ export function AppShell({ children }: { children: ReactNode }) {
       mounted = false;
       window.clearInterval(timer);
     };
-  }, [kernelBaseUrl, runtimePollingSuspended]);
+  }, [runtimeOverviewUrl, runtimePollingSuspended]);
 
   useEffect(() => {
     const onImportBusy = (event: Event) => {

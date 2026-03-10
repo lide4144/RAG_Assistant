@@ -9,6 +9,7 @@ import rehypeKatex from 'rehype-katex';
 import rehypeHighlight from 'rehype-highlight';
 import type { ChatMessage, ChatMode, RuntimeOverview, SourceItem, ViewMode } from '../lib/types';
 import { fetchAdminJson } from '../lib/admin-http';
+import { resolveAdminUrl, resolveGatewayWebSocketUrl } from '../lib/deployment-endpoints';
 import { buildGraphSubgraph } from '../lib/graph';
 import { GraphSubgraphPanel } from './graph-subgraph';
 import { mapConnectionStatus, mapRuntimeLevel } from '../lib/status-mapper';
@@ -56,8 +57,8 @@ export function ChatShell() {
   const messageBottomRef = useRef<HTMLDivElement | null>(null);
   const sessionIdRef = useRef(crypto.randomUUID());
 
-  const wsUrl = process.env.NEXT_PUBLIC_GATEWAY_WS_URL ?? 'ws://localhost:8080/ws';
-  const kernelBaseUrl = process.env.NEXT_PUBLIC_KERNEL_BASE_URL ?? '';
+  const wsUrl = useMemo(() => resolveGatewayWebSocketUrl(), []);
+  const runtimeOverviewUrl = useMemo(() => resolveAdminUrl('/api/admin/runtime-overview'), []);
   const statusLevel = runtimeOverview?.status?.level ?? 'ERROR';
   const answerConfigured = Boolean(runtimeOverview?.llm?.answer?.configured);
   const canSend = input.trim().length > 0 && statusText === 'Connected' && answerConfigured && statusLevel !== 'BLOCKED';
@@ -65,6 +66,11 @@ export function ChatShell() {
   const runtimeView = mapRuntimeLevel(statusLevel);
 
   useEffect(() => {
+    if (!wsUrl) {
+      setStatusText('Connection error');
+      return;
+    }
+
     const ws = new WebSocket(wsUrl);
     wsRef.current = ws;
 
@@ -151,7 +157,7 @@ export function ChatShell() {
     let mounted = true;
     const loadRuntimeOverview = async () => {
       try {
-        const result = await fetchAdminJson<RuntimeOverview>(`${kernelBaseUrl}/api/admin/runtime-overview`);
+        const result = await fetchAdminJson<RuntimeOverview>(runtimeOverviewUrl);
         if (!result.ok || !mounted) {
           setRuntimeOverview(null);
           setRuntimeOverviewError('运行态概览不可用，请检查内核服务。');
@@ -171,7 +177,7 @@ export function ChatShell() {
     return () => {
       mounted = false;
     };
-  }, [kernelBaseUrl]);
+  }, [runtimeOverviewUrl]);
 
   useEffect(() => {
     messageBottomRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' });
