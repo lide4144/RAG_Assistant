@@ -9,6 +9,12 @@ REWRITE_MODEL="${REWRITE_MODEL:-Qwen2.5-3B-Instruct}"
 check_cmd() {
   if ! command -v "$1" >/dev/null 2>&1; then
     echo "[ERROR] missing command: $1"
+    if [[ "$1" == "ollama" ]]; then
+      echo "[INFO] ollama is a system dependency and is not installed via requirements.txt"
+      echo "[INFO] install ollama first, then rerun this script"
+      echo "[INFO] Linux quick install: curl -fsSL https://ollama.com/install.sh | sh"
+      echo "[INFO] After install, verify with: ollama --version"
+    fi
     exit 1
   fi
 }
