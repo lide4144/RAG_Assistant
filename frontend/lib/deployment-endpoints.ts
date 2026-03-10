@@ -8,10 +8,14 @@ export function resolveKernelBaseUrl(): string {
   return normalizeHttpBase(process.env.NEXT_PUBLIC_KERNEL_BASE_URL ?? '');
 }
 
-export function resolveAdminUrl(path: string): string {
+export function resolveKernelApiUrl(path: string): string {
   const normalizedPath = ensureLeadingSlash(path);
   const kernelBaseUrl = resolveKernelBaseUrl();
   return kernelBaseUrl ? `${kernelBaseUrl}${normalizedPath}` : normalizedPath;
+}
+
+export function resolveAdminUrl(path: string): string {
+  return resolveKernelApiUrl(path);
 }
 
 export function resolveGatewayWebSocketUrl(locationLike?: LocationLike): string {

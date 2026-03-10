@@ -79,6 +79,16 @@ scripts/dev-up.sh
 
 这些情况都会把请求错误地指向浏览器所在机器，或触发 mixed content / 连接拒绝问题。
 
+如果你要做正式生产部署，优先参考：
+
+- [docs/nginx-production.md](/home/programer/RAG_GPTV1.0/docs/nginx-production.md)
+
+该文档包含：
+- 单域 Nginx 配置模板
+- `/api/admin/*`、`/api/library/*`、`/api/tasks/*`、`/ws` 的代理规则
+- 生产环境推荐的环境变量约定
+- 页面、HTTP API、WebSocket 的最小验证步骤
+
 ## 5. 健康检查
 
 另开终端：

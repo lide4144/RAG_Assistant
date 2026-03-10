@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { resolveGatewayWebSocketUrl, resolveKernelBaseUrl } from '../lib/deployment-endpoints';
+import { resolveGatewayWebSocketUrl } from '../lib/deployment-endpoints';
 import { PipelineWorkbenchPanel } from './PipelineWorkbenchPanel';
 import { usePipelineWorkbench } from './usePipelineWorkbench';
 
@@ -13,10 +13,9 @@ export function PipelineShell() {
   const wsRef = useRef<WebSocket | null>(null);
   const [statusText, setStatusText] = useState('Disconnected');
   const wsUrl = useMemo(() => resolveGatewayWebSocketUrl(), []);
-  const kernelBaseUrl = useMemo(() => resolveKernelBaseUrl(), []);
 
   const { taskPanel, applyTaskPayload, startGraphBuildTask, retryGraphBuildTask, cancelGraphBuildTask } =
-    usePipelineWorkbench({ wsRef, statusText, kernelBaseUrl });
+    usePipelineWorkbench({ wsRef, statusText });
   const applyTaskPayloadRef = useRef(applyTaskPayload);
 
   useEffect(() => {
@@ -56,7 +55,6 @@ export function PipelineShell() {
   return (
     <PipelineWorkbenchPanel
       statusText={statusText}
-      kernelBaseUrl={kernelBaseUrl}
       taskPanel={taskPanel}
       onStartGraphBuild={startGraphBuildTask}
       onRetryGraphBuild={retryGraphBuildTask}

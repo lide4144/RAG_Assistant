@@ -10,6 +10,14 @@ const nextConfig = {
       {
         source: '/api/admin/:path*',
         destination: `${kernelBaseUrl}/api/admin/:path*`
+      },
+      {
+        source: '/api/library/:path*',
+        destination: `${kernelBaseUrl}/api/library/:path*`
+      },
+      {
+        source: '/api/tasks/:path*',
+        destination: `${kernelBaseUrl}/api/tasks/:path*`
       }
     ];
   }

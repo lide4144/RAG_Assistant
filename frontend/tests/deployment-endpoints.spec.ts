@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test';
-import { resolveAdminUrl, resolveGatewayWebSocketUrl, resolveKernelBaseUrl } from '../lib/deployment-endpoints';
+import { resolveAdminUrl, resolveGatewayWebSocketUrl, resolveKernelApiUrl, resolveKernelBaseUrl } from '../lib/deployment-endpoints';
 
 test.afterEach(() => {
   delete process.env.NEXT_PUBLIC_KERNEL_BASE_URL;
@@ -17,6 +17,16 @@ test('admin endpoints prefer explicit kernel base url when provided', () => {
 
   expect(resolveKernelBaseUrl()).toBe('https://api.example.com');
   expect(resolveAdminUrl('/api/admin/runtime-overview')).toBe('https://api.example.com/api/admin/runtime-overview');
+});
+
+test('library and task endpoints share the same deployment-friendly kernel resolution', () => {
+  expect(resolveKernelApiUrl('/api/library/import-latest')).toBe('/api/library/import-latest');
+  expect(resolveKernelApiUrl('/api/tasks/task-123/cancel')).toBe('/api/tasks/task-123/cancel');
+
+  process.env.NEXT_PUBLIC_KERNEL_BASE_URL = 'https://api.example.com/';
+
+  expect(resolveKernelApiUrl('/api/library/import-latest')).toBe('https://api.example.com/api/library/import-latest');
+  expect(resolveKernelApiUrl('/api/tasks/task-123/cancel')).toBe('https://api.example.com/api/tasks/task-123/cancel');
 });
 
 test('websocket url is inferred from the current page origin when no explicit gateway url is configured', () => {

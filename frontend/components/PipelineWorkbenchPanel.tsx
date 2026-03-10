@@ -2,6 +2,7 @@
 
 import { Check, Copy } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { resolveKernelApiUrl } from '../lib/deployment-endpoints';
 import { NumberTicker } from './number-ticker';
 import { mapConnectionStatus, mapPipelineStageState, shortRunId } from '../lib/status-mapper';
 import { MarkerArtifactPanel } from './marker-artifact-panel';
@@ -76,7 +77,6 @@ interface MarkerArtifactsResponse {
 
 interface PipelineWorkbenchPanelProps {
   statusText: string;
-  kernelBaseUrl: string;
   taskPanel: PipelineTaskPanelState | null;
   onStartGraphBuild: (options?: { llmMaxConcurrency?: number }) => void;
   onRetryGraphBuild: (options?: { llmMaxConcurrency?: number }) => void;
@@ -93,7 +93,6 @@ function stageStateFromTaskState(state: PipelineTaskState): string {
 
 export function PipelineWorkbenchPanel({
   statusText,
-  kernelBaseUrl,
   taskPanel,
   onStartGraphBuild,
   onRetryGraphBuild,
@@ -173,7 +172,7 @@ export function PipelineWorkbenchPanel({
     setImportLoading(true);
     setImportError('');
     try {
-      const response = await fetch(`${kernelBaseUrl}/api/library/import-latest`);
+      const response = await fetch(resolveKernelApiUrl('/api/library/import-latest'));
       const payload = (await response.json()) as Partial<ImportLatestResult>;
       if (!response.ok) {
         throw new Error('加载导入结果失败');
@@ -238,7 +237,7 @@ export function PipelineWorkbenchPanel({
 
   const loadImportHistory = async () => {
     try {
-      const response = await fetch(`${kernelBaseUrl}/api/library/import-history?limit=10`);
+      const response = await fetch(resolveKernelApiUrl('/api/library/import-history?limit=10'));
       const payload = (await response.json()) as ImportHistoryItem[];
       if (!response.ok || !Array.isArray(payload)) {
         return;
@@ -261,7 +260,7 @@ export function PipelineWorkbenchPanel({
 
   const loadMarkerArtifacts = async () => {
     try {
-      const response = await fetch(`${kernelBaseUrl}/api/library/marker-artifacts`);
+      const response = await fetch(resolveKernelApiUrl('/api/library/marker-artifacts'));
       const payload = (await response.json()) as MarkerArtifactsResponse;
       if (!response.ok || !Array.isArray(payload.items)) {
         return;
@@ -379,7 +378,7 @@ export function PipelineWorkbenchPanel({
     void loadLatestImportResult();
     void loadImportHistory();
     void loadMarkerArtifacts();
-  }, [kernelBaseUrl]);
+  }, []);
 
   useEffect(() => {
     if (taskPanel?.state === 'succeeded') {
@@ -414,7 +413,7 @@ export function PipelineWorkbenchPanel({
       for (const file of importFiles) {
         form.append('files', file);
       }
-      const response = await fetch(`${kernelBaseUrl}/api/library/import`, {
+      const response = await fetch(resolveKernelApiUrl('/api/library/import'), {
         method: 'POST',
         body: form
       });
@@ -443,7 +442,7 @@ export function PipelineWorkbenchPanel({
     setImportSubmitMessage('');
     window.dispatchEvent(new CustomEvent(importBusyEventName, { detail: { busy: true } }));
     try {
-      const response = await fetch(`${kernelBaseUrl}/api/library/import-from-dir`, {
+      const response = await fetch(resolveKernelApiUrl('/api/library/import-from-dir'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ source_dir: importDir.trim(), topic: importTopic.trim() })
@@ -483,7 +482,7 @@ export function PipelineWorkbenchPanel({
       return;
     }
     try {
-      const response = await fetch(`${kernelBaseUrl}/api/library/marker-artifacts/delete`, {
+      const response = await fetch(resolveKernelApiUrl('/api/library/marker-artifacts/delete'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ key: item.key })

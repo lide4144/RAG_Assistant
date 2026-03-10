@@ -2,6 +2,7 @@
 
 import { useState } from 'react';
 import type { MutableRefObject } from 'react';
+import { resolveKernelApiUrl } from '../lib/deployment-endpoints';
 import type { PipelineTaskPanelState, PipelineTaskState } from './PipelineWorkbenchPanel';
 
 type TaskWsPayload =
@@ -46,10 +47,9 @@ type TaskWsPayload =
 interface UsePipelineWorkbenchOptions {
   wsRef: MutableRefObject<WebSocket | null>;
   statusText: string;
-  kernelBaseUrl: string;
 }
 
-export function usePipelineWorkbench({ wsRef, statusText, kernelBaseUrl }: UsePipelineWorkbenchOptions) {
+export function usePipelineWorkbench({ wsRef, statusText }: UsePipelineWorkbenchOptions) {
   const [taskPanel, setTaskPanel] = useState<PipelineTaskPanelState | null>(null);
 
   const applyTaskPayload = (payload: TaskWsPayload): boolean => {
@@ -174,7 +174,7 @@ export function usePipelineWorkbench({ wsRef, statusText, kernelBaseUrl }: UsePi
     }
     void (async () => {
       try {
-        const response = await fetch(`${kernelBaseUrl}/api/tasks/${taskPanel.taskId}/cancel`, { method: 'POST' });
+        const response = await fetch(resolveKernelApiUrl(`/api/tasks/${taskPanel.taskId}/cancel`), { method: 'POST' });
         if (!response.ok) {
           throw new Error(`取消任务失败 (${response.status})`);
         }
