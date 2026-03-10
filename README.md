@@ -51,6 +51,7 @@
 ## 生产部署提示
 
 - 生产环境推荐通过单域名 Nginx 暴露服务，不要让浏览器直接访问 `8000` 或 `8080`。
+- 在 Cloud Studio 这类平台端口封装环境中，推荐再起一个内部 Nginx 单端口入口，只对外暴露一个应用端口。
 - 推荐浏览器只访问：
   - `https://your-domain.com/chat`
   - `https://your-domain.com/pipeline`
@@ -60,3 +61,4 @@
   - `/api/*` -> kernel
   - `/ws` -> gateway
 - 可直接复用的模板见 [deploy/nginx/rag-gpt.conf](/home/programer/RAG_GPTV1.0/deploy/nginx/rag-gpt.conf)。
+- Cloud Studio 单端口启动可用 [scripts/cloudstudio-up.sh](/home/programer/RAG_GPTV1.0/scripts/cloudstudio-up.sh)。
