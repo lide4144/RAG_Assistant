@@ -48,6 +48,37 @@ scripts/dev-up.sh
 1. 显式 `NEXT_PUBLIC_KERNEL_BASE_URL`
 2. Next rewrites 兜底转发到 Kernel
 
+注意：这里的地址注入是为“本机三服务联调”准备的开发默认值，不适合作为远程服务器部署时给浏览器直接访问的通用配置。
+
+## 4.1 远程部署 / 反向代理说明
+
+如果你把前端部署在远程服务器，并从自己的浏览器访问该页面：
+
+- 不要让浏览器默认连接 `localhost` 或 `127.0.0.1`
+- 推荐将前端、`/api/admin/*` 和 `/ws` 统一收口到同一域名/端口
+- 若使用 HTTPS，WebSocket 必须对应为 `wss://`
+
+推荐顺序：
+
+1. **同域反向代理（推荐）**
+   - 浏览器访问 `https://your-domain/chat`
+   - 前端默认请求同域 `/api/admin/*`
+   - 前端默认连接同域 `/ws`
+   - 反向代理将 `/api/admin/*` 转发到 Kernel，将 `/ws` 转发到 Gateway
+
+2. **显式公网地址覆盖**
+   - 当你不使用同域反向代理时，显式设置：
+     - `NEXT_PUBLIC_KERNEL_BASE_URL=http(s)://<你的服务地址>:<端口>`
+     - `NEXT_PUBLIC_GATEWAY_WS_URL=ws(s)://<你的服务地址>:<端口>/ws`
+
+错误示例：
+
+- 页面由 `http://your-server:3000` 提供，但浏览器去连 `ws://localhost:8080/ws`
+- 页面由 `https://your-domain` 提供，但浏览器去连 `ws://...` 而不是 `wss://...`
+- 浏览器直接请求 `http://127.0.0.1:8000/api/admin/...`
+
+这些情况都会把请求错误地指向浏览器所在机器，或触发 mixed content / 连接拒绝问题。
+
 ## 5. 健康检查
 
 另开终端：
@@ -128,6 +159,8 @@ cd ../frontend && PORT=3000 npx next dev -H 0.0.0.0 -p 3000
 ```
 
 然后访问 `http://localhost:3000/chat`。
+
+如果是远程服务器部署，不要直接照搬上面的本地回环地址。应改用同域反向代理，或显式设置公网可达的 `NEXT_PUBLIC_KERNEL_BASE_URL` / `NEXT_PUBLIC_GATEWAY_WS_URL`。
 
 ### 9.2 页面打开但偶发 WebSocket warning
 
