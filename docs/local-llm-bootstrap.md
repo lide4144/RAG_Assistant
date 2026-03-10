@@ -2,6 +2,20 @@
 
 适用目标：在个人 8GB 显存设备上优先本地化 `embedding/rerank/rewrite`。
 
+## 0) 前置依赖
+
+- `ollama` 是系统级可执行程序，不属于 `requirements.txt`
+- 运行一键拉模前，必须先在宿主机安装 Ollama，并确认 `ollama --version` 可执行
+
+Linux 常用安装方式：
+
+```bash
+curl -fsSL https://ollama.com/install.sh | sh
+ollama --version
+```
+
+如果 `scripts/bootstrap_local_llm_ollama.sh` 提示 `[ERROR] missing command: ollama`，说明当前环境还没有安装这个系统依赖。
+
 ## 默认模型档位
 
 - `embedding`: `BAAI/bge-small-zh-v1.5`
