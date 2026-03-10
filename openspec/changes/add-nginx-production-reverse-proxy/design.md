@@ -41,6 +41,7 @@
 原因：
 - Cloud Studio 的每端口独立链接会造成多 origin；单端口入口可以恢复同域模型。
 - 平台外层已经处理 HTTPS，因此内部 Nginx 保持 HTTP 即可。
+- `next dev` 依赖 `/_next/webpack-hmr` WebSocket，内部 Nginx 也必须透传该路径。
 
 备选方案：
 - 继续暴露 `3000/8000/8080` 三个端口：会回到 CORS 和多 origin 问题。
