@@ -19,7 +19,7 @@ class LocalLlmScriptsTests(unittest.TestCase):
             check=False,
         )
 
-    def test_bootstrap_script_pulls_three_default_models(self) -> None:
+    def test_bootstrap_script_pulls_embedding_and_rewrite_models_by_default(self) -> None:
         repo = Path(__file__).resolve().parents[1]
         script = repo / "scripts" / "bootstrap_local_llm_ollama.sh"
 
@@ -59,9 +59,8 @@ class LocalLlmScriptsTests(unittest.TestCase):
             self.assertEqual(
                 pulled,
                 [
-                    "BAAI/bge-small-zh-v1.5",
-                    "BAAI/bge-reranker-base",
-                    "Qwen2.5-3B-Instruct",
+                    "bge-m3",
+                    "qwen2.5:3b",
                 ],
             )
 
@@ -79,11 +78,15 @@ class LocalLlmScriptsTests(unittest.TestCase):
                 "set -euo pipefail\n"
                 "url=\"${@: -1}\"\n"
                 "if [[ \"$url\" == *\"/api/tags\" ]]; then\n"
-                "  echo '{\"models\":[{\"name\":\"BAAI/bge-small-zh-v1.5:latest\"},{\"name\":\"BAAI/bge-reranker-base:latest\"},{\"name\":\"Qwen2.5-3B-Instruct:latest\"}]}'\n"
+                "  echo '{\"models\":[{\"name\":\"bge-m3\"},{\"name\":\"qwen2.5:3b\"}]}'\n"
                 "  exit 0\n"
                 "fi\n"
                 "if [[ \"$url\" == *\"/health/deps\" ]]; then\n"
                 "  echo '{\"answer\":{\"status\":\"ok\"},\"embedding\":{\"status\":\"ok\"},\"rerank\":{\"status\":\"ok\"}}'\n"
+                "  exit 0\n"
+                "fi\n"
+                "if [[ \"$url\" == *\"/api/embed\" ]]; then\n"
+                "  echo '{\"embeddings\":[[0.1,0.2,0.3]]}'\n"
                 "  exit 0\n"
                 "fi\n"
                 "if [[ \"$url\" == *\"/v1/chat/completions\" ]]; then\n"

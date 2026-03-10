@@ -7,17 +7,17 @@
 ## 2. 前端模型设置升级
 
 - [x] 2.1 将模型设置面板升级为全模型位点视图（answer/embedding/rerank/rewrite/graph_entity）
-- [x] 2.2 为 embedding/rerank/rewrite 提供本地默认值预填，并确保不覆盖已有持久化配置
+- [x] 2.2 为 embedding/rewrite 提供 Ollama 默认值预填，并为 rerank 提供远端兼容默认值，且不覆盖已有持久化配置
 - [x] 2.3 增加位点级错误提示与保存回显验证，确保单点失败不影响其他输入状态
 
 ## 3. 本地模型安装与接入
 
-- [x] 3.1 提供 Ollama 主路径安装文档与脚本入口，覆盖三段本地模型拉取与启动
+- [x] 3.1 提供 Ollama 主路径安装文档与脚本入口，覆盖 embedding/rewrite 本地模型拉取与启动
 - [x] 3.2 增加本地连通性与健康检查步骤，输出可执行诊断指引
 - [x] 3.3 提供 vLLM 可选路径说明与切换注意事项（非首轮必需）
 
 ## 4. 回归与回滚
 
 - [x] 4.1 新增/更新测试，覆盖全模型配置保存回显、rewrite 独立路由生效、graph entity 运行时覆盖
-- [x] 4.2 执行基础质量回归，验证本地 embedding/rerank/rewrite 不劣化到不可用
+- [x] 4.2 执行基础质量回归，验证本地 embedding/rewrite 不劣化到不可用，并确认 rerank 远端路径可继续工作
 - [x] 4.3 验证一键回滚到外部 API 路径可用，并补充运维文档

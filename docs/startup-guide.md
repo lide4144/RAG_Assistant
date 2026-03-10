@@ -197,7 +197,7 @@ cd ../frontend && PORT=3000 npx next dev -H 0.0.0.0 -p 3000
 
 ## 10. 本地模型主路径（Ollama）
 
-如需启用本地 `embedding/rerank/rewrite`，请参考：
+如需启用本地 `embedding/rewrite`（`rerank` 默认仍建议走外部 API 或 vLLM），请参考：
 
 - `docs/local-llm-bootstrap.md`
 

@@ -99,21 +99,21 @@ const stageMeta: StageMeta[] = [
     title: 'Embedding 模型',
     defaultProvider: 'ollama',
     defaultApiBase: 'http://127.0.0.1:11434/v1',
-    defaultModel: 'BAAI/bge-small-zh-v1.5'
+    defaultModel: 'bge-m3'
   },
   {
     key: 'rerank',
     title: 'Rerank 模型',
-    defaultProvider: 'ollama',
-    defaultApiBase: 'http://127.0.0.1:11434/v1',
-    defaultModel: 'BAAI/bge-reranker-base'
+    defaultProvider: 'siliconflow',
+    defaultApiBase: 'https://api.siliconflow.cn/v1',
+    defaultModel: 'Qwen/Qwen3-Reranker-8B'
   },
   {
     key: 'rewrite',
     title: 'Rewrite 模型',
     defaultProvider: 'ollama',
     defaultApiBase: 'http://127.0.0.1:11434/v1',
-    defaultModel: 'Qwen2.5-3B-Instruct'
+    defaultModel: 'qwen2.5:3b'
   },
   {
     key: 'graph_entity',

@@ -2,7 +2,7 @@
 
 当前系统运行时配置面板仅显式管理 `answer/embedding/rerank` 三段，且 `rewrite` 在配置加载时被强制映射到 `answer` 路由，`graph_entity_llm_*` 仍停留在静态配置。对“外部 API + 本地混合”运维场景而言，这会带来三类问题：配置面不完整、路由耦合难以回滚、个人开发机本地化落地成本高。
 
-本次变更以 8GB 显存开发机为约束，目标是在不破坏既有外部 API 路由的前提下，将 `embedding/rerank/rewrite` 设为可本地优先，并补齐前端全模型配置管理。
+本次变更以 8GB 显存开发机为约束，目标是在不破坏既有外部 API 路由的前提下，将 `embedding/rewrite` 设为可本地优先，为 `rerank` 保留远端兼容默认值，并补齐前端全模型配置管理。
 
 ## 目标 / 非目标
 
@@ -34,16 +34,16 @@
 - 方案 B：继续使用 answer 覆盖 rewrite，graph entity 维持静态。
 - 选择理由：A 能消除耦合隐式行为并提升可观测性。
 
-4. 决策：默认本地模型档位固定为“轻量优先”。
-- embedding: `BAAI/bge-small-zh-v1.5`（备选 `BAAI/bge-base-zh-v1.5`）
-- rerank: `BAAI/bge-reranker-base`
-- rewrite: `Qwen2.5-3B-Instruct` 4bit（备选 `Qwen2.5-1.5B-Instruct` 4bit）
-- 选择理由：在 8GB 显存上更易稳定运行并控制时延。
+4. 决策：默认本地模型档位固定为“轻量优先”，仅覆盖 Ollama 主路径中可稳定落地的位点。
+- embedding: `bge-m3`（备选 `nomic-embed-text`）
+- rewrite: `qwen2.5:3b`（备选 `qwen2.5:1.5b`）
+- rerank: 默认不纳入 Ollama 主路径，保留远端兼容模型（例如 `Qwen/Qwen3-Reranker-8B`）
+- 选择理由：Ollama 可直接拉取的官方 tag 与 8GB 设备约束共同决定了 embedding/rewrite 更适合作为首轮本地默认，rerank 则保留远端路径更稳。
 
 ## 风险 / 权衡
 
 - [风险] 本地模型格式与推理引擎兼容性不一致（尤其 rerank）。
-  → 缓解措施：提供模型兼容矩阵与降级映射，允许回退外部 API。
+  → 缓解措施：从 Ollama 主路径中移除 rerank 默认值，提供模型兼容矩阵与降级映射，允许回退外部 API。
 
 - [风险] 前端一次性扩展全模型字段可能增加用户输入复杂度。
   → 缓解措施：默认折叠高级位点，提供“推荐默认值一键填充”。
@@ -58,9 +58,9 @@
 
 1. 扩展运行时配置数据结构与 API 契约，新增 rewrite/graph entity 配置位点并保持旧字段兼容。
 2. 改造配置加载逻辑，移除 rewrite 强绑定 answer 的覆盖行为，改为显式读取 rewrite 路由。
-3. 前端模型设置面板升级为全模型配置，增加本地三段默认值预填策略。
-4. 新增本地模型安装文档与脚本入口（Ollama 主路径），覆盖拉取、启动、健康检查。
-5. 执行回归：保存回显、连通性探测、rewrite 行为对齐、本地不可用降级、回滚验证。
+3. 前端模型设置面板升级为全模型配置，增加本地两段默认值与远端 rerank 默认值预填策略。
+4. 新增本地模型安装文档与脚本入口（Ollama 主路径），覆盖 embedding/rewrite 拉取、启动、健康检查。
+5. 执行回归：保存回显、embedding/rewrite 连通性探测、rewrite 行为对齐、本地不可用降级、回滚验证。
 
 回滚策略：
 - 配置层：恢复到外部 API 默认 provider/api_base/model；

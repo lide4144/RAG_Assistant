@@ -3,9 +3,8 @@ set -euo pipefail
 
 OLLAMA_HOST="${OLLAMA_HOST:-http://127.0.0.1:11434}"
 KERNEL_BASE_URL="${KERNEL_BASE_URL:-http://127.0.0.1:8000}"
-EMBED_MODEL="${EMBED_MODEL:-BAAI/bge-small-zh-v1.5}"
-RERANK_MODEL="${RERANK_MODEL:-BAAI/bge-reranker-base}"
-REWRITE_MODEL="${REWRITE_MODEL:-Qwen2.5-3B-Instruct}"
+EMBED_MODEL="${EMBED_MODEL:-bge-m3}"
+REWRITE_MODEL="${REWRITE_MODEL:-qwen2.5:3b}"
 
 check_cmd() {
   if ! command -v "$1" >/dev/null 2>&1; then
@@ -18,14 +17,23 @@ check_cmd curl
 check_cmd python3
 
 models_json="$(curl -fsS "${OLLAMA_HOST}/api/tags")"
-python3 - <<'PY' "${models_json}" "${EMBED_MODEL}" "${RERANK_MODEL}" "${REWRITE_MODEL}"
+python3 - <<'PY' "${models_json}" "${EMBED_MODEL}" "${REWRITE_MODEL}"
 import json
 import sys
 
 payload = json.loads(sys.argv[1])
 required = sys.argv[2:]
 rows = payload.get("models", []) if isinstance(payload, dict) else []
-installed = {str(item.get("name", "")).split(":", 1)[0] for item in rows if isinstance(item, dict)}
+installed = set()
+for item in rows:
+    if not isinstance(item, dict):
+        continue
+    name = str(item.get("name", "")).strip()
+    if not name:
+        continue
+    installed.add(name)
+    if name.endswith(":latest"):
+        installed.add(name[: -len(":latest")])
 missing = [m for m in required if m not in installed]
 if missing:
     print("[ERROR] missing local models:", ", ".join(missing))
@@ -36,6 +44,26 @@ PY
 echo "[INFO] checking kernel deps"
 curl -fsS "${KERNEL_BASE_URL}/health/deps" | python3 -m json.tool >/tmp/kernel_deps_health.json
 cat /tmp/kernel_deps_health.json
+
+echo "[INFO] probing embedding route with local model"
+embed_resp="$(
+  curl -fsS \
+    -H "Content-Type: application/json" \
+    -d "{\"model\":\"${EMBED_MODEL}\",\"input\":\"health check\"}" \
+    "${OLLAMA_HOST}/api/embed"
+)"
+python3 - <<'PY' "${embed_resp}"
+import json
+import sys
+
+payload = json.loads(sys.argv[1])
+embeddings = payload.get("embeddings") if isinstance(payload, dict) else None
+first = embeddings[0] if isinstance(embeddings, list) and embeddings else None
+if not isinstance(first, list) or not first:
+    print("[ERROR] embedding probe failed: empty embedding vector")
+    sys.exit(1)
+print("[OK] embedding route probe succeeded")
+PY
 
 echo "[INFO] probing rewrite route with local model"
 rewrite_resp="$(

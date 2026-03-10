@@ -54,9 +54,9 @@ async function mockRuntimePanels(page: Page) {
       body: JSON.stringify({
         llm: {
           answer: { provider: 'openai', model: 'gpt-4o-mini', configured: true },
-          embedding: { provider: 'siliconflow', model: 'BAAI/bge-small-zh-v1.5', configured: true },
-          rerank: { provider: 'siliconflow', model: 'BAAI/bge-reranker-base', configured: true },
-          rewrite: { provider: 'ollama', model: 'Qwen2.5-3B-Instruct', configured: true },
+          embedding: { provider: 'siliconflow', model: 'bge-m3', configured: true },
+          rerank: { provider: 'siliconflow', model: 'Qwen/Qwen3-Reranker-8B', configured: true },
+          rewrite: { provider: 'ollama', model: 'qwen2.5:3b', configured: true },
           graph_entity: { provider: 'siliconflow', model: 'Pro/deepseek-ai/DeepSeek-V3.2', configured: true }
         },
         pipeline: {
@@ -187,15 +187,15 @@ test('llm settings panel can save and reload full-stage config', async ({ page }
   await page.getByTestId('llm-embedding-api-base-input').fill('https://embedding.example.com/v1');
   await page.getByTestId('llm-embedding-api-key-input').fill('sk-embedding');
   await page.getByTestId('llm-embedding-detect-btn').click();
-  await expect(page.getByTestId('llm-embedding-model-select')).toHaveValue('BAAI/bge-small-zh-v1.5');
+  await expect(page.getByTestId('llm-embedding-model-select')).toHaveValue('bge-m3');
 
   await page.getByTestId('llm-rerank-api-base-input').fill('https://rerank.example.com/v1');
   await page.getByTestId('llm-rerank-api-key-input').fill('sk-rerank');
   await page.getByTestId('llm-rerank-detect-btn').click();
-  await expect(page.getByTestId('llm-rerank-model-select')).toHaveValue('BAAI/bge-reranker-base');
+  await expect(page.getByTestId('llm-rerank-model-select')).toHaveValue('Qwen/Qwen3-Reranker-8B');
 
   await page.getByTestId('llm-rewrite-detect-btn').click();
-  await expect(page.getByTestId('llm-rewrite-model-select')).toHaveValue('Qwen2.5-3B-Instruct');
+  await expect(page.getByTestId('llm-rewrite-model-select')).toHaveValue('qwen2.5:3b');
 
   await page.getByTestId('llm-graph_entity-detect-btn').click();
   await expect(page.getByTestId('llm-graph_entity-model-select')).toHaveValue('Pro/deepseek-ai/DeepSeek-V3.2');
@@ -221,8 +221,8 @@ test('llm settings panel handles legacy three-stage payload and can still save f
         body: JSON.stringify({
           configured: true,
           answer: { provider: 'openai', api_base: 'https://answer.legacy.example.com/v1', model: 'gpt-4o-mini' },
-          embedding: { provider: 'ollama', api_base: 'http://127.0.0.1:11434/v1', model: 'BAAI/bge-small-zh-v1.5' },
-          rerank: { provider: 'ollama', api_base: 'http://127.0.0.1:11434/v1', model: 'BAAI/bge-reranker-base' }
+          embedding: { provider: 'ollama', api_base: 'http://127.0.0.1:11434/v1', model: 'bge-m3' },
+          rerank: { provider: 'siliconflow', api_base: 'https://api.siliconflow.cn/v1', model: 'Qwen/Qwen3-Reranker-8B' }
         })
       });
       return;
@@ -248,8 +248,8 @@ test('llm settings panel handles legacy three-stage payload and can still save f
 
   await expect(page.getByTestId('llm-answer-api-base-input')).toHaveValue('https://answer.legacy.example.com/v1');
   await expect(page.getByTestId('llm-embedding-api-base-input')).toHaveValue('http://127.0.0.1:11434/v1');
-  await expect(page.getByTestId('llm-rerank-api-base-input')).toHaveValue('http://127.0.0.1:11434/v1');
-  await expect(page.getByTestId('llm-rewrite-model-select')).toHaveValue('Qwen2.5-3B-Instruct');
+  await expect(page.getByTestId('llm-rerank-api-base-input')).toHaveValue('https://api.siliconflow.cn/v1');
+  await expect(page.getByTestId('llm-rewrite-model-select')).toHaveValue('qwen2.5:3b');
   await expect(page.getByTestId('llm-graph_entity-model-select')).toHaveValue('Pro/deepseek-ai/DeepSeek-V3.2');
 
   await page.getByTestId('llm-answer-api-key-input').fill('sk-answer');

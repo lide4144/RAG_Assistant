@@ -110,7 +110,7 @@ class AdminLLMConfigApiTests(unittest.TestCase):
                             "provider": "ollama",
                             "api_base": "http://127.0.0.1:11434/v1",
                             "api_key": "rewrite-secret",
-                            "model": "Qwen2.5-3B-Instruct",
+                            "model": "qwen2.5:3b",
                         },
                         graph_entity={
                             "provider": "siliconflow",
@@ -124,7 +124,7 @@ class AdminLLMConfigApiTests(unittest.TestCase):
         self.assertEqual(payload["config"]["answer"]["model"], "gpt-4.1-mini")
         self.assertEqual(payload["config"]["embedding"]["model"], "BAAI/bge-m3")
         self.assertEqual(payload["config"]["rerank"]["model"], "Qwen/Qwen3-Reranker-8B")
-        self.assertEqual(payload["config"]["rewrite"]["model"], "Qwen2.5-3B-Instruct")
+        self.assertEqual(payload["config"]["rewrite"]["model"], "qwen2.5:3b")
         self.assertEqual(payload["config"]["graph_entity"]["model"], "Pro/deepseek-ai/DeepSeek-V3.2")
         self.assertIn("***", payload["config"]["rerank"]["api_key_masked"])
 
@@ -171,7 +171,7 @@ class AdminLLMConfigApiTests(unittest.TestCase):
                         "provider": "ollama",
                         "api_base": "http://127.0.0.1:11434/v1",
                         "api_key": "rewrite-secret",
-                        "model": "Qwen2.5-3B-Instruct",
+                        "model": "qwen2.5:3b",
                     },
                     graph_entity={
                         "provider": "siliconflow",

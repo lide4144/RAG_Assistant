@@ -2,9 +2,8 @@
 set -euo pipefail
 
 OLLAMA_HOST="${OLLAMA_HOST:-http://127.0.0.1:11434}"
-EMBED_MODEL="${EMBED_MODEL:-BAAI/bge-small-zh-v1.5}"
-RERANK_MODEL="${RERANK_MODEL:-BAAI/bge-reranker-base}"
-REWRITE_MODEL="${REWRITE_MODEL:-Qwen2.5-3B-Instruct}"
+EMBED_MODEL="${EMBED_MODEL:-bge-m3}"
+REWRITE_MODEL="${REWRITE_MODEL:-qwen2.5:3b}"
 
 check_cmd() {
   if ! command -v "$1" >/dev/null 2>&1; then
@@ -47,11 +46,10 @@ check_cmd ollama
 ensure_ollama_alive
 
 pull_model "${EMBED_MODEL}"
-pull_model "${RERANK_MODEL}"
 pull_model "${REWRITE_MODEL}"
 
 echo "[DONE] local models are ready"
 echo "- embedding: ${EMBED_MODEL}"
-echo "- rerank: ${RERANK_MODEL}"
 echo "- rewrite: ${REWRITE_MODEL}"
+echo "- rerank: not bootstrapped locally by default"
 echo "Next: run scripts/check_local_llm_health.sh"
