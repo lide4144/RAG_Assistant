@@ -39,7 +39,7 @@
     "provider": "ollama",
     "api_base": "http://127.0.0.1:11434/v1",
     "api_key": "local-placeholder",
-    "model": "bge-m3"
+    "model": "nomic-embed-text"
   },
   "rerank": {
     "provider": "siliconflow",

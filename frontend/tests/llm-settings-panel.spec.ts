@@ -221,7 +221,7 @@ test('llm settings panel handles legacy three-stage payload and can still save f
         body: JSON.stringify({
           configured: true,
           answer: { provider: 'openai', api_base: 'https://answer.legacy.example.com/v1', model: 'gpt-4o-mini' },
-          embedding: { provider: 'ollama', api_base: 'http://127.0.0.1:11434/v1', model: 'bge-m3' },
+          embedding: { provider: 'ollama', api_base: 'http://127.0.0.1:11434/v1', model: 'nomic-embed-text' },
           rerank: { provider: 'siliconflow', api_base: 'https://api.siliconflow.cn/v1', model: 'Qwen/Qwen3-Reranker-8B' }
         })
       });

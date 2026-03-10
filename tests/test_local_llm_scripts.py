@@ -59,7 +59,7 @@ class LocalLlmScriptsTests(unittest.TestCase):
             self.assertEqual(
                 pulled,
                 [
-                    "bge-m3",
+                    "nomic-embed-text",
                     "qwen2.5:3b",
                 ],
             )
@@ -78,7 +78,7 @@ class LocalLlmScriptsTests(unittest.TestCase):
                 "set -euo pipefail\n"
                 "url=\"${@: -1}\"\n"
                 "if [[ \"$url\" == *\"/api/tags\" ]]; then\n"
-                "  echo '{\"models\":[{\"name\":\"bge-m3\"},{\"name\":\"qwen2.5:3b\"}]}'\n"
+                "  echo '{\"models\":[{\"name\":\"nomic-embed-text\"},{\"name\":\"qwen2.5:3b\"}]}'\n"
                 "  exit 0\n"
                 "fi\n"
                 "if [[ \"$url\" == *\"/health/deps\" ]]; then\n"

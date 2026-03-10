@@ -18,11 +18,11 @@ ollama --version
 
 ## 默认模型档位
 
-- `embedding`: `bge-m3`
+- `embedding`: `nomic-embed-text`
 - `rewrite`: `qwen2.5:3b`
 
 降级备选：
-- `embedding`: `nomic-embed-text`
+- `embedding`: `bge-m3`
 - `rewrite`: `qwen2.5:1.5b`
 - `rerank`: 默认不走 Ollama 主路径，建议继续使用外部 API 或单独切到 vLLM/兼容服务
 
@@ -35,7 +35,7 @@ scripts/bootstrap_local_llm_ollama.sh
 可选自定义：
 
 ```bash
-EMBED_MODEL=nomic-embed-text \
+EMBED_MODEL=bge-m3 \
 REWRITE_MODEL=qwen2.5:1.5b \
 scripts/bootstrap_local_llm_ollama.sh
 ```
