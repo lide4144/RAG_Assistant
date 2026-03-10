@@ -82,7 +82,7 @@ sudo apt-get install -y nginx
 
 默认行为：
 - 启动 frontend `127.0.0.1:3000`
-- 启动 kernel `127.0.0.1:8000`
+- 启动 kernel `0.0.0.0:8000`（浏览器仍通过同域 `/api/*` 访问，不会直接使用该地址）
 - 启动 gateway `127.0.0.1:8080`
 - 启动本机 Nginx `127.0.0.1:9000`
 
@@ -99,6 +99,8 @@ APP_PORT=9000 scripts/cloudstudio-up.sh
 - 脚本依赖本机已安装 `nginx`
 - 如果环境里还没有 `nginx`，先安装后再运行
 - Cloud Studio 模式下不要再分别暴露 `3000/8000/8080`
+- 脚本会避免向前端注入 `NEXT_PUBLIC_KERNEL_BASE_URL=http://127.0.0.1:8000`，防止浏览器错误回连本机回环地址
+- 模板已包含 `/_next/webpack-hmr` 的透传，避免 `next dev` 在 Cloud Studio HTTPS 入口下热更新 WebSocket 失败
 
 ## 3. 环境变量约定
 

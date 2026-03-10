@@ -52,6 +52,7 @@
 
 - 生产环境推荐通过单域名 Nginx 暴露服务，不要让浏览器直接访问 `8000` 或 `8080`。
 - 在 Cloud Studio 这类平台端口封装环境中，推荐再起一个内部 Nginx 单端口入口，只对外暴露一个应用端口。
+- 该单端口入口需要同时代理应用 `/ws` 和 `next dev` 的 `/_next/webpack-hmr`。
 - 推荐浏览器只访问：
   - `https://your-domain.com/chat`
   - `https://your-domain.com/pipeline`
