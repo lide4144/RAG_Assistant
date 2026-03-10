@@ -363,7 +363,7 @@ class GraphBuildTests(unittest.TestCase):
                             "provider": "ollama",
                             "api_base": "http://127.0.0.1:11434/v1",
                             "api_key": "rewrite-secret",
-                            "model": "Qwen2.5-3B-Instruct",
+                            "model": "qwen2.5:3b",
                         },
                         "graph_entity": {
                             "provider": "openai",

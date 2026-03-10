@@ -1,6 +1,6 @@
 # 本地模型安装与接入（Ollama 主路径）
 
-适用目标：在个人 8GB 显存设备上优先本地化 `embedding/rerank/rewrite`。
+适用目标：在个人 8GB 显存设备上优先本地化 `embedding/rewrite`，并保留 `rerank` 的外部 API 或 vLLM 路径。
 
 ## 0) 前置依赖
 
@@ -18,13 +18,13 @@ ollama --version
 
 ## 默认模型档位
 
-- `embedding`: `BAAI/bge-small-zh-v1.5`
-- `rerank`: `BAAI/bge-reranker-base`
-- `rewrite`: `Qwen2.5-3B-Instruct`
+- `embedding`: `bge-m3`
+- `rewrite`: `qwen2.5:3b`
 
 降级备选：
-- `embedding`: `BAAI/bge-base-zh-v1.5`
-- `rewrite`: `Qwen2.5-1.5B-Instruct`
+- `embedding`: `nomic-embed-text`
+- `rewrite`: `qwen2.5:1.5b`
+- `rerank`: 默认不走 Ollama 主路径，建议继续使用外部 API 或单独切到 vLLM/兼容服务
 
 ## 1) Ollama 一键准备
 
@@ -35,8 +35,8 @@ scripts/bootstrap_local_llm_ollama.sh
 可选自定义：
 
 ```bash
-EMBED_MODEL=BAAI/bge-base-zh-v1.5 \
-REWRITE_MODEL=Qwen2.5-1.5B-Instruct \
+EMBED_MODEL=nomic-embed-text \
+REWRITE_MODEL=qwen2.5:1.5b \
 scripts/bootstrap_local_llm_ollama.sh
 ```
 
@@ -48,13 +48,15 @@ scripts/check_local_llm_health.sh
 
 脚本会检查：
 - 本地模型是否已在 Ollama 注册
+- `embedding` 本地路由是否可返回向量
 - Kernel `/health/deps` 是否可访问并返回结构化状态
 - `rewrite` 本地路由是否可完成一次真实 `chat/completions` 调用
 
 ## 3) 前端模型设置建议
 
 在 `/settings` 页面设置：
-- `embedding/rerank/rewrite`: `provider=ollama`, `api_base=http://127.0.0.1:11434/v1`
+- `embedding/rewrite`: `provider=ollama`, `api_base=http://127.0.0.1:11434/v1`
+- `rerank`: 建议保留 `siliconflow` 或其他 OpenAI-compatible/vLLM 路径，不作为 Ollama 主路径默认值
 - `answer/graph_entity`: 按你的线上 API 或本地策略配置
 
 ## 4) 失败诊断

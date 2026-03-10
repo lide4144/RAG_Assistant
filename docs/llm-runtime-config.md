@@ -39,19 +39,19 @@
     "provider": "ollama",
     "api_base": "http://127.0.0.1:11434/v1",
     "api_key": "local-placeholder",
-    "model": "BAAI/bge-small-zh-v1.5"
+    "model": "bge-m3"
   },
   "rerank": {
-    "provider": "ollama",
-    "api_base": "http://127.0.0.1:11434/v1",
-    "api_key": "local-placeholder",
-    "model": "BAAI/bge-reranker-base"
+    "provider": "siliconflow",
+    "api_base": "https://api.siliconflow.cn/v1",
+    "api_key": "sk-rerank",
+    "model": "Qwen/Qwen3-Reranker-8B"
   },
   "rewrite": {
     "provider": "ollama",
     "api_base": "http://127.0.0.1:11434/v1",
     "api_key": "local-placeholder",
-    "model": "Qwen2.5-3B-Instruct"
+    "model": "qwen2.5:3b"
   },
   "graph_entity": {
     "provider": "siliconflow",
