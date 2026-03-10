@@ -89,6 +89,20 @@ scripts/dev-up.sh
 - 生产环境推荐的环境变量约定
 - 页面、HTTP API、WebSocket 的最小验证步骤
 
+如果你运行在 Cloud Studio 这类“每个端口生成一个 HTTPS 链接”的环境，推荐不要分别暴露 `3000/8000/8080`，而是：
+
+1. 在工作空间内部跑三服务
+2. 再起一个内部 Nginx 单端口代理
+3. 只把这个代理端口暴露成应用链接
+
+项目里可直接使用：
+
+```bash
+APP_PORT=9000 scripts/cloudstudio-up.sh
+```
+
+详细说明见 [docs/nginx-production.md](/home/programer/RAG_GPTV1.0/docs/nginx-production.md)。
+
 ## 5. 健康检查
 
 另开终端：

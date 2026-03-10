@@ -1,6 +1,6 @@
 # Nginx 生产部署指南
 
-本项目推荐在生产环境通过单域名 Nginx 反向代理暴露服务，而不是让浏览器直接访问 `3000`、`8000`、`8080` 多端口。
+本项目推荐在生产环境通过单域名或单入口 Nginx 反向代理暴露服务，而不是让浏览器直接访问 `3000`、`8000`、`8080` 多端口。
 
 ## 目标拓扑
 
@@ -11,6 +11,22 @@
   - `/api/library/*` -> `127.0.0.1:8000`
   - `/api/tasks/*` -> `127.0.0.1:8000`
   - `/ws` -> `127.0.0.1:8080/ws`（Gateway WebSocket）
+
+对于 Cloud Studio 这类“平台为每个端口生成一个 HTTPS 链接”的环境，推荐改成：
+
+- 内部仍然运行：
+  - frontend -> `127.0.0.1:3000`
+  - kernel -> `127.0.0.1:8000`
+  - gateway -> `127.0.0.1:8080`
+- 再额外运行一个本机 Nginx：
+  - `127.0.0.1:9000` -> 统一代理 `/`、`/api/*`、`/ws`
+- 最后只把 `9000` 暴露成 Cloud Studio 应用链接
+
+这样浏览器只访问一个 Cloud Studio 链接，例如：
+
+```text
+https://<workspace-id>--9000.<region>.cloudstudio.club/chat
+```
 
 ## 1. 启动内部服务
 
@@ -36,6 +52,7 @@ scripts/dev-up.sh
 项目提供了可直接改造的模板：
 
 - [deploy/nginx/rag-gpt.conf](/home/programer/RAG_GPTV1.0/deploy/nginx/rag-gpt.conf)
+- [deploy/nginx/cloudstudio-http.conf.template](/home/programer/RAG_GPTV1.0/deploy/nginx/cloudstudio-http.conf.template)
 
 使用前请替换：
 - `your-domain.com`
@@ -49,6 +66,39 @@ sudo cp deploy/nginx/rag-gpt.conf /etc/nginx/conf.d/rag-gpt.conf
 sudo nginx -t
 sudo systemctl reload nginx
 ```
+
+### Cloud Studio 单端口模式
+
+Cloud Studio 的 HTTPS 由平台外层代理负责，因此内部 Nginx 不需要自己处理 TLS。推荐使用：
+
+- [scripts/cloudstudio-up.sh](/home/programer/RAG_GPTV1.0/scripts/cloudstudio-up.sh)
+
+如果工作空间里还没有 `nginx`，先安装：
+
+```bash
+sudo apt-get update
+sudo apt-get install -y nginx
+```
+
+默认行为：
+- 启动 frontend `127.0.0.1:3000`
+- 启动 kernel `127.0.0.1:8000`
+- 启动 gateway `127.0.0.1:8080`
+- 启动本机 Nginx `127.0.0.1:9000`
+
+执行：
+
+```bash
+cd /home/programer/RAG_GPTV1.0
+APP_PORT=9000 scripts/cloudstudio-up.sh
+```
+
+然后在 Cloud Studio 中只暴露 `9000` 这个应用端口。
+
+注意：
+- 脚本依赖本机已安装 `nginx`
+- 如果环境里还没有 `nginx`，先安装后再运行
+- Cloud Studio 模式下不要再分别暴露 `3000/8000/8080`
 
 ## 3. 环境变量约定
 
@@ -78,6 +128,11 @@ https://your-domain.com/settings
 - 页面正常打开
 - 浏览器 Network 面板中 API 请求指向当前域名下的 `/api/...`
 - WebSocket 连接指向 `wss://your-domain.com/ws`
+
+在 Cloud Studio 单端口模式下，预期为：
+- 页面链接形如 `https://...--9000.../chat`
+- API 请求指向同一链接下的 `/api/...`
+- WebSocket 指向同一链接下的 `wss://...--9000.../ws`
 
 ### HTTP 接口
 
@@ -109,6 +164,15 @@ curl https://your-domain.com/api/admin/runtime-overview
 - 可能原因：设置了 `NEXT_PUBLIC_KERNEL_BASE_URL`，导致浏览器直接跨域请求 Kernel
 - 检查步骤：查看前端请求是否命中了 `https://<kernel-host>:8000/...`
 - 修复建议：移除 `NEXT_PUBLIC_KERNEL_BASE_URL`，改为同域 `/api/*` + Nginx 转发
+
+### 症状：Cloud Studio 页面能打开，但仍在访问 `...--8000...` 或 `...--8080...`
+
+- 可能原因：你暴露了多个应用端口，或显式设置了浏览器侧绝对地址变量
+- 检查步骤：
+  - 确认 Cloud Studio 只公开了 `APP_PORT`
+  - 确认未设置 `NEXT_PUBLIC_KERNEL_BASE_URL`
+  - 确认未设置 `NEXT_PUBLIC_GATEWAY_WS_URL`
+- 修复建议：只保留单个 `9000` 入口，并通过 [scripts/cloudstudio-up.sh](/home/programer/RAG_GPTV1.0/scripts/cloudstudio-up.sh) 启动
 
 ### 症状：HTTPS 页面下 WebSocket 无法连接
 
