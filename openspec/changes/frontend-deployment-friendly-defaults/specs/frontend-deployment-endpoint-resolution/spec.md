@@ -11,6 +11,17 @@
 - **当** 前端未设置 `NEXT_PUBLIC_KERNEL_BASE_URL` 且未设置 `NEXT_PUBLIC_GATEWAY_WS_URL`
 - **那么** 系统必须将 HTTP 管理接口解析为当前站点下的相对 `/api/admin/*` 路径，并将 WebSocket 解析为当前页面来源对应的 `/ws`
 
+### 需求:系统必须在启动链路中保留显式前端端点变量
+系统在开发启动脚本或等效启动链路中，必须保留调用者显式传入的 `NEXT_PUBLIC_KERNEL_BASE_URL` 与 `NEXT_PUBLIC_GATEWAY_WS_URL`，禁止无条件覆盖为本机监听地址；当脚本为本地联调注入默认值时，也必须确保这些默认值只在调用者未显式传值时生效。
+
+#### 场景:外部传入前端管理接口地址
+- **当** 调用者在启动前显式设置 `NEXT_PUBLIC_KERNEL_BASE_URL`
+- **那么** 启动脚本必须将该值原样传递给前端进程，而不是替换为 `http://127.0.0.1:*`、`http://0.0.0.0:*` 或其他派生地址
+
+#### 场景:外部传入前端 WebSocket 地址
+- **当** 调用者在启动前显式设置 `NEXT_PUBLIC_GATEWAY_WS_URL`
+- **那么** 启动脚本必须将该值原样传递给前端进程，而不是替换为本机默认 `ws://localhost:*`
+
 ### 需求:系统必须按页面协议推导 WebSocket 协议
 系统必须根据当前页面协议自动推导 WebSocket 协议：当页面使用 `http` 时必须使用 `ws`，当页面使用 `https` 时必须使用 `wss`；禁止在 HTTPS 页面默认发起 `ws://` 连接。
 
