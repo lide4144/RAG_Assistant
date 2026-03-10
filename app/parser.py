@@ -84,6 +84,65 @@ def _is_blacklisted_title(candidate: str, blacklist_patterns: list[re.Pattern[st
     return False
 
 
+def _normalize_title_spaces(text: str) -> str:
+    return re.sub(r"\s+", " ", text).strip(" -:#\t\r\n")
+
+
+def _expand_title_candidate_variants(candidate: str) -> list[str]:
+    text = _normalize_title_spaces(candidate)
+    if not text:
+        return []
+
+    variants: list[str] = []
+
+    for line in re.split(r"[\r\n]+", candidate):
+        normalized = _normalize_title_spaces(line)
+        if len(normalized) >= 8:
+            variants.append(normalized)
+
+    without_tags = _normalize_title_spaces(re.sub(r"<[^>]+>", " ", text))
+    if without_tags:
+        variants.append(without_tags)
+
+    heading_matches = re.findall(r"#\s+(.+?)(?=\s+#\s+|$)", without_tags)
+    extracted_headings = [_normalize_title_spaces(match) for match in heading_matches if _normalize_title_spaces(match)]
+    variants.extend(extracted_headings)
+    if not extracted_headings and text:
+        variants.append(text)
+
+    cleaned_variants: list[str] = []
+    seen: set[str] = set()
+    for value in variants:
+        normalized = _normalize_title_spaces(value)
+        if not normalized:
+            continue
+        # Trim common author/affiliation tails after obvious separators.
+        normalized = re.split(r"\babstract\b", normalized, maxsplit=1, flags=re.IGNORECASE)[0]
+        normalized = re.split(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}", normalized, maxsplit=1)[0]
+        normalized = _normalize_title_spaces(normalized)
+        if len(normalized) < 8:
+            continue
+        if _is_blacklisted_title(normalized):
+            continue
+        words = normalized.split()
+        # Generate short prefixes so a good title can win over a long title+author blob.
+        if len(words) >= 5:
+            for size in range(5, min(len(words), 16) + 1):
+                prefix = _normalize_title_spaces(" ".join(words[:size]))
+                if len(prefix) >= 8 and not _is_blacklisted_title(prefix):
+                    cleaned_variants.append(prefix)
+        cleaned_variants.append(normalized)
+
+    unique: list[str] = []
+    for value in cleaned_variants:
+        key = value.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        unique.append(value[:300])
+    return unique
+
+
 def score_title_candidate(candidate: str, blacklist_patterns: list[re.Pattern[str]] | None = None) -> float:
     text = str(candidate or "").strip()
     if not text:
@@ -100,6 +159,15 @@ def score_title_candidate(candidate: str, blacklist_patterns: list[re.Pattern[st
         punctuation_penalty += 0.1
     if text.isupper():
         punctuation_penalty += 0.2
+    words = text.split()
+    if len(words) < 4:
+        punctuation_penalty += 0.15
+    if len(words) > 20:
+        punctuation_penalty += 0.1
+    if re.search(r"@[A-Za-z0-9.-]+\.", text):
+        punctuation_penalty += 0.3
+    if re.search(r"\b(google|university|brain|research|department)\b", text, re.IGNORECASE):
+        punctuation_penalty += 0.15
     base = 0.85
     score = max(0.0, min(1.0, base - punctuation_penalty))
     return score
@@ -134,13 +202,14 @@ def choose_best_title(
     best_source = "fallback_untitled"
     best_score = 0.0
     for candidate, source in candidates:
-        score = score_title_candidate(candidate, blacklist_patterns=compiled_blacklist)
-        if score <= 0.0:
-            continue
-        if score > best_score:
-            best_title = candidate[:300]
-            best_source = source
-            best_score = score
+        for expanded_candidate in _expand_title_candidate_variants(candidate):
+            score = score_title_candidate(expanded_candidate, blacklist_patterns=compiled_blacklist)
+            if score <= 0.0:
+                continue
+            if score > best_score:
+                best_title = expanded_candidate[:300]
+                best_source = source
+                best_score = score
 
     if best_score < float(confidence_threshold):
         return TitleDecision(

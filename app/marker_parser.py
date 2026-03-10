@@ -10,6 +10,7 @@ import time
 from types import FrameType
 from typing import Any
 
+from bs4 import BeautifulSoup
 from app.models import PageText
 
 
@@ -162,6 +163,72 @@ def _extract_fields(raw_result: Any) -> tuple[str, list[dict[str, Any]]]:
     return markdown, normalized
 
 
+def _extract_text_from_html(html: str) -> str:
+    text = BeautifulSoup(html or "", "html.parser").get_text("\n", strip=True)
+    return _safe_text(text)
+
+
+def _flatten_json_children(
+    nodes: list[Any] | None,
+    *,
+    page_num: int,
+    output: list[dict[str, Any]],
+) -> None:
+    if not nodes:
+        return
+
+    for node in nodes:
+        if node is None:
+            continue
+
+        block_type = str(getattr(node, "block_type", "") or "")
+        children = getattr(node, "children", None)
+        html = str(getattr(node, "html", "") or "")
+        text = _extract_text_from_html(html)
+        heading_level = None
+
+        section_hierarchy = getattr(node, "section_hierarchy", None)
+        if block_type == "SectionHeader" and isinstance(section_hierarchy, dict) and section_hierarchy:
+            try:
+                heading_level = max(int(key) for key in section_hierarchy.keys())
+            except Exception:
+                heading_level = 1
+        elif block_type == "SectionHeader":
+            heading_level = 1
+
+        if text:
+            output.append(
+                {
+                    "page": page_num,
+                    "text": text,
+                    "heading_level": heading_level,
+                    "block_type": block_type,
+                }
+            )
+
+        if children:
+            _flatten_json_children(children, page_num=page_num, output=output)
+
+
+def _extract_markdown_and_blocks(document: Any, converter: Any) -> tuple[str, list[dict[str, Any]]]:
+    markdown_renderer_module = importlib.import_module("marker.renderers.markdown")
+    json_renderer_module = importlib.import_module("marker.renderers.json")
+    markdown_renderer_cls = getattr(markdown_renderer_module, "MarkdownRenderer")
+    json_renderer_cls = getattr(json_renderer_module, "JSONRenderer")
+
+    markdown_renderer = converter.resolve_dependencies(markdown_renderer_cls)
+    json_renderer = converter.resolve_dependencies(json_renderer_cls)
+
+    markdown_output = markdown_renderer(document)
+    json_output = json_renderer(document)
+
+    markdown = _safe_text(getattr(markdown_output, "markdown", ""))
+    raw_blocks: list[dict[str, Any]] = []
+    for page_idx, page_node in enumerate(getattr(json_output, "children", []) or [], start=1):
+        _flatten_json_children(getattr(page_node, "children", None), page_num=page_idx, output=raw_blocks)
+    return markdown, raw_blocks
+
+
 def _marker_to_intermediate(markdown: str, raw_blocks: list[dict[str, Any]]) -> MarkerParseResult:
     blocks = _normalize_blocks(raw_blocks)
     pages_map: dict[int, list[str]] = {}
@@ -220,9 +287,9 @@ def parse_pdf_with_marker(pdf_path: str | Path, timeout_sec: float = 30.0) -> Ma
             converter_started = time.perf_counter()
             converter = _create_pdf_converter(PdfConverter)
             stage_timings["converter_init_sec"] = round(time.perf_counter() - converter_started, 3)
-            convert_started = time.perf_counter()
-            raw_result = converter(str(path))
-            stage_timings["convert_sec"] = round(time.perf_counter() - convert_started, 3)
+            document_started = time.perf_counter()
+            document = converter.build_document(str(path))
+            stage_timings["convert_sec"] = round(time.perf_counter() - document_started, 3)
     except _ParseTimeoutError as exc:
         raise MarkerParseError(str(exc), stage="parse_timeout") from exc
     except Exception as exc:
@@ -236,7 +303,7 @@ def parse_pdf_with_marker(pdf_path: str | Path, timeout_sec: float = 30.0) -> Ma
 
     try:
         normalize_started = time.perf_counter()
-        markdown, raw_blocks = _extract_fields(raw_result)
+        markdown, raw_blocks = _extract_markdown_and_blocks(document, converter)
         result = _marker_to_intermediate(markdown, raw_blocks)
         stage_timings["output_conversion_sec"] = round(time.perf_counter() - normalize_started, 3)
     except Exception as exc:
