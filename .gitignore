@@ -75,3 +75,4 @@ example_projects/
 !data/processed/graph.json
 !data/processed/paper_summary.json
 !data/processed/papers.json
+marker-models.tar.gz
