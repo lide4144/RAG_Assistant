@@ -2,6 +2,7 @@
 
 import { Check, Copy } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { fetchAdminJson } from '../lib/admin-http';
 import { resolveKernelApiUrl } from '../lib/deployment-endpoints';
 import { NumberTicker } from './number-ticker';
 import { mapConnectionStatus, mapPipelineStageState, shortRunId } from '../lib/status-mapper';
@@ -172,11 +173,11 @@ export function PipelineWorkbenchPanel({
     setImportLoading(true);
     setImportError('');
     try {
-      const response = await fetch(resolveKernelApiUrl('/api/library/import-latest'));
-      const payload = (await response.json()) as Partial<ImportLatestResult>;
-      if (!response.ok) {
-        throw new Error('加载导入结果失败');
+      const result = await fetchAdminJson<Partial<ImportLatestResult>>(resolveKernelApiUrl('/api/library/import-latest'));
+      if (!result.ok) {
+        throw new Error(result.message || '加载导入结果失败');
       }
+      const payload = result.data;
       setImportResult({
         added: Number(payload.added ?? 0),
         skipped: Number(payload.skipped ?? 0),
@@ -237,13 +238,12 @@ export function PipelineWorkbenchPanel({
 
   const loadImportHistory = async () => {
     try {
-      const response = await fetch(resolveKernelApiUrl('/api/library/import-history?limit=10'));
-      const payload = (await response.json()) as ImportHistoryItem[];
-      if (!response.ok || !Array.isArray(payload)) {
+      const result = await fetchAdminJson<ImportHistoryItem[]>(resolveKernelApiUrl('/api/library/import-history?limit=10'));
+      if (!result.ok || !Array.isArray(result.data)) {
         return;
       }
       setImportHistory(
-        payload.map((item) => ({
+        result.data.map((item) => ({
           run_id: String(item.run_id ?? ''),
           updated_at: String(item.updated_at ?? ''),
           added: Number(item.added ?? 0),
@@ -260,12 +260,11 @@ export function PipelineWorkbenchPanel({
 
   const loadMarkerArtifacts = async () => {
     try {
-      const response = await fetch(resolveKernelApiUrl('/api/library/marker-artifacts'));
-      const payload = (await response.json()) as MarkerArtifactsResponse;
-      if (!response.ok || !Array.isArray(payload.items)) {
+      const result = await fetchAdminJson<MarkerArtifactsResponse>(resolveKernelApiUrl('/api/library/marker-artifacts'));
+      if (!result.ok || !Array.isArray(result.data.items)) {
         return;
       }
-      setArtifactItems(payload.items);
+      setArtifactItems(result.data.items);
     } catch {
       setArtifactItems([]);
     }
@@ -413,14 +412,18 @@ export function PipelineWorkbenchPanel({
       for (const file of importFiles) {
         form.append('files', file);
       }
-      const response = await fetch(resolveKernelApiUrl('/api/library/import'), {
+      const result = await fetchAdminJson<{ message?: string; detail?: { message?: string } }>(resolveKernelApiUrl('/api/library/import'), {
         method: 'POST',
         body: form
       });
-      const payload = (await response.json()) as { message?: string; detail?: { message?: string } };
-      if (!response.ok) {
-        throw new Error(payload?.detail?.message ?? '导入失败');
+      if (!result.ok) {
+        const message =
+          typeof result.data === 'object' && result.data !== null && 'detail' in result.data
+            ? ((result.data as { detail?: { message?: string } }).detail?.message ?? result.message)
+            : result.message;
+        throw new Error(message || '导入失败');
       }
+      const payload = result.data;
       setImportSubmitMessage(payload.message ?? '导入任务已完成。');
       await loadLatestImportResult();
       await loadImportHistory();
@@ -442,15 +445,22 @@ export function PipelineWorkbenchPanel({
     setImportSubmitMessage('');
     window.dispatchEvent(new CustomEvent(importBusyEventName, { detail: { busy: true } }));
     try {
-      const response = await fetch(resolveKernelApiUrl('/api/library/import-from-dir'), {
+      const result = await fetchAdminJson<{ message?: string; detail?: { message?: string } }>(
+        resolveKernelApiUrl('/api/library/import-from-dir'),
+        {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ source_dir: importDir.trim(), topic: importTopic.trim() })
-      });
-      const payload = (await response.json()) as { message?: string; detail?: { message?: string } };
-      if (!response.ok) {
-        throw new Error(payload?.detail?.message ?? '目录导入失败');
+        }
+      );
+      if (!result.ok) {
+        const message =
+          typeof result.data === 'object' && result.data !== null && 'detail' in result.data
+            ? ((result.data as { detail?: { message?: string } }).detail?.message ?? result.message)
+            : result.message;
+        throw new Error(message || '目录导入失败');
       }
+      const payload = result.data;
       setImportSubmitMessage(payload.message ?? '目录导入任务已完成。');
       await loadLatestImportResult();
       await loadImportHistory();
@@ -482,15 +492,22 @@ export function PipelineWorkbenchPanel({
       return;
     }
     try {
-      const response = await fetch(resolveKernelApiUrl('/api/library/marker-artifacts/delete'), {
+      const result = await fetchAdminJson<{ message?: string; detail?: { message?: string } }>(
+        resolveKernelApiUrl('/api/library/marker-artifacts/delete'),
+        {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ key: item.key })
-      });
-      const payload = (await response.json()) as { message?: string; detail?: { message?: string } };
-      if (!response.ok) {
-        throw new Error(payload?.detail?.message ?? '删除失败');
+        }
+      );
+      if (!result.ok) {
+        const message =
+          typeof result.data === 'object' && result.data !== null && 'detail' in result.data
+            ? ((result.data as { detail?: { message?: string } }).detail?.message ?? result.message)
+            : result.message;
+        throw new Error(message || '删除失败');
       }
+      const payload = result.data;
       setArtifactActionMessage(payload.message ?? `${item.file_name} 已删除`);
       await loadMarkerArtifacts();
       await loadLatestImportResult();
