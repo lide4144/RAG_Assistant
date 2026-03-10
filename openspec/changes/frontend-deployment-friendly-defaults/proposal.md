@@ -6,9 +6,9 @@
 
 ## 变更内容
 
-- 将前端默认 API 请求策略调整为“同域优先”，未显式配置 `NEXT_PUBLIC_KERNEL_BASE_URL` 时，浏览器侧管理接口必须优先走当前站点的相对路径，而不是硬编码 `127.0.0.1:8000`。
+- 将前端默认 API 请求策略调整为“同域优先”，未显式配置 `NEXT_PUBLIC_KERNEL_BASE_URL` 时，浏览器侧管理接口必须优先走当前站点的相对路径，而不是硬编码 `127.0.0.1:8000`；此策略必须覆盖聊天页、全局壳层与设置页等管理接口消费方。
 - 将前端默认 WebSocket 策略调整为“按当前页面来源自动推导”，未显式配置 `NEXT_PUBLIC_GATEWAY_WS_URL` 时，聊天页与知识处理页必须基于 `window.location` 自动生成 `ws://` 或 `wss://` 地址，而不是固定使用 `ws://localhost:8080/ws`。
-- 保留显式环境变量优先级，确保本地联调、分端口开发和特殊部署仍可通过 `NEXT_PUBLIC_KERNEL_BASE_URL`、`NEXT_PUBLIC_GATEWAY_WS_URL` 覆盖默认策略。
+- 保留显式环境变量优先级，确保本地联调、分端口开发和特殊部署仍可通过 `NEXT_PUBLIC_KERNEL_BASE_URL`、`NEXT_PUBLIC_GATEWAY_WS_URL` 覆盖默认策略；开发启动脚本不得覆盖用户已显式传入的前端端点变量。
 - 更新启动与部署文档，明确区分“本地联调地址注入”和“远程部署/反向代理”两种模式，并给出 HTTPS/WSS 场景下的期望行为。
 
 ## 功能 (Capabilities)
@@ -18,12 +18,13 @@
 
 ### 修改功能
 - `frontend-chat-focused-experience`: 调整聊天页默认连接策略，确保远程部署时聊天 WebSocket 与运行态请求不再回落到浏览器本机回环地址。
+- `frontend-llm-connection-settings`: 调整设置页默认连接策略，确保模型管理接口在远程部署和 HTTPS 代理场景下不再回落到浏览器本机回环地址。
 - `frontend-pipeline-ops-dashboard`: 调整知识处理页的默认连接策略，确保任务事件通道在远程部署与 HTTPS 场景下可稳定建立。
 - `frontend-saas-shell-navigation`: 调整全局壳层运行态请求的默认寻址行为，使其在未显式配置 Kernel 地址时仍可通过同域策略读取运行态。
 
 ## 影响
 
-- 受影响前端：`chat-shell`、`pipeline-shell`、`app-shell`、管理接口请求封装与地址解析辅助函数。
-- 受影响配置与启动方式：`scripts/dev-up.sh` 的前端环境变量注入语义，以及部署时的环境变量建议。
+- 受影响前端：`chat-shell`、`pipeline-shell`、`app-shell`、`settings-shell`、管理接口请求封装与地址解析辅助函数。
+- 受影响配置与启动方式：`scripts/dev-up.sh` 的前端环境变量注入优先级、Gateway 内部访问 Kernel 的地址选择，以及部署时的环境变量建议。
 - 受影响文档：`docs/startup-guide.md`、可能的多服务开发说明与部署说明。
 - 受影响测试：前端端到端或组件测试需要覆盖“未配置地址时的同域默认值”“HTTPS 对应 WSS”“显式环境变量覆盖默认值”。
