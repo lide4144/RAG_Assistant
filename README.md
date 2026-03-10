@@ -7,6 +7,7 @@
 为实现“职责分离”，README 只保留项目总览与入口索引，具体操作手册独立维护。
 
 - 启动教程手册（推荐先看）：[docs/startup-guide.md](docs/startup-guide.md)
+- Nginx 生产反代部署（推荐生产使用）：[docs/nginx-production.md](docs/nginx-production.md)
 - 多服务开发说明（端口/架构）：[docs/multi-service-dev.md](docs/multi-service-dev.md)
 - Streamlit 调试 UI 使用：[`UI_USAGE.md`](UI_USAGE.md)
 - 历史完整版 README（已归档）：[docs/legacy-readme-full.md](docs/legacy-readme-full.md)
@@ -46,3 +47,16 @@
 - 优先通过文档手册执行启动和联调，不在 README 堆叠长流程。
 - 新增操作流程时，优先写入 `docs/` 并在 README 增加入口链接。
 - README 保持“短、准、可导航”。
+
+## 生产部署提示
+
+- 生产环境推荐通过单域名 Nginx 暴露服务，不要让浏览器直接访问 `8000` 或 `8080`。
+- 推荐浏览器只访问：
+  - `https://your-domain.com/chat`
+  - `https://your-domain.com/pipeline`
+  - `https://your-domain.com/settings`
+- 对应代理关系：
+  - `/` -> frontend
+  - `/api/*` -> kernel
+  - `/ws` -> gateway
+- 可直接复用的模板见 [deploy/nginx/rag-gpt.conf](/home/programer/RAG_GPTV1.0/deploy/nginx/rag-gpt.conf)。
