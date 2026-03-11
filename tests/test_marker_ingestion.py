@@ -62,6 +62,7 @@ class MarkerIngestionTests(unittest.TestCase):
 
             with (
                 patch("app.ingest.list_pdf_files", return_value=[pdf]),
+                patch("app.ingest._marker_preflight_check", return_value=(True, "", "")),
                 patch("app.ingest.parse_pdf_with_marker", side_effect=MarkerParseError("marker unavailable")),
                 patch("app.ingest.parse_pdf_pages", return_value=([PageText(page_num=1, text="Good Title\ncontent")], [], None)),
             ):
@@ -130,6 +131,7 @@ class MarkerIngestionTests(unittest.TestCase):
 
             with (
                 patch("app.ingest.list_pdf_files", return_value=[pdf]),
+                patch("app.ingest._marker_preflight_check", return_value=(True, "", "")),
                 patch("app.ingest.parse_pdf_with_marker", return_value=marker_result),
             ):
                 code = run_ingest(self._args(in_dir, out_dir, run_dir))
@@ -178,6 +180,7 @@ class MarkerIngestionTests(unittest.TestCase):
 
             with (
                 patch("app.ingest.list_pdf_files", return_value=[pdf]),
+                patch("app.ingest._marker_preflight_check", return_value=(True, "", "")),
                 patch("app.ingest.parse_pdf_with_marker", return_value=marker_result),
             ):
                 code = run_ingest(self._args(in_dir, out_dir, run_dir))
@@ -214,6 +217,7 @@ class MarkerIngestionTests(unittest.TestCase):
 
             with (
                 patch("app.ingest.list_pdf_files", return_value=[pdf]),
+                patch("app.ingest._marker_preflight_check", return_value=(True, "", "")),
                 patch("app.ingest.parse_pdf_with_marker", return_value=marker_result),
             ):
                 code = run_ingest(self._args(in_dir, out_dir, run_dir))
@@ -230,6 +234,48 @@ class MarkerIngestionTests(unittest.TestCase):
             self.assertEqual(trace.get("structured_segments_missing_count"), 1)
             reasons = trace.get("structured_segments_missing_reasons", {})
             self.assertEqual(reasons.get("marker_blocks_empty"), 1)
+
+    def test_structure_index_is_written_with_section_mappings(self) -> None:
+        from app.ingest import run_ingest
+
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            in_dir = base / "in"
+            out_dir = base / "out"
+            run_dir = base / "run"
+            in_dir.mkdir(parents=True, exist_ok=True)
+            run_dir.mkdir(parents=True, exist_ok=True)
+            pdf = in_dir / "e.pdf"
+            pdf.write_bytes(b"%PDF-1.4 test")
+
+            marker_result = MarkerParseResult(
+                pages=[PageText(page_num=1, text="Intro\nBody"), PageText(page_num=2, text="Method\nDetails")],
+                blocks=[
+                    StructuredBlock(page_num=1, text="Introduction", heading_level=1),
+                    StructuredBlock(page_num=1, text="Intro body text", heading_level=None),
+                    StructuredBlock(page_num=2, text="Method", heading_level=1),
+                    StructuredBlock(page_num=2, text="Method body text", heading_level=None),
+                ],
+                title_candidates=["Structured Paper"],
+            )
+
+            with (
+                patch("app.ingest.list_pdf_files", return_value=[pdf]),
+                patch("app.ingest._marker_preflight_check", return_value=(True, "", "")),
+                patch("app.ingest.parse_pdf_with_marker", return_value=marker_result),
+            ):
+                code = run_ingest(self._args(in_dir, out_dir, run_dir))
+
+            self.assertEqual(code, 0)
+            structure_index = json.loads((out_dir / "structure_index.json").read_text(encoding="utf-8"))
+            self.assertEqual(len(structure_index.get("papers", [])), 1)
+            paper = structure_index["papers"][0]
+            self.assertEqual(paper.get("structure_parse_status"), "ready")
+            self.assertGreaterEqual(len(paper.get("sections", [])), 2)
+            self.assertTrue(all(section.get("child_chunk_ids") for section in paper.get("sections", [])))
+
+            papers = json.loads((out_dir / "papers.json").read_text(encoding="utf-8"))
+            self.assertEqual(papers[0].get("ingest_metadata", {}).get("structure_parse_status"), "ready")
 
 
 if __name__ == "__main__":

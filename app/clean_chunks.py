@@ -36,12 +36,20 @@ class CleanChunkRecord:
     content_type: str
     quality_flags: list[str]
     section: str | None = None
+    section_id: str | None = None
+    heading_path: list[str] | None = None
     merged_from: list[str] | None = None
 
     def to_dict(self) -> dict[str, Any]:
         data = asdict(self)
         if self.merged_from is None:
             data.pop("merged_from", None)
+        if self.section is None:
+            data.pop("section", None)
+        if self.section_id is None:
+            data.pop("section_id", None)
+        if self.heading_path is None:
+            data.pop("heading_path", None)
         return data
 
 
@@ -156,7 +164,9 @@ def clean_chunk_record(record: dict[str, Any]) -> CleanChunkRecord:
         clean_text=clean_text,
         content_type=content_type,
         quality_flags=flags,
-        section=None,
+        section=(str(record.get("section", "")).strip() or None),
+        section_id=(str(record.get("section_id", "")).strip() or None),
+        heading_path=[str(x).strip() for x in record.get("heading_path", []) if str(x).strip()] or None,
     )
 
 
@@ -196,7 +206,9 @@ def merge_short_fragments(records: list[CleanChunkRecord]) -> list[CleanChunkRec
                         clean_text="\n".join(item.clean_text for item in chunk_block if item.clean_text),
                         content_type="table_list",
                         quality_flags=flags,
-                        section=None,
+                        section=chunk_block[0].section,
+                        section_id=chunk_block[0].section_id,
+                        heading_path=list(chunk_block[0].heading_path or []) or None,
                         merged_from=[item.chunk_id for item in chunk_block],
                     )
                 )

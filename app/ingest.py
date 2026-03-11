@@ -14,6 +14,14 @@ from typing import Any
 from app.clean_chunks import run_clean_chunks
 from app.chunker import build_chunks
 from app.config import load_and_validate_config
+from app.document_structure import (
+    STRUCTURE_DEGRADED,
+    STRUCTURE_READY,
+    STRUCTURE_UNAVAILABLE,
+    load_structure_index,
+    merge_structure_entries,
+    save_structure_index,
+)
 from app.fs_utils import FileLockTimeoutError, file_lock
 from app.marker_parser import MarkerParseError, parse_pdf_with_marker
 from app.models import ChunkRecord, PageText, PaperRecord
@@ -69,6 +77,7 @@ _MARKER_LLM_ENV_MAP = {
 class ImportCandidate:
     paper: PaperRecord
     chunks: list[ChunkRecord]
+    structure_entry: dict[str, Any] | None = None
 
 
 @dataclass
@@ -82,6 +91,8 @@ class ParsedPdf:
     parser_fallback_stage: str
     parser_fallback_reason: str
     structured_segments: list[dict[str, Any]]
+    structure_parse_status: str = STRUCTURE_UNAVAILABLE
+    structure_parse_reason: str = ""
     marker_attempt_duration_sec: float = 0.0
     marker_stage_timings: dict[str, float] | None = None
 
@@ -452,6 +463,8 @@ def _parse_pdf_with_fallback(
             parser_fallback_stage=marker_preflight_stage or "preflight",
             parser_fallback_reason=marker_preflight_reason or "marker preflight failed",
             structured_segments=[],
+            structure_parse_status=STRUCTURE_UNAVAILABLE,
+            structure_parse_reason=marker_preflight_reason or "marker_preflight_failed",
             marker_attempt_duration_sec=0.0,
             marker_stage_timings={},
         )
@@ -473,6 +486,8 @@ def _parse_pdf_with_fallback(
                 parser_fallback_stage="",
                 parser_fallback_reason="",
                 structured_segments=structured_segments,
+                structure_parse_status=STRUCTURE_READY if structured_segments else STRUCTURE_UNAVAILABLE,
+                structure_parse_reason="" if structured_segments else "marker_blocks_empty",
                 marker_attempt_duration_sec=round(time.perf_counter() - marker_started, 3),
                 marker_stage_timings=marker_result.stage_timings,
             )
@@ -489,6 +504,8 @@ def _parse_pdf_with_fallback(
                 parser_fallback_stage=stage,
                 parser_fallback_reason=str(exc),
                 structured_segments=[],
+                structure_parse_status=STRUCTURE_UNAVAILABLE,
+                structure_parse_reason=stage,
                 marker_attempt_duration_sec=round(time.perf_counter() - marker_started, 3),
                 marker_stage_timings={},
             )
@@ -503,15 +520,125 @@ def _parse_pdf_with_fallback(
         parser_fallback_stage="",
         parser_fallback_reason="",
         structured_segments=[],
+        structure_parse_status=STRUCTURE_UNAVAILABLE,
+        structure_parse_reason="marker_disabled_or_legacy_parser",
         marker_attempt_duration_sec=0.0,
         marker_stage_timings={},
     )
+
+
+def _build_structure_entry(
+    *,
+    paper_id: str,
+    parser_engine: str,
+    parser_fallback: bool,
+    structure_parse_status: str,
+    structure_parse_reason: str,
+    structured_segments: list[dict[str, Any]],
+    chunks: list[ChunkRecord],
+) -> dict[str, Any]:
+    entry: dict[str, Any] = {
+        "paper_id": paper_id,
+        "parser_engine": parser_engine,
+        "structure_parse_status": structure_parse_status,
+        "structure_parse_reason": structure_parse_reason,
+        "sections": [],
+        "warnings": [],
+    }
+    if parser_fallback:
+        entry["structure_parse_status"] = STRUCTURE_UNAVAILABLE
+        entry["structure_parse_reason"] = structure_parse_reason or "marker_fallback"
+        return entry
+    if not structured_segments:
+        entry["structure_parse_status"] = STRUCTURE_UNAVAILABLE
+        entry["structure_parse_reason"] = structure_parse_reason or "marker_blocks_empty"
+        return entry
+
+    sections: list[dict[str, Any]] = []
+    section_lookup: dict[str, dict[str, Any]] = {}
+    stack: list[dict[str, Any]] = []
+    heading_counter = 0
+    for block in structured_segments:
+        level = block.get("heading_level")
+        if not isinstance(level, int) or level <= 0:
+            continue
+        title = str(block.get("text", "")).strip()
+        if not title:
+            continue
+        heading_counter += 1
+        page_num = max(1, int(block.get("page", 1) or 1))
+        while stack and int(stack[-1]["section_level"]) >= level:
+            stack.pop()
+        parent_section_id = str(stack[-1]["section_id"]) if stack else None
+        heading_path = [str(item["section_title"]) for item in stack] + [title]
+        section_id = f"{paper_id}:sec:{heading_counter:04d}"
+        local_section_id = f"sec-{heading_counter:04d}"
+        row = {
+            "section_id": section_id,
+            "paper_id": paper_id,
+            "section_title": title,
+            "section_level": level,
+            "heading_path": heading_path,
+            "start_page": page_num,
+            "end_page": page_num,
+            "parent_section_id": parent_section_id,
+            "child_chunk_ids": [],
+        }
+        sections.append(row)
+        section_lookup[section_id] = row
+        section_lookup[local_section_id] = row
+        stack.append(row)
+
+    if not sections:
+        entry["structure_parse_status"] = STRUCTURE_UNAVAILABLE
+        entry["structure_parse_reason"] = structure_parse_reason or "no_heading_blocks"
+        return entry
+
+    for chunk in chunks:
+        if not chunk.section_id:
+            continue
+        row = section_lookup.get(chunk.section_id)
+        if row is None:
+            continue
+        row["end_page"] = max(int(row.get("end_page", chunk.page_start) or chunk.page_start), int(chunk.page_start))
+        row["start_page"] = min(int(row.get("start_page", chunk.page_start) or chunk.page_start), int(chunk.page_start))
+        row["child_chunk_ids"].append(chunk.chunk_id)
+
+    indexed_sections: list[dict[str, Any]] = []
+    unmapped = 0
+    for row in sections:
+        child_chunk_ids = [str(x).strip() for x in row.get("child_chunk_ids", []) if str(x).strip()]
+        if not child_chunk_ids:
+            unmapped += 1
+            continue
+        row["child_chunk_ids"] = child_chunk_ids
+        indexed_sections.append(row)
+
+    entry["sections"] = indexed_sections
+    entry["section_count"] = len(sections)
+    entry["indexed_section_count"] = len(indexed_sections)
+    if not indexed_sections:
+        entry["structure_parse_status"] = STRUCTURE_DEGRADED
+        entry["structure_parse_reason"] = "no_section_chunk_mapping"
+        entry["warnings"] = ["section_chunk_mapping_missing"]
+        return entry
+
+    coverage_ratio = len(indexed_sections) / max(1, len(sections))
+    if coverage_ratio < 0.6 or unmapped > 0:
+        entry["structure_parse_status"] = STRUCTURE_DEGRADED
+        entry["structure_parse_reason"] = "partial_section_chunk_mapping"
+        entry["warnings"] = ["section_chunk_mapping_partial"]
+    else:
+        entry["structure_parse_status"] = STRUCTURE_READY
+        entry["structure_parse_reason"] = ""
+    return entry
 
 
 def _aggregate_parser_observability(rows: list[dict[str, Any]]) -> dict[str, Any]:
     parser_engine_counts: dict[str, int] = {}
     title_source_counts: dict[str, int] = {}
     parser_fallback_stage_counts: dict[str, int] = {}
+    structure_status_counts: dict[str, int] = {}
     structured_missing_count = 0
     structured_missing_reasons: dict[str, int] = {}
     confidences: list[float] = []
@@ -525,6 +652,8 @@ def _aggregate_parser_observability(rows: list[dict[str, Any]]) -> dict[str, Any
         if bool(row.get("parser_fallback")):
             stage = str(row.get("parser_fallback_stage", "")).strip() or "unknown"
             parser_fallback_stage_counts[stage] = parser_fallback_stage_counts.get(stage, 0) + 1
+        structure_status = str(row.get("structure_parse_status", "")).strip() or STRUCTURE_UNAVAILABLE
+        structure_status_counts[structure_status] = structure_status_counts.get(structure_status, 0) + 1
         if bool(row.get("structured_segments_missing")):
             structured_missing_count += 1
             reason = str(row.get("structured_segments_missing_reason", "")).strip() or "unknown"
@@ -553,6 +682,7 @@ def _aggregate_parser_observability(rows: list[dict[str, Any]]) -> dict[str, Any
         "parser_engine_counts": parser_engine_counts,
         "title_source_counts": title_source_counts,
         "parser_fallback_stage_counts": parser_fallback_stage_counts,
+        "structure_status_counts": structure_status_counts,
         "structured_segments_missing_count": structured_missing_count,
         "structured_segments_missing_reasons": structured_missing_reasons,
         "title_confidence_stats": stats,
@@ -601,6 +731,7 @@ def run_ingest(args: argparse.Namespace) -> int:
     paper_failures: list[str] = []
     url_failures: list[dict[str, str]] = list(invalid_urls)
     parser_observability: list[dict[str, Any]] = []
+    structure_entries: list[dict[str, Any]] = []
     marker_ready, marker_preflight_stage, marker_preflight_reason = _marker_preflight_check(config)
 
     for pdf_path in pdf_paths:
@@ -644,6 +775,15 @@ def run_ingest(args: argparse.Namespace) -> int:
         if not chunks:
             paper_failures.append(f"{pdf_path.name}: no chunks generated")
             continue
+        structure_entry = _build_structure_entry(
+            paper_id=stable_paper_id,
+            parser_engine=parsed_pdf.parser_engine,
+            parser_fallback=parsed_pdf.parser_fallback,
+            structure_parse_status=parsed_pdf.structure_parse_status,
+            structure_parse_reason=parsed_pdf.structure_parse_reason,
+            structured_segments=parsed_pdf.structured_segments,
+            chunks=chunks,
+        )
 
         source_uri = f"pdf://sha1/{fingerprint}"
         parser_observability.append(
@@ -672,10 +812,15 @@ def run_ingest(args: argparse.Namespace) -> int:
                 },
                 "structured_segments_missing": structured_segments_missing,
                 "structured_segments_missing_reason": structured_segments_missing_reason,
+                "structure_parse_status": structure_entry.get("structure_parse_status", STRUCTURE_UNAVAILABLE),
+                "structure_parse_reason": structure_entry.get("structure_parse_reason", ""),
+                "section_count": int(structure_entry.get("section_count", 0) or 0),
+                "indexed_section_count": int(structure_entry.get("indexed_section_count", 0) or 0),
                 "title_source": title_decision.source,
                 "title_confidence": round(float(title_decision.confidence), 4),
             }
         )
+        structure_entries.append(structure_entry)
         candidates.append(
             ImportCandidate(
                 paper=PaperRecord(
@@ -699,9 +844,14 @@ def run_ingest(args: argparse.Namespace) -> int:
                         "parser_fallback_reason": parsed_pdf.parser_fallback_reason,
                         "marker_attempt_duration_sec": round(float(parsed_pdf.marker_attempt_duration_sec or 0.0), 3),
                         "marker_stage_timings": parsed_pdf.marker_stage_timings or {},
+                        "structure_parse_status": structure_entry.get("structure_parse_status", STRUCTURE_UNAVAILABLE),
+                        "structure_parse_reason": structure_entry.get("structure_parse_reason", ""),
+                        "section_count": int(structure_entry.get("section_count", 0) or 0),
+                        "indexed_section_count": int(structure_entry.get("indexed_section_count", 0) or 0),
                     },
                 ),
                 chunks=chunks,
+                structure_entry=structure_entry,
             )
         )
 
@@ -752,12 +902,23 @@ def run_ingest(args: argparse.Namespace) -> int:
                     ),
                 ),
                 chunks=chunks,
+                structure_entry={
+                    "paper_id": paper_id,
+                    "parser_engine": "url",
+                    "structure_parse_status": STRUCTURE_UNAVAILABLE,
+                    "structure_parse_reason": "url_source_no_structure",
+                    "sections": [],
+                    "warnings": [],
+                    "section_count": 0,
+                    "indexed_section_count": 0,
+                },
             )
         )
 
     chunks_file = output_dir / "chunks.jsonl"
     papers_file = output_dir / "papers.json"
     paper_summary_file = output_dir / "paper_summary.json"
+    structure_index_file = output_dir / "structure_index.json"
     lock_path = output_dir / ".ingest.lock"
     lock_timeout = float(getattr(args, "lock_timeout_sec", 10.0))
 
@@ -772,6 +933,11 @@ def run_ingest(args: argparse.Namespace) -> int:
             )
             write_chunks_jsonl(merged_chunks, chunks_file)
             write_papers_json(merged_papers, papers_file)
+            structure_index = merge_structure_entries(
+                load_structure_index(chunks_file),
+                [row.structure_entry for row in candidates if isinstance(row.structure_entry, dict)],
+            )
+            save_structure_index(structure_index, chunks_file)
     except FileLockTimeoutError:
         print(
             f"Another import/index process is active for {output_dir}. Please retry in a moment.",
@@ -912,6 +1078,7 @@ def run_ingest(args: argparse.Namespace) -> int:
         "confidence_note": confidence_note,
         "import_outcomes": outcomes,
         "parser_observability": parser_observability,
+        "structure_index_path": str(structure_index_file),
         "structured_segments_missing": [
             row
             for row in parser_observability
