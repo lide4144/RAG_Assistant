@@ -14,6 +14,13 @@ import yaml
 
 from app.context_budget import ContextAssemblyResult, assemble_prompt_with_budget
 from app.config import load_and_validate_config
+from app.document_structure import (
+    STRUCTURE_READY,
+    is_structure_question,
+    load_structure_index,
+    retrieve_sections,
+    summarize_structure_status,
+)
 from app.generate import build_answer
 from app.intent_calibration import CalibrationResult, calibrate_query_intent, strip_summary_cues
 from app.llm_diagnostics import build_llm_diagnostics
@@ -122,6 +129,12 @@ CLAIM_CONCLUSION_TERMS = (
     "证明",
     "因此",
 )
+FORMAT_NUMBER_PATTERNS = (
+    re.compile(r"^\s*\d+[\.\)]\s*"),
+    re.compile(r"^\s*第\s*\d+(?:\.\d+)?\s*[章节节]\s*"),
+)
+FORMAT_LOCATOR_RE = re.compile(r"\bp\.\s*\d+\b", flags=re.IGNORECASE)
+FORMAT_LOCATOR_SENTENCE_RE = re.compile(r"(第\s*\d+(?:\.\d+)?\s*[章节节])|(\bp\.\s*\d+\b)|(^\s*\d+[\.\)])", flags=re.IGNORECASE)
 CLAIM_UNCERTAINTY_TERMS = (
     "insufficient evidence",
     "not enough evidence",
@@ -657,6 +670,64 @@ def _load_paper_title_map(chunks_path: str) -> dict[str, str]:
     return mapping
 
 
+def _build_candidate_lookup(*, bm25_index: Any, vec_index: Any) -> dict[str, RetrievalCandidate]:
+    lookup: dict[str, RetrievalCandidate] = {}
+    for doc in getattr(bm25_index, "docs", []) or []:
+        lookup[str(doc.chunk_id)] = RetrievalCandidate(
+            chunk_id=str(doc.chunk_id),
+            score=0.0,
+            content_type=str(getattr(doc, "content_type", "body") or "body"),
+            paper_id=str(getattr(doc, "paper_id", "") or ""),
+            page_start=int(getattr(doc, "page_start", 0) or 0),
+            section=(str(getattr(doc, "section", "")).strip() or None),
+            text=str(getattr(doc, "text", "") or ""),
+            clean_text=str(getattr(doc, "clean_text", "") or ""),
+        )
+    for doc in getattr(vec_index, "docs", []) or []:
+        lookup.setdefault(
+            str(doc.chunk_id),
+            RetrievalCandidate(
+                chunk_id=str(doc.chunk_id),
+                score=0.0,
+                content_type=str(getattr(doc, "content_type", "body") or "body"),
+                paper_id=str(getattr(doc, "paper_id", "") or ""),
+                page_start=int(getattr(doc, "page_start", 0) or 0),
+                section=(str(getattr(doc, "section", "")).strip() or None),
+                text=str(getattr(doc, "text", "") or ""),
+                clean_text=str(getattr(doc, "clean_text", "") or ""),
+            ),
+        )
+    return lookup
+
+
+def _candidate_from_section_match(
+    *,
+    match: Any,
+    chunk_id: str,
+    base: RetrievalCandidate,
+    rank: int,
+) -> RetrievalCandidate:
+    payload = dict(base.payload or {})
+    payload["source"] = "section"
+    payload["retrieval_source"] = "section"
+    payload["section_id"] = str(match.section_id)
+    payload["section_title"] = str(match.section_title)
+    payload["heading_path"] = list(match.heading_path)
+    payload["score_retrieval"] = round(float(match.score) - (rank * 0.001), 6)
+    payload["structure_coverage"] = str(match.coverage)
+    return RetrievalCandidate(
+        chunk_id=chunk_id,
+        score=float(payload["score_retrieval"]),
+        content_type=base.content_type,
+        payload=payload,
+        paper_id=base.paper_id,
+        page_start=base.page_start,
+        section=base.section or str(match.section_title),
+        text=base.text,
+        clean_text=base.clean_text,
+    )
+
+
 def _section_or_page(candidate: RetrievalCandidate) -> str:
     return candidate.section if candidate.section else f"p.{candidate.page_start}"
 
@@ -716,12 +787,15 @@ def _candidate_to_evidence_item(candidate: RetrievalCandidate) -> dict[str, Any]
     return {
         "chunk_id": candidate.chunk_id,
         "section_page": _section_or_page(candidate),
+        "section_id": str(payload.get("section_id", "")),
+        "section_title": str(payload.get("section_title", candidate.section or "")),
         "quote": quote,
         "paper_id": candidate.paper_id or "unknown-paper",
         "content_type": candidate.content_type or "body",
         "source": str(payload.get("source", "")),
         "score_retrieval": float(payload.get("score_retrieval", candidate.score)),
         "score_rerank": float(payload.get("score_rerank", candidate.score)),
+        "structure_coverage": str(payload.get("structure_coverage", "")),
     }
 
 
@@ -826,6 +900,35 @@ def _build_answer_citations(evidence_grouped: list[dict[str, Any]]) -> list[dict
     return [c for c in citations if c["chunk_id"]]
 
 
+def _build_structure_coverage_notice(
+    *,
+    retrieval_route: str,
+    structure_parse_status: str,
+    evidence_grouped: list[dict[str, Any]],
+) -> str | None:
+    if retrieval_route != "section":
+        return None
+    if structure_parse_status != STRUCTURE_READY:
+        return "当前仅基于局部章节证据，文档结构解析未达到完整可用状态。"
+    for group in evidence_grouped:
+        for item in group.get("evidence", []):
+            if str(item.get("structure_coverage", "")).strip() == "partial":
+                return "当前仅基于局部章节证据。"
+    return None
+
+
+def _prepend_notice(answer: str, notice: str | None) -> str:
+    text = str(answer or "").strip()
+    note = str(notice or "").strip()
+    if not note:
+        return text
+    if text.startswith(note):
+        return text
+    if not text:
+        return note
+    return f"{note}\n\n{text}"
+
+
 def _build_claim_plan(evidence_grouped: list[dict[str, Any]], *, max_claims: int = 5) -> list[dict[str, str]]:
     plan: list[dict[str, str]] = []
     for group in evidence_grouped:
@@ -840,6 +943,7 @@ def _build_claim_plan(evidence_grouped: list[dict[str, Any]], *, max_claims: int
                     "chunk_id": str(item.get("chunk_id", "")).strip(),
                     "paper_id": str(group.get("paper_id", "unknown-paper")).strip(),
                     "section_page": str(item.get("section_page", "")).strip(),
+                    "section_id": str(item.get("section_id", "")).strip(),
                 }
             )
             if len(plan) >= max_claims:
@@ -884,6 +988,7 @@ def _bind_claim_plan_to_citations(
         "bound_claim_count": 0,
         "binding_ratio": 0.0,
         "missing_claim_chunk_ids": [],
+        "claim_binding_mode": "chunk",
         "fallback_to_staged": False,
         "fallback_reason": None,
     }
@@ -903,6 +1008,8 @@ def _bind_claim_plan_to_citations(
     report["bound_claim_count"] = int(bound_claim_count)
     report["binding_ratio"] = round(float(binding_ratio), 4)
     report["missing_claim_chunk_ids"] = missing_claims
+    if any(str(row.get("section_id", "")).strip() for row in claim_plan):
+        report["claim_binding_mode"] = "claim_with_section"
 
     if not normalized_citations or binding_ratio < float(min_bind_ratio):
         staged_answer, staged_citations = _render_claim_bound_answer(claim_plan)
@@ -984,9 +1091,18 @@ def _split_sentences(text: str) -> list[str]:
 
 
 def _extract_numbers(text: str) -> set[str]:
-    cleaned = re.sub(r"\b[a-zA-Z0-9]+:\d+\b", " ", text or "")
+    cleaned = _strip_format_markers(text)
+    cleaned = re.sub(r"\b[a-zA-Z0-9]+:\d+\b", " ", cleaned or "")
     cleaned = re.sub(r"\bp\d+\b", " ", cleaned, flags=re.IGNORECASE)
     return set(re.findall(r"\b\d+(?:\.\d+)?\b", cleaned))
+
+
+def _strip_format_markers(text: str) -> str:
+    cleaned = str(text or "")
+    for pattern in FORMAT_NUMBER_PATTERNS:
+        cleaned = pattern.sub("", cleaned)
+    cleaned = FORMAT_LOCATOR_RE.sub(" ", cleaned)
+    return cleaned
 
 
 def _tokenize_for_matching(text: str) -> set[str]:
@@ -1004,11 +1120,12 @@ def _tokenize_for_matching(text: str) -> set[str]:
 
 
 def _claim_types(sentence: str) -> set[str]:
-    lowered = (sentence or "").lower()
+    normalized_sentence = _strip_format_markers(sentence)
+    lowered = normalized_sentence.lower()
     tags: set[str] = set()
     if any(term in lowered for term in CLAIM_UNCERTAINTY_TERMS):
         return tags
-    if _extract_numbers(sentence):
+    if _extract_numbers(normalized_sentence):
         tags.add("numeric")
     if any(term in lowered for term in CLAIM_EXPERIMENT_TERMS):
         tags.add("experiment")
@@ -1019,13 +1136,36 @@ def _claim_types(sentence: str) -> set[str]:
     return tags
 
 
+def _is_format_locator_sentence(sentence: str) -> bool:
+    raw = str(sentence or "").strip()
+    if not raw:
+        return True
+    if not FORMAT_LOCATOR_SENTENCE_RE.search(raw):
+        return False
+    normalized = _strip_format_markers(raw)
+    normalized = FORMAT_LOCATOR_RE.sub(" ", normalized)
+    normalized = " ".join(normalized.split()).strip(" ,.;:()[]")
+    if not normalized:
+        return True
+    if normalized.isdigit():
+        return True
+    if normalized in {"overview only", "详见", "介绍实验设置，详见", "介绍实验设置"}:
+        return True
+    return False
+
+
 def _extract_key_claims(answer: str) -> list[dict[str, Any]]:
     claims: list[dict[str, Any]] = []
     for sentence in _split_sentences(answer):
-        tags = _claim_types(sentence)
+        if _is_format_locator_sentence(sentence):
+            continue
+        normalized = _strip_format_markers(sentence).strip()
+        if not normalized or normalized.isdigit():
+            continue
+        tags = _claim_types(normalized)
         if not tags:
             continue
-        claims.append({"text": sentence, "types": sorted(tags)})
+        claims.append({"text": normalized, "types": sorted(tags)})
     return claims
 
 
@@ -1041,6 +1181,7 @@ def _build_evidence_lookup(evidence_grouped: list[dict[str, Any]]) -> dict[str, 
                 "chunk_id": chunk_id,
                 "paper_id": str(item.get("paper_id", paper_id) or paper_id),
                 "section_page": str(item.get("section_page", "")),
+                "section_id": str(item.get("section_id", "")),
                 "quote": str(item.get("quote", "")),
             }
     return lookup
@@ -1103,6 +1244,7 @@ def _apply_evidence_policy_gate(
     evidence_grouped: list[dict[str, Any]],
     output_warnings: list[str],
     policy_enforced: bool,
+    claim_binding_report: dict[str, Any] | None = None,
 ) -> tuple[str, list[dict[str, str]], dict[str, Any]]:
     evidence_lookup = _build_evidence_lookup(evidence_grouped)
     normalized_citations = _normalize_citations(answer_citations, evidence_lookup)
@@ -1111,8 +1253,17 @@ def _apply_evidence_policy_gate(
         "enabled": bool(policy_enforced),
         "claim_count": len(claims),
         "failed_claims": [],
+        "claim_binding_mode": str((claim_binding_report or {}).get("claim_binding_mode", "text_fallback")),
     }
     if not policy_enforced or not claims:
+        return answer, normalized_citations, gate_report
+    if (
+        claim_binding_report
+        and int(claim_binding_report.get("claim_count", 0) or 0) > 0
+        and int(claim_binding_report.get("bound_claim_count", 0) or 0) >= int(claim_binding_report.get("claim_count", 0) or 0)
+    ):
+        gate_report["triggered"] = False
+        gate_report["checked_via"] = "claim_binding"
         return answer, normalized_citations, gate_report
 
     for claim in claims:
@@ -1134,6 +1285,7 @@ def _apply_evidence_policy_gate(
         return _m8_weak_answer(question, source="evidence_policy_gate"), [], gate_report
 
     gate_report["triggered"] = False
+    gate_report["checked_via"] = "text_fallback"
     return answer, normalized_citations, gate_report
 
 
@@ -1632,6 +1784,7 @@ def _try_llm_answer_with_evidence(
             "bound_claim_count": 0,
             "binding_ratio": 0.0,
             "missing_claim_chunk_ids": [],
+            "claim_binding_mode": "chunk",
             "fallback_to_staged": False,
             "fallback_reason": None,
         },
@@ -1850,6 +2003,7 @@ def _build_answer(
             "bound_claim_count": 0,
             "binding_ratio": 0.0,
             "missing_claim_chunk_ids": [],
+            "claim_binding_mode": "chunk",
             "fallback_to_staged": False,
             "fallback_reason": None,
         },
@@ -1937,6 +2091,7 @@ def _build_answer(
             "bound_claim_count": len(staged_citations),
             "binding_ratio": 1.0 if claim_plan else 0.0,
             "missing_claim_chunk_ids": [],
+            "claim_binding_mode": ("claim_with_section" if any(str(row.get("section_id", "")).strip() for row in claim_plan) else "chunk"),
             "fallback_to_staged": True,
             "fallback_reason": "llm_unavailable_use_staged_claims",
         }
@@ -2386,6 +2541,12 @@ def run_qa(args: argparse.Namespace) -> int:
             "summary_candidate_count": 0,
             "summary_recall_fallback": False,
             "summary_recall_source": "paper_summary",
+            "retrieval_route": "chunk",
+            "structure_parse_status": "unavailable",
+            "section_candidates_count": 0,
+            "section_route_used": False,
+            "structure_route_fallback": None,
+            "structure_parse_reasons": [],
             "semantic_similarity_score": None,
             "semantic_strategy_tier": "balanced",
         }
@@ -2400,16 +2561,62 @@ def run_qa(args: argparse.Namespace) -> int:
             retrieval_metrics["summary_candidate_count"] = len(summary_candidate_ids)
         else:
             retrieval_metrics["summary_recall_fallback"] = True
-        candidates = retrieve_candidates(
-            query_used,
-            mode=args.mode,
-            top_k=top_k,
-            bm25_index=bm25_index,
-            vec_index=vec_index,
-            embed_index=embed_index,
-            config=config,
-            runtime_metrics=retrieval_metrics,
+        structure_index = load_structure_index(args.chunks)
+        structure_scope_ids = summary_candidate_ids if summary_candidate_ids else None
+        structure_status, structure_reasons = summarize_structure_status(
+            structure_index,
+            paper_ids=set(structure_scope_ids or []),
         )
+        retrieval_metrics["structure_parse_status"] = structure_status
+        retrieval_metrics["structure_parse_reasons"] = structure_reasons[:10]
+        section_lookup = _build_candidate_lookup(bm25_index=bm25_index, vec_index=vec_index)
+        structure_query = is_structure_question(query_used)
+        if structure_query and structure_status == STRUCTURE_READY:
+            section_matches = retrieve_sections(
+                query=query_used,
+                structure_index=structure_index,
+                allowed_paper_ids=(set(structure_scope_ids) if structure_scope_ids else None),
+                top_k=max(3, min(8, top_k)),
+            )
+            retrieval_metrics["section_candidates_count"] = len(section_matches)
+            if section_matches:
+                retrieval_metrics["retrieval_route"] = "section"
+                retrieval_metrics["section_route_used"] = True
+                candidates = []
+                seen_section_chunks: set[str] = set()
+                for match in section_matches:
+                    for rank, chunk_id in enumerate(match.child_chunk_ids, start=1):
+                        base = section_lookup.get(chunk_id)
+                        if base is None or chunk_id in seen_section_chunks:
+                            continue
+                        seen_section_chunks.add(chunk_id)
+                        candidates.append(
+                            _candidate_from_section_match(
+                                match=match,
+                                chunk_id=chunk_id,
+                                base=base,
+                                rank=rank,
+                            )
+                        )
+                candidates = candidates[:top_k]
+                if not candidates:
+                    retrieval_metrics["structure_route_fallback"] = "section_retrieval_empty"
+            else:
+                retrieval_metrics["structure_route_fallback"] = "section_retrieval_empty"
+        elif structure_query:
+            retrieval_metrics["structure_route_fallback"] = "structure_unavailable"
+
+        if not candidates:
+            candidates = retrieve_candidates(
+                query_used,
+                mode=args.mode,
+                top_k=top_k,
+                bm25_index=bm25_index,
+                vec_index=vec_index,
+                embed_index=embed_index,
+                config=config,
+                runtime_metrics=retrieval_metrics,
+            )
         shell_ratio = summary_shell_ratio(candidates, top_n=5)
         if shell_ratio > 0.6 and not query_retry_used:
             query_retry_used = True
@@ -2451,14 +2658,25 @@ def run_qa(args: argparse.Namespace) -> int:
                     config=config,
                     runtime_metrics=retrieval_metrics,
                 )
-        candidates, expansion_stats = expand_candidates_with_graph(
-            candidates,
-            query=query_used,
-            top_k=top_k,
-            bm25_index=bm25_index,
-            vec_index=vec_index,
-            config=config,
+        use_graph_expansion = (
+            retrieval_metrics["retrieval_route"] != "section"
+            or len(candidates) < top_k
         )
+        if use_graph_expansion:
+            candidates, expansion_stats = expand_candidates_with_graph(
+                candidates,
+                query=query_used,
+                top_k=top_k,
+                bm25_index=bm25_index,
+                vec_index=vec_index,
+                config=config,
+            )
+        else:
+            expansion_stats = {
+                "expansion_budget": 0,
+                "added_chunk_ids": [],
+                "skipped_reason": "section_route_sufficient_candidates",
+            }
         retrieval_candidates = list(candidates)
         rerank_input: list[RetrievalCandidate] = []
         for row in candidates:
@@ -2516,6 +2734,12 @@ def run_qa(args: argparse.Namespace) -> int:
             "summary_candidate_count": 0,
             "summary_recall_fallback": False,
             "summary_recall_source": "paper_summary",
+            "retrieval_route": "chunk",
+            "structure_parse_status": "unavailable",
+            "section_candidates_count": 0,
+            "section_route_used": False,
+            "structure_route_fallback": None,
+            "structure_parse_reasons": [],
             "semantic_similarity_score": None,
             "semantic_strategy_tier": "balanced",
         }
@@ -2536,6 +2760,13 @@ def run_qa(args: argparse.Namespace) -> int:
         max_papers_display=MAX_PAPERS_DISPLAY,
     )
     output_warnings.extend(allocation_warnings)
+    structure_coverage_notice = _build_structure_coverage_notice(
+        retrieval_route=str(retrieval_metrics.get("retrieval_route", "")),
+        structure_parse_status=str(retrieval_metrics.get("structure_parse_status", "")),
+        evidence_grouped=evidence_grouped,
+    )
+    if structure_coverage_notice and "structure_partial_coverage_disclosed" not in output_warnings:
+        output_warnings.append("structure_partial_coverage_disclosed")
     assistant_mode_enabled = bool(getattr(config, "assistant_mode_enabled", True))
     assistant_mode_force_legacy_gate = bool(getattr(config, "assistant_mode_force_legacy_gate", False))
     clarify_limit = max(1, int(getattr(config, "assistant_mode_clarify_limit", 2)))
@@ -2647,6 +2878,7 @@ def run_qa(args: argparse.Namespace) -> int:
             "bound_claim_count": 0,
             "binding_ratio": 0.0,
             "missing_claim_chunk_ids": [],
+            "claim_binding_mode": "chunk",
             "fallback_to_staged": False,
             "fallback_reason": None,
         },
@@ -2738,6 +2970,7 @@ def run_qa(args: argparse.Namespace) -> int:
                 evidence_grouped=evidence_grouped,
                 output_warnings=output_warnings,
                 policy_enforced=bool(config.evidence_policy_enforced),
+                claim_binding_report=answer_stream_observation.get("claim_binding"),
             )
             if bool(evidence_policy_gate.get("triggered")):
                 if not _prefer_clarify_for_assistant_mode("关键结论缺少可追溯证据，触发证据门控。"):
@@ -2788,6 +3021,8 @@ def run_qa(args: argparse.Namespace) -> int:
             low_conf_note = "低置信提示：部分引用未能完整映射到证据分组，请结合原文核验。"
             if low_conf_note not in answer:
                 answer = f"{answer}\n\n{low_conf_note}".strip()
+
+    answer = _prepend_notice(answer, structure_coverage_notice)
 
     evidence_flat = _flatten_evidence(evidence_grouped)
 
@@ -3004,6 +3239,14 @@ def run_qa(args: argparse.Namespace) -> int:
         "summary_candidate_count": retrieval_metrics["summary_candidate_count"],
         "summary_recall_fallback": retrieval_metrics["summary_recall_fallback"],
         "summary_recall_source": retrieval_metrics["summary_recall_source"],
+        "retrieval_route": retrieval_metrics["retrieval_route"],
+        "structure_parse_status": retrieval_metrics["structure_parse_status"],
+        "structure_parse_reasons": retrieval_metrics["structure_parse_reasons"],
+        "section_candidates_count": retrieval_metrics["section_candidates_count"],
+        "section_route_used": retrieval_metrics["section_route_used"],
+        "structure_route_fallback": retrieval_metrics["structure_route_fallback"],
+        "structure_coverage_limited": bool(structure_coverage_notice),
+        "structure_coverage_notice": structure_coverage_notice,
         "semantic_similarity_score": retrieval_metrics["semantic_similarity_score"],
         "semantic_strategy_tier": retrieval_metrics["semantic_strategy_tier"],
     }
@@ -3171,6 +3414,14 @@ def run_qa(args: argparse.Namespace) -> int:
         "summary_candidate_count": retrieval_metrics["summary_candidate_count"],
         "summary_recall_fallback": retrieval_metrics["summary_recall_fallback"],
         "summary_recall_source": retrieval_metrics["summary_recall_source"],
+        "retrieval_route": retrieval_metrics["retrieval_route"],
+        "structure_parse_status": retrieval_metrics["structure_parse_status"],
+        "structure_parse_reasons": retrieval_metrics["structure_parse_reasons"],
+        "section_candidates_count": retrieval_metrics["section_candidates_count"],
+        "section_route_used": retrieval_metrics["section_route_used"],
+        "structure_route_fallback": retrieval_metrics["structure_route_fallback"],
+        "structure_coverage_limited": bool(structure_coverage_notice),
+        "structure_coverage_notice": structure_coverage_notice,
         "semantic_similarity_score": retrieval_metrics["semantic_similarity_score"],
         "semantic_strategy_tier": retrieval_metrics["semantic_strategy_tier"],
         "papers_ranked": papers_ranked,
