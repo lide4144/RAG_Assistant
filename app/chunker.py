@@ -16,6 +16,9 @@ HEADING_RE = re.compile(
 class Segment:
     page_start: int
     text: str
+    section: str | None = None
+    section_id: str | None = None
+    heading_path: list[str] | None = None
 
 
 def estimate_tokens(text: str) -> int:
@@ -69,6 +72,9 @@ def split_structured_segments(blocks: list[dict[str, Any]] | None) -> list[Segme
     active_lines: list[str] = []
     active_page = 1
     active_heading_mode = False
+    active_section: str | None = None
+    active_section_id: str | None = None
+    active_heading_path: list[str] | None = None
 
     def flush_active() -> None:
         nonlocal active_lines, active_page, active_heading_mode
@@ -76,12 +82,22 @@ def split_structured_segments(blocks: list[dict[str, Any]] | None) -> list[Segme
             return
         merged = "\n".join(active_lines).strip()
         if merged:
-            segments.append(Segment(page_start=active_page, text=merged))
+            segments.append(
+                Segment(
+                    page_start=active_page,
+                    text=merged,
+                    section=active_section,
+                    section_id=active_section_id,
+                    heading_path=list(active_heading_path or []) or None,
+                )
+            )
         active_lines = []
         active_page = 1
         active_heading_mode = False
 
     segments: list[Segment] = []
+    heading_stack: list[tuple[int, str, str]] = []
+    section_counter = 0
     for block in blocks:
         if not isinstance(block, dict):
             continue
@@ -100,6 +116,14 @@ def split_structured_segments(blocks: list[dict[str, Any]] | None) -> list[Segme
         # Prefer heading levels as section boundaries when present.
         if heading_level is not None:
             flush_active()
+            while heading_stack and heading_stack[-1][0] >= heading_level:
+                heading_stack.pop()
+            section_counter += 1
+            section_id = f"sec-{section_counter:04d}"
+            heading_stack.append((heading_level, text, section_id))
+            active_section = text
+            active_section_id = section_id
+            active_heading_path = [row[1] for row in heading_stack]
             active_lines = [text]
             active_page = page_num
             active_heading_mode = True
@@ -110,7 +134,15 @@ def split_structured_segments(blocks: list[dict[str, Any]] | None) -> list[Segme
             continue
 
         # For non-heading blocks, preserve block boundary behavior.
-        segments.append(Segment(page_start=page_num, text=text))
+        segments.append(
+            Segment(
+                page_start=page_num,
+                text=text,
+                section=active_section,
+                section_id=active_section_id,
+                heading_path=list(active_heading_path or []) or None,
+            )
+        )
 
     flush_active()
     return segments
@@ -138,6 +170,9 @@ def sliding_window_chunk(
                     paper_id=paper_id,
                     page_start=segment.page_start,
                     text=segment.text,
+                    section=segment.section,
+                    section_id=segment.section_id,
+                    heading_path=list(segment.heading_path or []) or None,
                 )
             )
             continue
@@ -154,6 +189,9 @@ def sliding_window_chunk(
                         paper_id=paper_id,
                         page_start=segment.page_start,
                         text=text,
+                        section=segment.section,
+                        section_id=segment.section_id,
+                        heading_path=list(segment.heading_path or []) or None,
                     )
                 )
             if end >= len(words):

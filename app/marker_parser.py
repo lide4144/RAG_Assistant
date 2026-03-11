@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 import importlib
 import inspect
+import re
 import signal
 from pathlib import Path
 import threading
@@ -10,7 +11,10 @@ import time
 from types import FrameType
 from typing import Any
 
-from bs4 import BeautifulSoup
+try:
+    from bs4 import BeautifulSoup
+except ModuleNotFoundError:  # pragma: no cover - optional dependency in some test envs
+    BeautifulSoup = None
 from app.models import PageText
 
 
@@ -164,6 +168,11 @@ def _extract_fields(raw_result: Any) -> tuple[str, list[dict[str, Any]]]:
 
 
 def _extract_text_from_html(html: str) -> str:
+    if BeautifulSoup is None:
+        text = str(html or "")
+        text = text.replace("<br>", "\n").replace("<br/>", "\n").replace("<br />", "\n")
+        text = re.sub(r"<[^>]+>", " ", text)
+        return _safe_text(text)
     text = BeautifulSoup(html or "", "html.parser").get_text("\n", strip=True)
     return _safe_text(text)
 

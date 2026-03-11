@@ -38,6 +38,16 @@ class ChunkRecord:
     paper_id: str
     page_start: int
     text: str
+    section: str | None = None
+    section_id: str | None = None
+    heading_path: list[str] | None = None
 
     def to_dict(self) -> dict[str, Any]:
-        return asdict(self)
+        payload = asdict(self)
+        if payload.get("section") is None:
+            payload.pop("section", None)
+        if payload.get("section_id") is None:
+            payload.pop("section_id", None)
+        if payload.get("heading_path") is None:
+            payload.pop("heading_path", None)
+        return payload
