@@ -248,6 +248,7 @@ class ImportLatestResultResponse(BaseModel):
     confidence_note: str | None = None
     artifact_summary: dict[str, Any] = Field(default_factory=dict)
     parser_diagnostics: list[dict[str, Any]] = Field(default_factory=list)
+    stage_updated_at: dict[str, str] = Field(default_factory=dict)
 
 
 class LibraryImportResponse(BaseModel):
@@ -571,27 +572,69 @@ def _marker_llm_runtime_entry(raw: Any, effective_source: dict[str, str] | None 
     }
 
 
-def _artifact_status_from_path(path: Path, *, latest_updated_at: str | None) -> tuple[str, str | None, int | None, str | None]:
+def _parse_iso_utc(raw: str | None) -> datetime | None:
+    if not raw:
+        return None
+    try:
+        return datetime.fromisoformat(raw.replace("Z", "+00:00"))
+    except Exception:
+        return None
+
+
+def _collect_stage_updated_at(
+    *,
+    report: dict[str, Any] | None = None,
+    latest_updated_at: str | None = None,
+    latest_pipeline: dict[str, Any] | None = None,
+) -> dict[str, str]:
+    stage_updated_at: dict[str, str] = {}
+    if isinstance(report, dict):
+        for stage in ("import", "clean", "index", "graph_build"):
+            payload = report.get(f"{stage}_stage")
+            if isinstance(payload, dict):
+                updated_at = str(payload.get("updated_at", "")).strip()
+                if updated_at:
+                    stage_updated_at[stage] = updated_at
+    if isinstance(latest_pipeline, dict):
+        payload = latest_pipeline.get("stage_updated_at")
+        if isinstance(payload, dict):
+            for stage in ("import", "clean", "index", "graph_build"):
+                updated_at = str(payload.get(stage, "")).strip()
+                if updated_at:
+                    stage_updated_at[stage] = updated_at
+    if latest_updated_at:
+        for stage in ("import", "clean", "index"):
+            stage_updated_at.setdefault(stage, latest_updated_at)
+    return stage_updated_at
+
+
+def _artifact_status_from_path(
+    path: Path,
+    *,
+    related_stage: str,
+    stage_updated_at: dict[str, str] | None = None,
+) -> tuple[str, str | None, int | None, str | None]:
     if not path.exists():
         return "missing", "文件不存在", None, None
     updated_at = datetime.fromtimestamp(path.stat().st_mtime, timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
     size_bytes = int(path.stat().st_size)
-    if latest_updated_at:
-        try:
-            latest_dt = datetime.fromisoformat(latest_updated_at.replace("Z", "+00:00"))
-            file_dt = datetime.fromisoformat(updated_at.replace("Z", "+00:00"))
-            if file_dt < latest_dt:
-                return "stale", "产物早于最近一次运行，建议检查是否需要重建", size_bytes, updated_at
-        except Exception:
-            pass
+    anchor_dt = _parse_iso_utc((stage_updated_at or {}).get(related_stage))
+    file_dt = _parse_iso_utc(updated_at)
+    if anchor_dt is not None and file_dt is not None and file_dt < anchor_dt:
+        return "stale", "产物早于最近一次运行，建议检查是否需要重建", size_bytes, updated_at
     return "healthy", "产物可用", size_bytes, updated_at
 
 
-def _build_marker_artifacts(*, latest_updated_at: str | None = None) -> list[MarkerArtifactEntryResponse]:
+def _build_marker_artifacts(*, latest_updated_at: str | None = None, stage_updated_at: dict[str, str] | None = None) -> list[MarkerArtifactEntryResponse]:
     artifacts: list[MarkerArtifactEntryResponse] = []
+    effective_stage_updated_at = stage_updated_at or _collect_stage_updated_at(latest_updated_at=latest_updated_at)
     for key, path, artifact_type, related_stage in _ARTIFACT_INDEX:
         group = "indexes" if key.startswith("indexes:") else "processed"
-        status, health_message, size_bytes, updated_at = _artifact_status_from_path(path, latest_updated_at=latest_updated_at)
+        status, health_message, size_bytes, updated_at = _artifact_status_from_path(
+            path,
+            related_stage=related_stage,
+            stage_updated_at=effective_stage_updated_at,
+        )
         artifacts.append(
             MarkerArtifactEntryResponse(
                 key=key,
@@ -1070,21 +1113,23 @@ def _build_pipeline_stages(*, report: dict[str, Any], updated_at: str | None) ->
 
     degradation = _extract_ingest_degradation(report if isinstance(report, dict) else {})
     detail = str(degradation.get("fallback_reason") or "").strip() or None
+    stage_updated_at = _collect_stage_updated_at(report=report, latest_updated_at=updated_at)
 
     return [
-        PipelineStageStatus(stage="import", state=import_state, updated_at=updated_at, detail=detail),
-        PipelineStageStatus(stage="clean", state=import_state, updated_at=updated_at, detail=detail),
-        PipelineStageStatus(stage="index", state=index_state, updated_at=updated_at),
+        PipelineStageStatus(stage="import", state=import_state, updated_at=stage_updated_at.get("import"), detail=detail),
+        PipelineStageStatus(stage="clean", state=import_state, updated_at=stage_updated_at.get("clean"), detail=detail),
+        PipelineStageStatus(stage="index", state=index_state, updated_at=stage_updated_at.get("index")),
         PipelineStageStatus(
             stage="graph_build",
             state=graph_state,
-            updated_at=graph_updated_at,
+            updated_at=graph_updated_at or stage_updated_at.get("graph_build"),
             message=graph_message,
         ),
     ]
 
 
 def _write_latest_pipeline_status(*, result: dict[str, Any], updated_at: str) -> None:
+    stage_updated_at = _collect_stage_updated_at(report=result, latest_updated_at=updated_at)
     payload = {
         "updated_at": updated_at,
         "import_summary": result.get("import_summary", {}),
@@ -1093,6 +1138,7 @@ def _write_latest_pipeline_status(*, result: dict[str, Any], updated_at: str) ->
         "fallback_reason": result.get("fallback_reason"),
         "fallback_path": result.get("fallback_path"),
         "confidence_note": result.get("confidence_note"),
+        "stage_updated_at": stage_updated_at,
     }
     try:
         _PIPELINE_STATUS_PATH.parent.mkdir(parents=True, exist_ok=True)
@@ -1184,13 +1230,23 @@ def _load_latest_import_result() -> ImportLatestResultResponse:
         recent_updated = latest_pipeline.get("updated_at")
         if isinstance(recent_updated, str) and recent_updated.strip():
             updated_at = recent_updated.strip()
+        recent_stage_updated_at = latest_pipeline.get("stage_updated_at")
+        if isinstance(recent_stage_updated_at, dict):
+            for stage in ("import", "clean", "index", "graph_build"):
+                stage_updated = str(recent_stage_updated_at.get(stage, "")).strip()
+                if not stage_updated:
+                    continue
+                payload.setdefault(f"{stage}_stage", {})
+                if isinstance(payload.get(f"{stage}_stage"), dict):
+                    payload[f"{stage}_stage"]["updated_at"] = stage_updated
         for key in ("fallback_reason", "fallback_path", "confidence_note"):
             if latest_pipeline.get(key) is not None:
                 payload[key] = latest_pipeline.get(key)
 
+    stage_updated_at = _collect_stage_updated_at(report=payload, latest_updated_at=updated_at, latest_pipeline=latest_pipeline)
     degradation = _extract_ingest_degradation(payload)
     diagnostics = _extract_parser_diagnostics(payload)
-    artifacts = _build_marker_artifacts(latest_updated_at=updated_at)
+    artifacts = _build_marker_artifacts(latest_updated_at=updated_at, stage_updated_at=stage_updated_at)
 
     return ImportLatestResultResponse(
         added=max(0, int(import_summary.get("added", 0) or 0)),
@@ -1207,6 +1263,7 @@ def _load_latest_import_result() -> ImportLatestResultResponse:
         confidence_note=degradation["confidence_note"],
         artifact_summary=_summarize_marker_artifacts(artifacts),
         parser_diagnostics=diagnostics,
+        stage_updated_at=stage_updated_at,
     )
 
 
@@ -1611,6 +1668,7 @@ def get_runtime_overview() -> dict[str, Any]:
                 "fallback_path": latest_import.fallback_path,
                 "confidence_note": latest_import.confidence_note,
                 "updated_at": latest_import.updated_at,
+                "stage_updated_at": latest_import.stage_updated_at,
             },
             "artifacts": artifact_summary,
         },
@@ -1847,7 +1905,7 @@ def get_import_history(limit: int = 20) -> list[ImportHistoryEntryResponse]:
 @app.get("/api/library/marker-artifacts")
 def get_marker_artifacts() -> dict[str, Any]:
     latest = _load_latest_import_result()
-    artifacts = _build_marker_artifacts(latest_updated_at=latest.updated_at)
+    artifacts = _build_marker_artifacts(latest_updated_at=latest.updated_at, stage_updated_at=latest.stage_updated_at)
     return {
         "items": [artifact.model_dump() for artifact in artifacts],
         "summary": _summarize_marker_artifacts(artifacts),

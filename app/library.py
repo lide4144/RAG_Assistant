@@ -6,6 +6,7 @@ import shutil
 import tempfile
 import time
 import uuid
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
 
@@ -165,6 +166,7 @@ def run_import_workflow(
         )
         _progress(3, 6, "执行入库与清洗")
         ingest_rc = run_ingest(ingest_args)
+        ingest_finished_at = time.time()
         ingest_report: dict[str, Any] = {}
         ingest_report_path = ingest_run_dir / "ingest_report.json"
         if ingest_report_path.exists():
@@ -217,6 +219,7 @@ def run_import_workflow(
                     ]
                 )
         except FileLockTimeoutError:
+                stage_updated_at = datetime.fromtimestamp(ingest_finished_at, timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
                 return {
                     "ok": False,
                     "success_count": success_count,
@@ -228,13 +231,17 @@ def run_import_workflow(
                     "fallback_reason": ingest_report.get("fallback_reason"),
                     "fallback_path": ingest_report.get("fallback_path"),
                     "confidence_note": ingest_report.get("confidence_note"),
+                    "import_stage": {"updated_at": stage_updated_at},
+                    "clean_stage": {"updated_at": stage_updated_at},
                     "index_stage": {
                         "status": "conflict",
                         "duration_sec": round(time.perf_counter() - index_started, 3),
+                        "updated_at": datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z"),
                     },
                 }
         if build_rc != 0:
             index_status = "failed"
+            stage_updated_at = datetime.fromtimestamp(ingest_finished_at, timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
             return {
                 "ok": False,
                 "success_count": success_count,
@@ -249,12 +256,16 @@ def run_import_workflow(
                 "fallback_reason": ingest_report.get("fallback_reason"),
                 "fallback_path": ingest_report.get("fallback_path"),
                 "confidence_note": ingest_report.get("confidence_note"),
+                "import_stage": {"updated_at": stage_updated_at},
+                "clean_stage": {"updated_at": stage_updated_at},
                 "index_stage": {
                     "status": index_status,
                     "duration_sec": round(time.perf_counter() - index_started, 3),
+                    "updated_at": datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z"),
                 },
             }
         index_duration = round(time.perf_counter() - index_started, 3)
+        index_finished_at = time.time()
 
     if topic_name:
         _progress(5, 6, "更新专题映射")
@@ -278,7 +289,17 @@ def run_import_workflow(
         "fallback_path": ingest_report.get("fallback_path"),
         "confidence_note": ingest_report.get("confidence_note"),
         "import_outcomes": ingest_report.get("import_outcomes", []),
-        "index_stage": {"status": "success", "duration_sec": index_duration},
+        "import_stage": {
+            "updated_at": datetime.fromtimestamp(ingest_finished_at, timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
+        },
+        "clean_stage": {
+            "updated_at": datetime.fromtimestamp(ingest_finished_at, timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
+        },
+        "index_stage": {
+            "status": "success",
+            "duration_sec": index_duration,
+            "updated_at": datetime.fromtimestamp(index_finished_at, timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z"),
+        },
         "next_steps": [
             "切换到 Chat，基于新导入论文开始提问。",
             "如需分组管理，先在 Library 里把论文加入专题。",

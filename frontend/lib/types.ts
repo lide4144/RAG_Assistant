@@ -109,6 +109,7 @@ export interface RuntimeOverview {
       fallback_path?: string | null;
       confidence_note?: string | null;
       updated_at?: string | null;
+      stage_updated_at?: Partial<Record<'import' | 'clean' | 'index' | 'graph_build', string>>;
       parser_diagnostics?: MarkerParserDiagnostic[];
     };
     artifacts?: {
