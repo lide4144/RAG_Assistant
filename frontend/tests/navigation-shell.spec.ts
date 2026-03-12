@@ -8,6 +8,18 @@ test('home redirects to chat and shell navigation works', async ({ page }) => {
       body: JSON.stringify({ configured: true })
     });
   });
+  await page.route('**/api/admin/pipeline-config', async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        configured: true,
+        saved: { marker_tuning: { recognition_batch_size: 2, detector_batch_size: 2, layout_batch_size: 2, ocr_error_batch_size: 1, table_rec_batch_size: 1, model_dtype: 'float16' } },
+        effective: { marker_tuning: { recognition_batch_size: 2, detector_batch_size: 2, layout_batch_size: 2, ocr_error_batch_size: 1, table_rec_batch_size: 1, model_dtype: 'float16' } },
+        effective_source: { marker_tuning: {} }
+      })
+    });
+  });
   await page.route('**/api/admin/runtime-overview', async (route) => {
     await route.fulfill({
       status: 200,
@@ -51,14 +63,14 @@ test('home redirects to chat and shell navigation works', async ({ page }) => {
   await expect(page.locator('[data-testid="nav-chat-link"]:visible').first()).toBeVisible();
   await expect(page.locator('[data-testid="nav-pipeline-link"]:visible').first()).toBeVisible();
   await expect(page.locator('[data-testid="nav-settings-link"]:visible').first()).toBeVisible();
-  await expect(page.locator('[data-testid="nav-chat-link"]:visible').first()).toHaveClass(/bg-slate-900/);
+  await expect(page.locator('[data-testid="nav-chat-link"]:visible').first()).toHaveClass(/bg-slate-950/);
   await expect(page.locator('[data-testid="nav-settings-link"]:visible').first()).not.toHaveClass(/bg-slate-900/);
 
   await page.locator('[data-testid="nav-settings-link"]:visible').first().click();
   await expect(page).toHaveURL(/\/settings$/);
-  await expect(page.getByText('统一配置 LLM 连接')).toBeVisible();
-  await expect(page.locator('[data-testid="nav-settings-link"]:visible').first()).toHaveClass(/bg-slate-900/);
-  await expect(page.locator('[data-testid="nav-chat-link"]:visible').first()).not.toHaveClass(/bg-slate-900/);
+  await expect(page.getByTestId('settings-shell-title')).toBeVisible();
+  await expect(page.locator('[data-testid="nav-settings-link"]:visible').first()).toHaveClass(/bg-slate-950/);
+  await expect(page.locator('[data-testid="nav-chat-link"]:visible').first()).not.toHaveClass(/bg-slate-950/);
 });
 
 test('shell keeps usable when runtime-overview returns html 404', async ({ page }) => {

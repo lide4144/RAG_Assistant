@@ -156,7 +156,7 @@ test('pipeline workbench renders task center and reacts to task events', async (
   await expect(page.locator('[data-testid="nav-pipeline-link"]:visible').first()).toBeVisible();
   await page.locator('[data-testid="nav-pipeline-link"]:visible').first().click();
 
-  await expect(page.getByRole('heading', { name: '知识库构建流水线' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: '知识库处理进度中心' })).toBeVisible();
   await expect(page.getByTestId('pipeline-start-graph-build-btn')).toBeEnabled();
   await page.getByTestId('pipeline-start-graph-build-btn').click();
   await expect(page.getByTestId('pipeline-retry-graph-build-btn')).toBeVisible();
@@ -178,7 +178,7 @@ test('pipeline workbench renders task center and reacts to task events', async (
   await expect(page.getByTestId('pipeline-stage-cards')).toContainText('索引');
 
   await page.getByTestId('pipeline-go-chat-btn').click();
-  await expect(page.getByText('知识问答与证据追踪')).toBeVisible();
+  await expect(page.getByTestId('chat-shell-title')).toBeVisible();
 });
 
 test('pipeline workbench covers marker artifact actions and delete confirmation', async ({ page }) => {
@@ -371,8 +371,8 @@ test('pipeline workbench covers marker artifact actions and delete confirmation'
   await page.goto('http://127.0.0.1:3000/chat');
   await page.locator('[data-testid="nav-pipeline-link"]:visible').first().click();
 
-  await expect(page.getByRole('heading', { name: '知识库构建流水线' })).toBeVisible();
-  await expect(page.getByText('Index / processed 产物总览')).toBeVisible();
+  await expect(page.getByRole('heading', { name: '知识库处理进度中心' })).toBeVisible();
+  await expect(page.getByTestId('artifact-panel-title')).toContainText('索引文件与处理结果总览');
   await expect(page.getByText('Marker 解析诊断')).toBeVisible();
   await expect(page.getByTestId('pipeline-parser-diagnostics')).toContainText('marker parse timeout after 120.0s');
   await expect(page.getByTestId('pipeline-stage-cards')).toContainText('降级完成');

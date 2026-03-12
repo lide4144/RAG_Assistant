@@ -539,66 +539,99 @@ export function PipelineWorkbenchPanel({
     { key: 'graph_build', label: '图构建' }
   ];
   const connection = mapConnectionStatus(statusText);
+  const completedStageCount = stageOrder.filter((stage) => {
+    const state = liveStageMap.get(stage.key)?.state ?? 'not_started';
+    return ['done', 'succeeded', 'completed', 'success'].includes(String(state).toLowerCase());
+  }).length;
+  const activeStageKey =
+    stageOrder.find((stage) => {
+      const state = String(liveStageMap.get(stage.key)?.state ?? '').toLowerCase();
+      return ['running', 'queued', 'processing'].includes(state);
+    })?.key ??
+    stageOrder.find((stage) => {
+      const state = String(liveStageMap.get(stage.key)?.state ?? '').toLowerCase();
+      return !['done', 'succeeded', 'completed', 'success'].includes(state);
+    })?.key ??
+    'graph_build';
+  const importPipelinePercent = Math.max(
+    taskProgressPercent,
+    Math.min(100, Math.round((completedStageCount / stageOrder.length) * 100))
+  );
+  const importSelectedCount = importFiles.length;
 
   return (
-    <section className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm md:p-6">
+    <section className="glass-card rounded-[34px] p-5 md:p-6">
       <header className="mb-5 flex flex-wrap items-start justify-between gap-3">
         <div>
           <p className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-500">知识处理</p>
-          <h2 className="mt-2 text-2xl font-semibold tracking-tight">知识库构建流水线</h2>
-          <p className="mt-2 text-sm text-slate-600">导入、清洗、索引、图构建全流程可观测，支持实时任务反馈。</p>
+          <h2 className="mt-2 text-[32px] font-semibold tracking-tight text-slate-950">知识库处理进度中心</h2>
+          <p className="mt-2 max-w-3xl text-sm leading-6 text-slate-600">把“导入、清洗、索引、图构建”拆成用户能读懂的进度流程，避免只看到冷冰冰的待处理状态。</p>
         </div>
-        <span className="inline-flex items-center gap-2 text-xs text-slate-600">
+        <span className="inline-flex items-center gap-2 rounded-full border border-white/70 bg-white/80 px-3 py-1.5 text-xs text-slate-600 shadow-sm">
           <span
             className={`h-2.5 w-2.5 rounded-full ${connection.connected ? 'bg-emerald-500 shadow-[0_0_10px_rgba(16,185,129,0.65)]' : 'bg-slate-400'}`}
             aria-hidden
           />
-          {connection.connected ? '🟢 已连接' : '⚪ 未连接'}
+          {connection.connected ? '已连接' : '未连接'}
         </span>
       </header>
 
       <section className="bento-grid mb-5">
         {bentoCards.map((card) => (
-          <article key={card.label} data-testid={card.testId} className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+          <article
+            key={card.label}
+            data-testid={card.testId}
+            className="rounded-[26px] border border-white/70 bg-[linear-gradient(180deg,rgba(255,255,255,0.96),rgba(248,250,252,0.92))] p-4 shadow-[0_18px_40px_rgba(15,23,42,0.05)]"
+          >
             <p className="text-xs font-medium uppercase tracking-[0.14em] text-slate-500">{card.label}</p>
             <NumberTicker value={card.value} className="mt-2 block text-4xl font-semibold tabular-nums text-slate-900" />
           </article>
         ))}
       </section>
 
-      <section className="rounded-2xl border border-slate-200 bg-white p-4">
-        <h3 className="text-sm font-semibold text-slate-900">导入入口</h3>
-        <p className="mt-1 text-xs text-slate-600">支持上传 PDF 或按目录导入，所有操作均提供加载反馈。</p>
-        <div className="mt-3 grid gap-2 md:grid-cols-[2fr_1fr]">
-          <input
-            type="file"
-            multiple
-            accept=".pdf,application/pdf"
-            onChange={(event) => setImportFiles(Array.from(event.target.files ?? []))}
-            className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs"
-          />
+      <div className="grid gap-4 xl:grid-cols-[minmax(0,1.2fr)_minmax(320px,0.8fr)]">
+        <section className="rounded-[28px] border border-slate-200 bg-white/90 p-5 shadow-[0_18px_50px_rgba(15,23,42,0.05)]">
+          <div className="flex items-start justify-between gap-4">
+            <div>
+              <h3 className="text-lg font-semibold text-slate-900">导入资料</h3>
+              <p className="mt-1 text-sm text-slate-600">支持上传 PDF 或从服务器目录批量导入，系统会自动回填最新处理结果。</p>
+            </div>
+            <div className="rounded-2xl bg-slate-50 px-4 py-3 text-right">
+              <p className="text-[11px] uppercase tracking-[0.14em] text-slate-400">本次提交</p>
+              <p className="mt-1 text-2xl font-semibold text-slate-950">{importSelectedCount}</p>
+              <p className="text-xs text-slate-500">个文件已选中</p>
+            </div>
+          </div>
+          <div className="mt-4 grid gap-2 md:grid-cols-[2fr_1fr]">
+            <input
+              type="file"
+              multiple
+              accept=".pdf,application/pdf"
+              onChange={(event) => setImportFiles(Array.from(event.target.files ?? []))}
+              className="w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm"
+            />
+            <input
+              type="text"
+              value={importTopic}
+              onChange={(event) => setImportTopic(event.target.value)}
+              placeholder="专题名（可选）"
+              className="w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm"
+            />
+          </div>
           <input
             type="text"
-            value={importTopic}
-            onChange={(event) => setImportTopic(event.target.value)}
-            placeholder="专题名（可选）"
-            className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs"
+            value={importDir}
+            onChange={(event) => setImportDir(event.target.value)}
+            placeholder="服务器目录，例如 data/papers"
+            className="mt-2 w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm"
           />
-        </div>
-        <input
-          type="text"
-          value={importDir}
-          onChange={(event) => setImportDir(event.target.value)}
-          placeholder="服务器目录，例如 data/papers"
-          className="mt-2 w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs"
-        />
-        <div className="mt-3 flex flex-wrap items-center gap-2">
+          <div className="mt-4 flex flex-wrap items-center gap-2">
           <button
             type="button"
             data-testid="pipeline-import-submit-btn"
             onClick={() => void submitImportFiles()}
             disabled={importSubmitLoading}
-            className="rounded-xl bg-slate-900 px-3 py-2 text-xs font-medium text-white disabled:cursor-not-allowed disabled:opacity-50"
+            className="rounded-2xl bg-slate-950 px-4 py-3 text-sm font-medium text-white disabled:cursor-not-allowed disabled:opacity-50"
           >
             {importSubmitLoading ? '导入处理中...' : `开始导入（${importFiles.length} 个文件）`}
           </button>
@@ -607,7 +640,7 @@ export function PipelineWorkbenchPanel({
             data-testid="pipeline-import-dir-btn"
             onClick={() => void submitImportDir()}
             disabled={importSubmitLoading}
-            className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-medium text-slate-700 disabled:cursor-not-allowed disabled:opacity-50"
+            className="rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm font-medium text-slate-700 disabled:cursor-not-allowed disabled:opacity-50"
           >
             {importSubmitLoading ? '目录导入中...' : '从目录批量导入'}
           </button>
@@ -617,29 +650,63 @@ export function PipelineWorkbenchPanel({
               void loadLatestImportResult();
               void loadImportHistory();
             }}
-            className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs text-slate-600"
+            className="rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-600"
           >
             刷新状态
           </button>
-        </div>
-        {importSubmitMessage ? <p className="mt-2 text-xs text-slate-600">{importSubmitMessage}</p> : null}
-        {importError ? <p className="mt-2 text-xs text-rose-600">{importError}</p> : null}
-        {importResult?.failure_reasons?.length ? (
-          <p data-testid="pipeline-import-failure-reasons" className="mt-2 text-xs text-rose-600">
-            {importResult.failure_reasons.join('；')}
-          </p>
-        ) : null}
-      </section>
+          </div>
+          {importSubmitMessage ? <p className="mt-3 text-sm text-slate-600">{importSubmitMessage}</p> : null}
+          {importError ? <p className="mt-3 text-sm text-rose-600">{importError}</p> : null}
+          {importResult?.failure_reasons?.length ? (
+            <p data-testid="pipeline-import-failure-reasons" className="mt-3 text-sm text-rose-600">
+              {importResult.failure_reasons.join('；')}
+            </p>
+          ) : null}
+        </section>
 
-      <section className="mt-4 rounded-2xl border border-slate-200 bg-white p-4">
-        <h3 className="text-sm font-semibold text-slate-900">处理状态</h3>
-        <p className="mt-1 text-xs text-slate-600">Import / Clean / Index / Graph Build 四阶段实时状态。</p>
-        <div data-testid="pipeline-stage-cards" className="mt-4 grid gap-3 md:grid-cols-4">
+        <section className="rounded-[28px] border border-slate-200 bg-[linear-gradient(180deg,#fffdfa,#ffffff)] p-5 shadow-[0_18px_50px_rgba(15,23,42,0.05)]">
+          <div className="flex items-center justify-between gap-3">
+            <div>
+              <h3 className="text-lg font-semibold text-slate-900">处理状态</h3>
+              <p className="mt-1 text-sm text-slate-600">系统会明确告诉你目前走到哪一步，而不是只显示“待处理”。</p>
+            </div>
+            <span className="rounded-full border border-emerald-200 bg-emerald-50 px-3 py-1 text-xs font-medium text-emerald-700">
+              {activeStageKey === 'graph_build' && taskPanel ? `已处理 ${taskPanel.processed}/${taskPanel.total || 0}` : `${completedStageCount}/4 阶段完成`}
+            </span>
+          </div>
+
+          <div className="mt-4 rounded-[22px] border border-slate-200 bg-white p-4">
+            <div className="flex items-center justify-between gap-3 text-sm">
+              <div>
+                <p className="font-medium text-slate-900">当前环节：{stageOrder.find((stage) => stage.key === activeStageKey)?.label}</p>
+                <p className="mt-1 text-xs text-slate-500">
+                  {taskPanel
+                    ? `图构建阶段已处理 ${taskPanel.processed}/${taskPanel.total || 0}，耗时 ${taskPanel.elapsedMs}ms`
+                    : '导入后会自动刷新每个阶段的状态与说明'}
+                </p>
+              </div>
+              <p className="text-2xl font-semibold text-slate-950">{importPipelinePercent}%</p>
+            </div>
+            <div className="mt-3 h-3 overflow-hidden rounded-full bg-slate-100">
+              <div
+                className="h-full rounded-full bg-[linear-gradient(90deg,#0f766e,#38bdf8,#f59e0b)] transition-all"
+                style={{ width: `${importPipelinePercent}%` }}
+              />
+            </div>
+          </div>
+
+          <div data-testid="pipeline-stage-cards" className="mt-4 grid gap-3 md:grid-cols-4">
           {stageOrder.map((stage) => {
             const stageData = liveStageMap.get(stage.key);
             const mapped = mapPipelineStageState(stageData?.state ?? 'not_started');
+            const isActive = activeStageKey === stage.key;
             return (
-              <article key={stage.key} className="relative rounded-xl border border-slate-200 bg-slate-50 p-3">
+              <article
+                key={stage.key}
+                className={`relative rounded-[22px] border p-4 transition ${
+                  isActive ? 'border-sky-200 bg-sky-50 shadow-[0_18px_32px_rgba(56,189,248,0.12)]' : 'border-slate-200 bg-slate-50/80'
+                }`}
+              >
                 {stage.key !== 'graph_build' ? (
                   <span className="absolute -right-2 top-5 hidden h-[2px] w-4 bg-slate-300 md:block" aria-hidden />
                 ) : null}
@@ -657,8 +724,9 @@ export function PipelineWorkbenchPanel({
               </article>
             );
           })}
-        </div>
-      </section>
+          </div>
+        </section>
+      </div>
 
       <MarkerArtifactPanel
         degraded={Boolean(importResult?.degraded)}

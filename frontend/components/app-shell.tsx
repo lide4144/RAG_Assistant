@@ -2,7 +2,7 @@
 
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-import { BotMessageSquare, ChevronDown, DatabaseZap, Settings2 } from 'lucide-react';
+import { BotMessageSquare, ChevronDown, DatabaseZap, Settings2, Sparkles, Waves } from 'lucide-react';
 import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import type { RuntimeLevel, RuntimeOverview } from '../lib/types';
 import { fetchAdminJson } from '../lib/admin-http';
@@ -93,8 +93,8 @@ export function AppShell({ children }: { children: ReactNode }) {
   const fallbackEntries = runtimeOverview?.pipeline?.marker_llm?.summary_fields ?? [];
 
   return (
-    <div className="min-h-screen bg-slate-50 text-slate-900">
-      <div className="mx-auto flex min-h-screen w-full max-w-[1440px] gap-4 p-3 md:gap-6 md:p-6">
+    <div className="min-h-screen bg-transparent text-slate-900">
+      <div className="mx-auto flex min-h-screen w-full max-w-[1480px] gap-4 p-3 md:gap-6 md:p-6">
         <div className="fixed inset-x-3 top-3 z-30 rounded-2xl border border-slate-200 bg-white/95 p-2 shadow md:hidden">
           <nav className="grid grid-cols-3 gap-1">
             {navItems.map((item) => {
@@ -116,13 +116,20 @@ export function AppShell({ children }: { children: ReactNode }) {
             })}
           </nav>
         </div>
-        <aside className="hidden w-72 shrink-0 overflow-hidden rounded-3xl border border-slate-200 bg-gradient-to-b from-white to-slate-100 shadow-lg md:flex md:flex-col">
-          <div className="border-b border-slate-200 px-5 py-6">
-            <p className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-500">RAG SaaS</p>
-            <h1 className="mt-2 text-xl font-semibold">研究助理工作台</h1>
-            <p className="mt-2 text-sm text-slate-600">统一对话、知识库构建流水线与模型配置管理。</p>
+        <aside className="glass-card hidden w-80 shrink-0 overflow-hidden rounded-[34px] md:flex md:flex-col">
+          <div className="border-b border-slate-200/80 px-6 py-6">
+            <div className="inline-flex items-center gap-2 rounded-full border border-emerald-100 bg-emerald-50 px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.18em] text-emerald-700">
+              <Waves className="h-3.5 w-3.5" />
+              RAG SaaS
+            </div>
+            <h1 className="mt-4 text-[34px] font-semibold leading-tight tracking-tight text-slate-950">研究助理工作台</h1>
+            <p className="mt-3 text-sm leading-6 text-slate-600">把对话问答、知识处理、模型切换整合成一套更适合中文用户的工作流。</p>
+            <div className="mt-4 rounded-2xl border border-slate-200 bg-white/80 p-3 text-xs text-slate-600">
+              <p className="font-semibold text-slate-900">当前主线</p>
+              <p className="mt-1">先导入资料，再在聊天页验证答案，最后用模型设置做精细调整。</p>
+            </div>
           </div>
-          <nav className="flex-1 space-y-1 px-3 py-4">
+          <nav className="flex-1 space-y-1 px-4 py-5">
             {navItems.map((item) => {
               const active = pathname.startsWith(item.href);
               const Icon = item.icon;
@@ -131,37 +138,38 @@ export function AppShell({ children }: { children: ReactNode }) {
                   key={item.href}
                   href={item.href}
                   data-testid={`nav-${item.href.replace('/', '')}-link`}
-                  className={`group flex items-center gap-3 rounded-2xl px-4 py-3 text-sm font-medium transition ${
+                  className={`group flex items-center gap-3 rounded-[22px] px-4 py-3 text-sm font-medium transition ${
                     active
-                      ? 'bg-slate-900 text-white shadow'
-                      : 'text-slate-700 hover:bg-white hover:text-slate-900 hover:shadow-sm'
+                      ? 'bg-slate-950 text-white shadow-[0_18px_48px_rgba(15,23,42,0.22)]'
+                      : 'text-slate-700 hover:bg-white/90 hover:text-slate-900 hover:shadow-sm'
                   }`}
                 >
                   <Icon className="h-4 w-4" />
                   <span>{item.label}</span>
+                  {active ? <Sparkles className="ml-auto h-4 w-4 text-slate-300" /> : null}
                 </Link>
               );
             })}
           </nav>
-          <div className="border-t border-slate-200 bg-white/80 px-4 py-4 text-xs text-slate-500">
-            版本 1.0 · 现代化 SaaS 信息架构
+          <div className="border-t border-slate-200/80 bg-white/70 px-5 py-4 text-xs text-slate-500">
+            版本 1.0 · 中文友好的研究面板
           </div>
         </aside>
 
         <main className="min-w-0 flex-1 pt-16 md:pt-0">
           <div data-testid="global-runtime-status" className="mb-4 space-y-2">
             <div className="flex items-center justify-end">
-              <span className="inline-flex items-center gap-2 text-xs text-slate-600">
+              <span className="inline-flex items-center gap-2 rounded-full border border-white/70 bg-white/85 px-3 py-1.5 text-xs text-slate-600 shadow-sm">
                 <span
                   className={`h-2.5 w-2.5 rounded-full ${connection.connected ? 'bg-emerald-500 shadow-[0_0_10px_rgba(16,185,129,0.65)]' : 'bg-slate-400'}`}
                   aria-hidden
                 />
-                {connection.connected ? '🟢 已连接' : '⚪ 未连接'}
+                {connection.connected ? '已连接' : '未连接'}
               </span>
             </div>
 
             {runtimeState.level === 'DEGRADED' ? (
-              <div className={`rounded-2xl border px-3 py-2 text-xs ${runtimeView.tone}`}>
+              <div className={`glass-card rounded-[24px] px-4 py-3 text-xs ${runtimeView.tone}`}>
                 <div className="flex flex-wrap items-center gap-2">
                   <span className="font-semibold">⚠️ 系统当前处于降级运行状态 (DEGRADED)</span>
                   <button
@@ -191,7 +199,7 @@ export function AppShell({ children }: { children: ReactNode }) {
                 ) : null}
               </div>
             ) : (
-              <div className={`rounded-2xl border px-3 py-2 text-xs ${runtimeView.tone}`}>
+              <div className={`glass-card rounded-[24px] px-4 py-3 text-xs ${runtimeView.tone}`}>
                 <span className="font-semibold">
                   {runtimeView.icon} {runtimeView.label}
                 </span>

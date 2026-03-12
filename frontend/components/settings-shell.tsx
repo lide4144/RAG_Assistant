@@ -1,6 +1,6 @@
 'use client';
 
-import { Eye, EyeOff, Sparkles } from 'lucide-react';
+import { ChevronDown, Eye, EyeOff, HelpCircle, Sparkles } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
 import { toast } from 'sonner';
 import { fetchAdminJson } from '../lib/admin-http';
@@ -93,31 +93,31 @@ const providerPresets: Record<string, ProviderPreset> = {
 };
 
 const stageMeta: StageMeta[] = [
-  { key: 'answer', title: 'Answer 模型', defaultProvider: 'openai', defaultApiBase: 'https://api.openai.com/v1', defaultModel: '' },
+  { key: 'answer', title: '回答模型', defaultProvider: 'openai', defaultApiBase: 'https://api.openai.com/v1', defaultModel: '' },
   {
     key: 'embedding',
-    title: 'Embedding 模型',
+    title: '向量模型',
     defaultProvider: 'ollama',
     defaultApiBase: 'http://127.0.0.1:11434/v1',
     defaultModel: 'nomic-embed-text'
   },
   {
     key: 'rerank',
-    title: 'Rerank 模型',
+    title: '重排模型',
     defaultProvider: 'siliconflow',
     defaultApiBase: 'https://api.siliconflow.cn/v1',
     defaultModel: 'Qwen/Qwen3-Reranker-8B'
   },
   {
     key: 'rewrite',
-    title: 'Rewrite 模型',
+    title: '问题改写模型',
     defaultProvider: 'ollama',
     defaultApiBase: 'http://127.0.0.1:11434/v1',
     defaultModel: 'qwen2.5:3b'
   },
   {
     key: 'graph_entity',
-    title: 'Graph Entity 模型',
+    title: '图谱实体模型',
     defaultProvider: 'siliconflow',
     defaultApiBase: 'https://api.siliconflow.cn/v1',
     defaultModel: 'Pro/deepseek-ai/DeepSeek-V3.2'
@@ -217,6 +217,39 @@ const markerLlmFieldOrder: Record<string, Array<Exclude<MarkerLlmField, 'use_llm
   'marker.services.azure_openai.AzureOpenAIService': ['azure_endpoint', 'azure_api_key', 'deployment_name']
 };
 
+function HintTip({
+  text,
+  open,
+  onToggle
+}: {
+  text: string;
+  open: boolean;
+  onToggle: () => void;
+}) {
+  return (
+    <span className="relative inline-flex">
+      <button
+        type="button"
+        aria-label="查看参数解释"
+        aria-expanded={open}
+        onClick={(event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          onToggle();
+        }}
+        className={`inline-flex rounded-full p-0.5 transition ${open ? 'bg-slate-900 text-white' : 'text-slate-400 hover:bg-slate-100 hover:text-slate-600'}`}
+      >
+        <HelpCircle className="h-3.5 w-3.5" />
+      </button>
+      {open ? (
+        <span className="absolute left-1/2 top-full z-10 mt-2 w-64 -translate-x-1/2 rounded-xl bg-slate-950 px-3 py-2 text-[11px] leading-5 text-white shadow-xl">
+          {text}
+        </span>
+      ) : null}
+    </span>
+  );
+}
+
 export function SettingsShell() {
   const draftStorageKey = 'settings-shell-draft-v2';
   const [configs, setConfigs] = useState<Record<StageKey, StageConfig>>(initialConfigs);
@@ -238,6 +271,7 @@ export function SettingsShell() {
   const [pipelineGlobalError, setPipelineGlobalError] = useState('');
   const [pipelineConfig, setPipelineConfig] = useState<PipelineConfigPayload | null>(null);
   const [runtimeOverview, setRuntimeOverview] = useState<RuntimeOverview | null>(null);
+  const [activeTooltipId, setActiveTooltipId] = useState<string | null>(null);
   const llmConfigUrl = useMemo(() => resolveAdminUrl('/api/admin/llm-config'), []);
   const detectModelsUrl = useMemo(() => resolveAdminUrl('/api/admin/detect-models'), []);
   const pipelineConfigUrl = useMemo(() => resolveAdminUrl('/api/admin/pipeline-config'), []);
@@ -249,6 +283,13 @@ export function SettingsShell() {
     () => Object.entries(providerPresets).map(([value, item]) => ({ value, label: item.label })),
     []
   );
+  const coreModelCards: Array<[StageKey, string, string]> = [
+    ['answer', '回答模型', '决定最终回复内容'],
+    ['embedding', '向量模型', '决定向量检索质量'],
+    ['rerank', '重排模型', '决定证据排序'],
+    ['rewrite', '问题改写模型', '优化检索提问'],
+    ['graph_entity', '图谱实体模型', '支持图谱实体抽取']
+  ];
 
   const setField = <K extends keyof StageConfig>(stage: StageKey, field: K, value: StageConfig[K]) => {
     setConfigs((prev) => ({ ...prev, [stage]: { ...prev[stage], [field]: value } }));
@@ -836,12 +877,14 @@ export function SettingsShell() {
   };
 
   return (
-    <section className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm md:p-6">
+    <section className="glass-card rounded-[34px] p-5 md:p-6">
       <header className="mb-6">
         <p className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-500">模型设置</p>
-        <h2 className="mt-2 text-2xl font-semibold tracking-tight">统一配置 LLM 连接</h2>
-        <p className="mt-2 text-sm text-slate-600">
-          所有模型连接参数集中管理。Provider 选择后会自动填入推荐 API Base，支持全模型位点独立保存。
+        <h2 data-testid="settings-shell-title" className="mt-2 text-[32px] font-semibold tracking-tight text-slate-950">
+          更易懂的模型选择与高级调优
+        </h2>
+        <p className="mt-2 max-w-3xl text-sm leading-6 text-slate-600">
+          基础用户先看“核心模型选择”，高级参数统一收纳进折叠面板，避免一进页面就被底层批处理配置淹没。
         </p>
         {!draftHydrated ? (
           <p data-testid="llm-loading-text" className="mt-2 text-xs text-slate-500">
@@ -854,79 +897,135 @@ export function SettingsShell() {
         )}
       </header>
 
-      <section className="mb-6 grid gap-4 xl:grid-cols-2">
-        <article data-testid="runtime-overview-panel" className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
-          <p className="text-xs font-semibold uppercase tracking-[0.14em] text-slate-500">当前生效配置概览</p>
-          <p className="mt-2 text-xs text-slate-600">
-            状态等级: {runtimeOverview?.status.level ?? 'ERROR'}
-            {runtimeOverview?.status.reasons?.[0] ? ` · ${runtimeOverview.status.reasons[0]}` : ''}
-          </p>
-          <div className="mt-3 space-y-1 text-xs text-slate-700">
-            <p>
-              Answer: {runtimeOverview?.llm.answer.provider || '-'} / {runtimeOverview?.llm.answer.model || '-'}
-            </p>
-            <p>
-              Rerank: {runtimeOverview?.llm.rerank.provider || '-'} / {runtimeOverview?.llm.rerank.model || '-'}
-            </p>
-            <p>
-              Rewrite: {runtimeOverview?.llm.rewrite.provider || '-'} / {runtimeOverview?.llm.rewrite.model || '-'}
-            </p>
+      <section className="mb-6 grid gap-4 xl:grid-cols-[1.2fr_0.8fr]">
+        <article data-testid="runtime-overview-panel" className="rounded-[28px] border border-slate-200 bg-[linear-gradient(135deg,#fffdfa,#ffffff_48%,#f3f8ff)] p-5 shadow-[0_18px_50px_rgba(15,23,42,0.05)]">
+          <div className="flex flex-wrap items-start justify-between gap-4">
+            <div>
+              <p className="text-xs font-semibold uppercase tracking-[0.14em] text-slate-500">核心模型选择</p>
+              <h3 className="mt-2 text-xl font-semibold text-slate-950">直接在这里切换会影响聊天体验的核心模型</h3>
+              <p className="mt-2 text-sm leading-6 text-slate-600">
+                现在会同时展示回答、向量、重排、问题改写和图谱实体五个模型位点，让管理员首屏就能核对完整配置。
+              </p>
+            </div>
+            <div className="rounded-2xl border border-slate-200 bg-white/85 px-4 py-3 text-sm text-slate-700">
+              <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-500">当前状态</p>
+              <p className="mt-2 font-medium text-slate-900">
+                {runtimeOverview?.status.level ?? 'ERROR'}
+                {runtimeOverview?.status.reasons?.[0] ? ` · ${runtimeOverview.status.reasons[0]}` : ''}
+              </p>
+            </div>
           </div>
-          <div className="mt-4 rounded-xl border border-slate-200 bg-white p-3 text-xs text-slate-700">
-            <p className="font-medium text-slate-900">Marker LLM 摘要</p>
-            <p className="mt-1">
-              状态: {runtimeOverview?.pipeline.marker_llm?.status || 'disabled'} · Service:{' '}
-              {runtimeOverview?.pipeline.marker_llm?.llm_service || '-'}
+
+          <div data-testid="core-model-overview" className="mt-5 grid gap-4 md:grid-cols-2 2xl:grid-cols-5">
+            {coreModelCards.map(([stageKey, label, hint]) => {
+              const stage = configs[stageKey];
+              return (
+                <label key={stageKey} data-testid={`core-model-card-${stageKey}`} className="block min-w-0 rounded-[22px] border border-slate-200 bg-white/85 p-4">
+                  <span className="text-sm font-semibold text-slate-900">{label}</span>
+                  <span className="mt-1 block text-xs text-slate-500">{hint}</span>
+                  <select
+                    value={stage.model}
+                    onChange={(event) => setField(stageKey, 'model', event.target.value)}
+                    disabled={controlsDisabled}
+                    className="mt-3 h-11 w-full rounded-2xl border border-slate-200 bg-slate-50 px-3 text-sm text-slate-800 outline-none ring-sky-300 transition focus:bg-white focus:ring-2"
+                  >
+                    <option value="">请选择模型</option>
+                    {stage.models.map((model) => (
+                      <option key={`${stageKey}-${model.id}`} value={model.id}>
+                        {model.id}
+                      </option>
+                    ))}
+                  </select>
+                  <div className="mt-3 rounded-2xl border border-slate-100 bg-slate-50/80 px-3 py-2.5">
+                    <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-400">来源</p>
+                    <p className="mt-1 break-all font-mono text-[11px] leading-5 text-slate-600">
+                      {(stage.provider || '未设置') + ' / ' + (stage.apiBase || '未填写地址')}
+                    </p>
+                  </div>
+                </label>
+              );
+            })}
+          </div>
+
+          <div className="mt-4 rounded-[22px] border border-slate-200 bg-white/85 p-4 text-sm text-slate-700">
+            <p className="font-medium text-slate-900">导入增强摘要</p>
+            <p className="mt-2">
+              状态：{runtimeOverview?.pipeline.marker_llm?.status || 'disabled'} · 服务：{runtimeOverview?.pipeline.marker_llm?.llm_service || '-'}
             </p>
             <p className="mt-1">
-              最近导入: {runtimeOverview?.pipeline.last_ingest?.degraded ? '降级完成' : '未降级'} ·
-              {runtimeOverview?.pipeline.last_ingest?.fallback_reason || ' 无降级原因'}
+              最近导入：{runtimeOverview?.pipeline.last_ingest?.degraded ? '触发兜底' : '正常完成'} ·{' '}
+              {runtimeOverview?.pipeline.last_ingest?.fallback_reason || '无额外说明'}
             </p>
             <p className="mt-1">
-              产物健康: healthy {runtimeOverview?.pipeline.artifacts?.counts?.healthy ?? 0} / missing{' '}
-              {runtimeOverview?.pipeline.artifacts?.counts?.missing ?? 0} / stale {runtimeOverview?.pipeline.artifacts?.counts?.stale ?? 0}
+              文件健康：正常 {runtimeOverview?.pipeline.artifacts?.counts?.healthy ?? 0} / 缺失{' '}
+              {runtimeOverview?.pipeline.artifacts?.counts?.missing ?? 0} / 待更新 {runtimeOverview?.pipeline.artifacts?.counts?.stale ?? 0}
             </p>
           </div>
         </article>
 
-        <article className="rounded-2xl border border-slate-200 bg-white p-4">
-          <div className="mb-3 flex items-center justify-between">
-            <p className="text-xs font-semibold uppercase tracking-[0.14em] text-slate-500">Marker Runtime Tuning</p>
-            <div className="flex items-center gap-2">
-              <button
-                type="button"
-                data-testid="pipeline-8gb-preset-btn"
-                onClick={apply8GbSafePreset}
-                disabled={controlsDisabled || pipelineSaveLoading}
-                className="inline-flex items-center gap-1 rounded-lg border border-sky-200 bg-sky-50 px-3 py-1.5 text-xs font-medium text-sky-700 disabled:cursor-not-allowed disabled:opacity-50"
-              >
-                <Sparkles className="h-3.5 w-3.5" />
-                一键填充 8GB 安全档位
-              </button>
-              <button
-                type="button"
-                data-testid="pipeline-save-btn"
-                onClick={() => void handleSavePipeline()}
-                disabled={controlsDisabled || pipelineSaveLoading}
-                className="rounded-lg border border-slate-200 px-3 py-1.5 text-xs font-medium text-slate-700 disabled:cursor-not-allowed disabled:opacity-50"
-              >
-                {pipelineSaveLoading ? '保存中...' : '保存 Marker 配置'}
-              </button>
-            </div>
-          </div>
-          <div className="grid gap-3 sm:grid-cols-2">
+        <article className="rounded-[28px] border border-slate-200 bg-white/92 p-5 shadow-[0_18px_50px_rgba(15,23,42,0.05)]">
+          <details className="group" open={false}>
+            <summary data-testid="advanced-settings-toggle" className="flex cursor-pointer list-none items-center justify-between gap-3">
+              <div>
+                <p className="text-xs font-semibold uppercase tracking-[0.14em] text-slate-500">高级设置概览</p>
+                <h3 className="mt-2 text-xl font-semibold text-slate-950">高级模型调优</h3>
+                <p className="mt-1 text-sm text-slate-600">默认折叠，避免普通用户直接看到晦涩的批处理参数。</p>
+              </div>
+              <ChevronDown className="h-5 w-5 text-slate-400 transition group-open:rotate-180" />
+            </summary>
+
+            <div className="mt-4 border-t border-slate-200 pt-4">
+              <div className="mb-3 flex items-center justify-between">
+                <div className="flex items-center gap-2 text-xs font-semibold uppercase tracking-[0.14em] text-slate-500">
+                  高级参数
+                  <HintTip
+                    text="这部分主要影响 Marker 解析吞吐、显存占用与导入稳定性。普通用户通常无需改动。"
+                    open={activeTooltipId === 'marker-runtime-overview'}
+                    onToggle={() => setActiveTooltipId((prev) => (prev === 'marker-runtime-overview' ? null : 'marker-runtime-overview'))}
+                  />
+                </div>
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    data-testid="pipeline-8gb-preset-btn"
+                    onClick={apply8GbSafePreset}
+                    disabled={controlsDisabled || pipelineSaveLoading}
+                    className="inline-flex items-center gap-1 rounded-lg border border-sky-200 bg-sky-50 px-3 py-1.5 text-xs font-medium text-sky-700 disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    <Sparkles className="h-3.5 w-3.5" />
+                    一键填充 8GB 安全档位
+                  </button>
+                  <button
+                    type="button"
+                    data-testid="pipeline-save-btn"
+                    onClick={() => void handleSavePipeline()}
+                    disabled={controlsDisabled || pipelineSaveLoading}
+                    className="rounded-lg border border-slate-200 px-3 py-1.5 text-xs font-medium text-slate-700 disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    {pipelineSaveLoading ? '保存中...' : '保存高级配置'}
+                  </button>
+                </div>
+              </div>
+              <div className="grid gap-3 sm:grid-cols-2">
             {(
               [
-                ['recognition_batch_size', 'Recognition Batch'],
-                ['detector_batch_size', 'Detector Batch'],
-                ['layout_batch_size', 'Layout Batch'],
-                ['ocr_error_batch_size', 'OCR Error Batch'],
-                ['table_rec_batch_size', 'Table Rec Batch']
-              ] as Array<[keyof MarkerTuning, string]>
-            ).map(([field, label]) => (
-              <label key={field} className="block text-xs font-medium text-slate-600">
-                {label}
-                <input
+                ['recognition_batch_size', '识别批量', '单次送入识别模型的页面数量，越大越快，但更占显存。'],
+                ['detector_batch_size', '检测批量', '版面检测阶段的并发页数。'],
+                ['layout_batch_size', '布局批量', '版面结构分析的批处理规模。'],
+                ['ocr_error_batch_size', '疑难 OCR 批量', '用于重试疑难页面的批量大小。'],
+                ['table_rec_batch_size', '表格识别批量', '表格解析时的单次处理数量。']
+              ] as Array<[keyof MarkerTuning, string, string]>
+            ).map(([field, label, hint]) => (
+                <label key={field} className="block text-xs font-medium text-slate-600">
+                  <span className="inline-flex items-center gap-1.5">
+                    {label}
+                    <HintTip
+                      text={hint}
+                      open={activeTooltipId === field}
+                      onToggle={() => setActiveTooltipId((prev) => (prev === field ? null : field))}
+                    />
+                  </span>
+                  <input
                   data-testid={`pipeline-${field}-input`}
                   type="number"
                   min={1}
@@ -938,8 +1037,15 @@ export function SettingsShell() {
                 {markerFieldErrors[field] ? <span className="mt-1 block text-[11px] text-rose-600">{markerFieldErrors[field]}</span> : null}
               </label>
             ))}
-            <label className="block text-xs font-medium text-slate-600">
-              DType
+                <label className="block text-xs font-medium text-slate-600">
+                  <span className="inline-flex items-center gap-1.5">
+                    精度类型
+                    <HintTip
+                      text="控制底层计算精度。通常 `float16` 更省显存，`float32` 更稳但更重。"
+                      open={activeTooltipId === 'model_dtype'}
+                      onToggle={() => setActiveTooltipId((prev) => (prev === 'model_dtype' ? null : 'model_dtype'))}
+                    />
+                  </span>
               <select
                 data-testid="pipeline-model-dtype-select"
                 value={markerTuning.model_dtype}
@@ -950,24 +1056,26 @@ export function SettingsShell() {
                 <option value="float32">float32</option>
                 <option value="bfloat16">bfloat16</option>
               </select>
-              {markerFieldErrors.model_dtype ? <span className="mt-1 block text-[11px] text-rose-600">{markerFieldErrors.model_dtype}</span> : null}
-            </label>
-          </div>
-          <div className="mt-3 rounded-xl border border-dashed border-slate-200 bg-slate-50 p-2 text-[11px] text-slate-600">
-            <p className="font-medium text-slate-700">当前生效 Marker 参数</p>
-            <ul className="mt-1 space-y-0.5">
-              {Object.entries(pipelineConfig?.effective?.marker_tuning ?? defaultMarkerTuning).map(([key, value]) => (
-                <li key={key}>
-                  {key}: <span className="font-mono">{String(value)}</span>
-                </li>
-              ))}
-            </ul>
-          </div>
+                  {markerFieldErrors.model_dtype ? <span className="mt-1 block text-[11px] text-rose-600">{markerFieldErrors.model_dtype}</span> : null}
+                </label>
+              </div>
+              <div className="mt-3 rounded-xl border border-dashed border-slate-200 bg-slate-50 p-2 text-[11px] text-slate-600">
+                <p className="font-medium text-slate-700">当前生效高级参数</p>
+                <ul className="mt-1 space-y-0.5">
+                  {Object.entries(pipelineConfig?.effective?.marker_tuning ?? defaultMarkerTuning).map(([key, value]) => (
+                    <li key={key}>
+                      {key}: <span className="font-mono">{String(value)}</span>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            </div>
+          </details>
           <div data-testid="marker-llm-panel" className="mt-4 rounded-2xl border border-slate-200 bg-slate-50/80 p-3">
             <div className="flex flex-wrap items-center justify-between gap-3">
               <div>
-                <p className="text-xs font-semibold uppercase tracking-[0.14em] text-slate-500">Marker LLM Services</p>
-                <p className="mt-1 text-[11px] text-slate-600">让前端与 Marker `--use_llm` 配置保持同步，并在保存后回显运行态。</p>
+                <p className="text-xs font-semibold uppercase tracking-[0.14em] text-slate-500">导入增强服务</p>
+                <p className="mt-1 text-[11px] text-slate-600">用于同步 Marker `--use_llm` 配置，并在保存后回显运行态。</p>
               </div>
               <label className="inline-flex items-center gap-2 text-xs font-medium text-slate-700">
                 <input
@@ -976,11 +1084,11 @@ export function SettingsShell() {
                   checked={markerLlm.use_llm}
                   onChange={(event) => setMarkerLlmField('use_llm', event.target.checked)}
                 />
-                启用 `--use_llm`
+                启用导入增强
               </label>
             </div>
             <label className="mt-3 block text-xs font-medium text-slate-600">
-              LLM Service
+              服务类型
               <select
                 data-testid="marker-llm-service-select"
                 value={markerLlm.llm_service}
@@ -1079,7 +1187,7 @@ export function SettingsShell() {
               <p className="mt-3 text-[11px] text-slate-500">关闭后仍保留已保存字段，但导入链路不会请求 Marker LLM 增强。</p>
             )}
             <div className="mt-3 rounded-xl border border-dashed border-slate-200 bg-white p-2 text-[11px] text-slate-600">
-              <p className="font-medium text-slate-700">当前生效 Marker LLM 摘要</p>
+              <p className="font-medium text-slate-700">当前生效导入增强摘要</p>
               <p className="mt-1">
                 状态: {runtimeOverview?.pipeline.marker_llm?.status || 'disabled'} · 配置完整:{' '}
                 {runtimeOverview?.pipeline.marker_llm?.configured ? 'yes' : 'no'}
