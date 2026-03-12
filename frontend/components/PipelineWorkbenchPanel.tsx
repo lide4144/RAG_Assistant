@@ -69,6 +69,36 @@ interface ImportHistoryItem {
   report_path: string;
 }
 
+interface LibraryImportSubmitResponse {
+  ok: boolean;
+  message?: string;
+  task_id?: string | null;
+  task_state?: PipelineTaskState | null;
+  accepted?: boolean | null;
+}
+
+interface BackendTaskStatus {
+  task_id: string;
+  task_kind: 'graph_build' | 'library_import';
+  state: PipelineTaskState;
+  updated_at: string;
+  message?: string;
+  accepted?: boolean;
+  progress?: {
+    stage: string;
+    processed: number;
+    total: number;
+    elapsed_ms: number;
+    message: string;
+  } | null;
+  error?: {
+    stage: string;
+    message: string;
+    recovery: string;
+  } | null;
+  result?: Record<string, unknown> | null;
+}
+
 interface MarkerArtifactsResponse {
   items: MarkerArtifactItem[];
   summary?: {
@@ -111,6 +141,8 @@ export function PipelineWorkbenchPanel({
   const [importFiles, setImportFiles] = useState<File[]>([]);
   const [importSubmitLoading, setImportSubmitLoading] = useState(false);
   const [importSubmitMessage, setImportSubmitMessage] = useState('');
+  const [importTaskId, setImportTaskId] = useState('');
+  const [importTaskState, setImportTaskState] = useState<PipelineTaskState | null>(null);
   const [artifactItems, setArtifactItems] = useState<MarkerArtifactItem[]>([]);
   const [artifactActionMessage, setArtifactActionMessage] = useState('');
   const [llmConcurrency, setLlmConcurrency] = useState(8);
@@ -331,7 +363,57 @@ export function PipelineWorkbenchPanel({
     return terminalLogs.filter((line) => line.toLowerCase().includes(keyword));
   }, [terminalFilter, terminalLogs]);
   const hasVolatileChanges =
-    importFiles.length > 0 || importSubmitLoading || taskPanel?.state === 'running' || taskPanel?.state === 'queued';
+    importFiles.length > 0 ||
+    importSubmitLoading ||
+    importTaskState === 'running' ||
+    importTaskState === 'queued' ||
+    taskPanel?.state === 'running' ||
+    taskPanel?.state === 'queued';
+
+  useEffect(() => {
+    if (!importTaskId) {
+      return;
+    }
+    let cancelled = false;
+    const poll = async () => {
+      try {
+        const result = await fetchAdminJson<BackendTaskStatus>(resolveKernelApiUrl(`/api/tasks/${importTaskId}`));
+        if (!result.ok) {
+          throw new Error(result.message || '加载导入任务状态失败');
+        }
+        if (cancelled) {
+          return;
+        }
+        const payload = result.data;
+        const nextState = payload.state;
+        setImportTaskState(nextState);
+        const progressMessage = payload.progress?.message?.trim() || payload.error?.message?.trim() || payload.message?.trim();
+        if (progressMessage) {
+          setImportSubmitMessage(progressMessage);
+        }
+        if (nextState === 'succeeded' || nextState === 'failed' || nextState === 'cancelled') {
+          setImportTaskId('');
+          await loadLatestImportResult();
+          await loadImportHistory();
+          await loadMarkerArtifacts();
+        }
+      } catch (error) {
+        if (!cancelled) {
+          setImportSubmitMessage(error instanceof Error ? error.message : '加载导入任务状态失败');
+          setImportTaskId('');
+          setImportTaskState('failed');
+        }
+      }
+    };
+    void poll();
+    const timer = window.setInterval(() => {
+      void poll();
+    }, 3000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, [importTaskId]);
 
   useEffect(() => {
     if (!hasVolatileChanges) {
@@ -412,7 +494,7 @@ export function PipelineWorkbenchPanel({
       for (const file of importFiles) {
         form.append('files', file);
       }
-      const result = await fetchAdminJson<{ message?: string; detail?: { message?: string } }>(resolveKernelApiUrl('/api/library/import'), {
+      const result = await fetchAdminJson<LibraryImportSubmitResponse>(resolveKernelApiUrl('/api/library/import'), {
         method: 'POST',
         body: form
       });
@@ -424,12 +506,14 @@ export function PipelineWorkbenchPanel({
         throw new Error(message || '导入失败');
       }
       const payload = result.data;
-      setImportSubmitMessage(payload.message ?? '导入任务已完成。');
-      await loadLatestImportResult();
-      await loadImportHistory();
-      await loadMarkerArtifacts();
+      setImportSubmitMessage(payload.message ?? '导入任务已提交。');
+      setImportTaskId(payload.task_id ?? '');
+      setImportTaskState(payload.task_state ?? 'queued');
+      setImportFiles([]);
     } catch (error) {
       setImportSubmitMessage(error instanceof Error ? error.message : '导入失败');
+      setImportTaskId('');
+      setImportTaskState('failed');
     } finally {
       setImportSubmitLoading(false);
       window.dispatchEvent(new CustomEvent(importBusyEventName, { detail: { busy: false } }));
@@ -445,7 +529,7 @@ export function PipelineWorkbenchPanel({
     setImportSubmitMessage('');
     window.dispatchEvent(new CustomEvent(importBusyEventName, { detail: { busy: true } }));
     try {
-      const result = await fetchAdminJson<{ message?: string; detail?: { message?: string } }>(
+      const result = await fetchAdminJson<LibraryImportSubmitResponse>(
         resolveKernelApiUrl('/api/library/import-from-dir'),
         {
         method: 'POST',
@@ -461,12 +545,13 @@ export function PipelineWorkbenchPanel({
         throw new Error(message || '目录导入失败');
       }
       const payload = result.data;
-      setImportSubmitMessage(payload.message ?? '目录导入任务已完成。');
-      await loadLatestImportResult();
-      await loadImportHistory();
-      await loadMarkerArtifacts();
+      setImportSubmitMessage(payload.message ?? '目录导入任务已提交。');
+      setImportTaskId(payload.task_id ?? '');
+      setImportTaskState(payload.task_state ?? 'queued');
     } catch (error) {
       setImportSubmitMessage(error instanceof Error ? error.message : '目录导入失败');
+      setImportTaskId('');
+      setImportTaskState('failed');
     } finally {
       setImportSubmitLoading(false);
       window.dispatchEvent(new CustomEvent(importBusyEventName, { detail: { busy: false } }));

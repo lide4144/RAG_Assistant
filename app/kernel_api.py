@@ -5,12 +5,12 @@ from dataclasses import asdict
 import json
 import os
 import re
+import shutil
 import threading
 import time
 from datetime import datetime, timezone
 from pathlib import Path
 from queue import Empty, Queue
-from tempfile import TemporaryDirectory
 from typing import Any, Callable, Iterator, Literal
 from uuid import uuid4
 
@@ -169,7 +169,7 @@ class AdminSavePipelineConfigRequest(BaseModel):
 
 
 TaskState = Literal["idle", "queued", "running", "succeeded", "failed", "cancelled"]
-TaskKind = Literal["graph_build"]
+TaskKind = Literal["graph_build", "library_import"]
 
 
 class GraphBuildTaskStartRequest(BaseModel):
@@ -260,6 +260,10 @@ class LibraryImportResponse(BaseModel):
     import_summary: dict[str, Any] = Field(default_factory=dict)
     import_outcomes: list[dict[str, Any]] = Field(default_factory=list)
     index_stage: dict[str, Any] = Field(default_factory=dict)
+    task_id: str | None = None
+    task_kind: TaskKind | None = None
+    task_state: TaskState | None = None
+    accepted: bool | None = None
 
 
 class ImportHistoryEntryResponse(BaseModel):
@@ -774,6 +778,12 @@ def _task_snapshot(task: TaskStatusResponse) -> TaskStatusResponse:
     return TaskStatusResponse.model_validate(task.model_dump())
 
 
+def _task_label(task_kind: TaskKind) -> str:
+    if task_kind == "library_import":
+        return "论文导入"
+    return "图构建"
+
+
 def _find_active_task(task_kind: TaskKind) -> TaskStatusResponse | None:
     with _TASKS_LOCK:
         for task in _TASKS.values():
@@ -818,6 +828,181 @@ def _latest_task(task_kind: TaskKind) -> TaskStatusResponse | None:
         return None
     latest = max(candidates, key=lambda item: item.updated_at)
     return _task_snapshot(latest)
+
+
+def _stage_library_import_files(files: list[StarletteUploadFile], task_id: str) -> list[Path]:
+    staging_root = DATA_DIR / "raw" / "_api_upload_staging" / task_id
+    staging_root.mkdir(parents=True, exist_ok=True)
+    upload_paths: list[Path] = []
+    try:
+        for idx, file in enumerate(files, start=1):
+            safe_name = _safe_upload_name(file.filename or "", idx)
+            dst = staging_root / f"{idx:03d}-{safe_name}"
+            with dst.open("wb") as handle:
+                while True:
+                    chunk = file.file.read(1024 * 1024)
+                    if not chunk:
+                        break
+                    handle.write(chunk)
+            upload_paths.append(dst)
+    except Exception:
+        shutil.rmtree(staging_root, ignore_errors=True)
+        raise
+    return upload_paths
+
+
+def _start_library_import_task(*, task_id: str, upload_paths: list[Path], topic: str) -> TaskStatusResponse:
+    active = _find_active_task("library_import")
+    if active is not None:
+        active.accepted = False
+        return active
+
+    now = _iso_now()
+    task = TaskStatusResponse(
+        task_id=task_id,
+        task_kind="library_import",
+        state="queued",
+        created_at=now,
+        updated_at=now,
+        progress=TaskProgressInfo(stage="queued", processed=0, total=6, elapsed_ms=0, message="论文导入任务已排队"),
+    )
+    _save_task(task)
+    cancel_event = threading.Event()
+    with _TASKS_LOCK:
+        _TASK_CANCEL_EVENTS[task_id] = cancel_event
+
+    def worker() -> None:
+        started = time.perf_counter()
+        latest_stage = "queued"
+        try:
+            with _TASKS_LOCK:
+                local = _TASKS[task_id]
+                local.state = "running"
+                local.updated_at = _iso_now()
+                local.progress = TaskProgressInfo(
+                    stage="running",
+                    processed=0,
+                    total=6,
+                    elapsed_ms=0,
+                    message="论文导入任务已启动",
+                )
+                _TASKS[task_id] = local
+
+            def on_progress(step: int, total: int, message: str) -> None:
+                nonlocal latest_stage
+                if cancel_event.is_set():
+                    raise _TaskCancelledError("task cancelled by user")
+                stage_map = {
+                    1: "import_validate",
+                    2: "import_prepare",
+                    3: "import_clean",
+                    4: "index_build",
+                    5: "topic_assign",
+                    6: "done",
+                }
+                latest_stage = stage_map.get(step, "running")
+                elapsed_ms = int((time.perf_counter() - started) * 1000)
+                with _TASKS_LOCK:
+                    local = _TASKS[task_id]
+                    if local.state == "cancelled":
+                        raise _TaskCancelledError("task cancelled by user")
+                    local.progress = TaskProgressInfo(
+                        stage=latest_stage,
+                        processed=max(0, int(step)),
+                        total=max(1, int(total)),
+                        elapsed_ms=max(0, elapsed_ms),
+                        message=message,
+                    )
+                    local.updated_at = _iso_now()
+                    _TASKS[task_id] = local
+
+            result = run_import_workflow(uploaded_files=upload_paths, topic=topic, progress_callback=on_progress)
+            finished_at = _iso_now()
+            _write_latest_pipeline_status(result=result, updated_at=finished_at)
+            with _TASKS_LOCK:
+                local = _TASKS[task_id]
+                is_cancelled = cancel_event.is_set() or local.state == "cancelled"
+                local.state = "cancelled" if is_cancelled else ("succeeded" if result.get("ok") else "failed")
+                local.updated_at = finished_at
+                local.result = {
+                    "message": str(result.get("message", "") or ""),
+                    "success_count": int(result.get("success_count", 0) or 0),
+                    "failed_count": int(result.get("failed_count", 0) or 0),
+                }
+                if not is_cancelled:
+                    local.error = (
+                        None
+                        if result.get("ok")
+                        else TaskErrorInfo(
+                            stage=latest_stage or "library_import",
+                            message=str(result.get("message", "") or "论文导入失败"),
+                            recovery="请检查 PDF 内容、批次大小或稍后分批重试",
+                        )
+                    )
+                if local.progress is None:
+                    local.progress = TaskProgressInfo(
+                        stage="cancelled" if is_cancelled else ("done" if result.get("ok") else latest_stage),
+                        processed=0 if is_cancelled else 6,
+                        total=6,
+                        elapsed_ms=int((time.perf_counter() - started) * 1000),
+                        message="论文导入已取消" if is_cancelled else str(result.get("message", "") or "论文导入已结束"),
+                    )
+                elif is_cancelled:
+                    local.progress = TaskProgressInfo(
+                        stage="cancelled",
+                        processed=local.progress.processed,
+                        total=local.progress.total,
+                        elapsed_ms=int((time.perf_counter() - started) * 1000),
+                        message="论文导入已取消",
+                    )
+                else:
+                    local.progress = TaskProgressInfo(
+                        stage="done" if result.get("ok") else latest_stage,
+                        processed=6,
+                        total=6,
+                        elapsed_ms=int((time.perf_counter() - started) * 1000),
+                        message=str(result.get("message", "") or "论文导入已结束"),
+                    )
+                _TASKS[task_id] = local
+        except _TaskCancelledError:
+            with _TASKS_LOCK:
+                local = _TASKS[task_id]
+                local.state = "cancelled"
+                local.updated_at = _iso_now()
+                local.progress = TaskProgressInfo(
+                    stage="cancelled",
+                    processed=local.progress.processed if local.progress else 0,
+                    total=local.progress.total if local.progress else 6,
+                    elapsed_ms=int((time.perf_counter() - started) * 1000),
+                    message="论文导入已取消",
+                )
+                _TASKS[task_id] = local
+        except Exception as exc:  # pragma: no cover - defensive
+            with _TASKS_LOCK:
+                local = _TASKS[task_id]
+                local.state = "failed"
+                local.updated_at = _iso_now()
+                local.error = TaskErrorInfo(
+                    stage=latest_stage or "library_import",
+                    message=str(exc),
+                    recovery="请检查上传文件、磁盘空间或模型配置后重试",
+                )
+                local.progress = TaskProgressInfo(
+                    stage=latest_stage or "failed",
+                    processed=local.progress.processed if local.progress else 0,
+                    total=local.progress.total if local.progress else 6,
+                    elapsed_ms=int((time.perf_counter() - started) * 1000),
+                    message="论文导入失败",
+                )
+                _TASKS[task_id] = local
+        finally:
+            shutil.rmtree(DATA_DIR / "raw" / "_api_upload_staging" / task_id, ignore_errors=True)
+            with _TASKS_LOCK:
+                _TASK_CANCEL_EVENTS.pop(task_id, None)
+
+    thread = threading.Thread(target=worker, daemon=True)
+    thread.start()
+    return _task_snapshot(task)
 
 
 def _resolve_import_stage_state(import_summary: dict[str, Any]) -> str:
@@ -1615,6 +1800,7 @@ def cancel_task(task_id: str) -> TaskCancelResponse:
                 message=f"任务已处于终态：{task.state}",
             )
 
+        task_label = _task_label(task.task_kind)
         task.state = "cancelled"
         task.updated_at = _iso_now()
         task.progress = TaskProgressInfo(
@@ -1622,7 +1808,7 @@ def cancel_task(task_id: str) -> TaskCancelResponse:
             processed=task.progress.processed if task.progress else 0,
             total=task.progress.total if task.progress else 0,
             elapsed_ms=task.progress.elapsed_ms if task.progress else 0,
-            message="图构建已取消",
+            message=f"{task_label}已取消",
         )
         _TASKS[task_id] = task
         cancel_event = _TASK_CANCEL_EVENTS.get(task_id)
@@ -1704,23 +1890,37 @@ async def import_library_files(request: Request) -> LibraryImportResponse:
     files = [item for item in form.getlist("files") if isinstance(item, StarletteUploadFile)]
     if not files:
         raise HTTPException(status_code=400, detail={"code": "NO_FILES", "message": "未上传文件"})
-
-    with TemporaryDirectory() as tmp:
-        tmp_dir = Path(tmp)
-        upload_paths: list[Path] = []
-        for idx, file in enumerate(files, start=1):
-            safe_name = _safe_upload_name(file.filename or "", idx)
-            dst = tmp_dir / f"{idx:03d}-{safe_name}"
-            data = await file.read()
-            dst.write_bytes(data)
-            upload_paths.append(dst)
-
-        result = run_import_workflow(
-            uploaded_files=upload_paths,
-            topic=topic,
+    active = _find_active_task("library_import")
+    if active is not None:
+        return LibraryImportResponse(
+            ok=True,
+            message="已有论文导入任务正在运行，已复用现有任务。",
+            task_id=active.task_id,
+            task_kind=active.task_kind,
+            task_state=active.state,
+            accepted=False,
         )
-    _write_latest_pipeline_status(result=result, updated_at=_iso_now())
-    return LibraryImportResponse.model_validate(result)
+
+    task_id = f"task_library_import_{uuid4().hex}"
+    try:
+        upload_paths = _stage_library_import_files(files, task_id)
+    except Exception as exc:
+        raise HTTPException(
+            status_code=500,
+            detail={"code": "UPLOAD_STAGING_FAILED", "message": f"暂存上传文件失败: {exc}"},
+        ) from exc
+
+    task = _start_library_import_task(task_id=task_id, upload_paths=upload_paths, topic=topic)
+    return LibraryImportResponse(
+        ok=True,
+        message=f"已接收 {len(upload_paths)} 个文件，后台正在导入。",
+        success_count=len(upload_paths),
+        failed_count=0,
+        task_id=task.task_id,
+        task_kind=task.task_kind,
+        task_state=task.state,
+        accepted=task.accepted,
+    )
 
 
 @app.post("/api/library/import-from-dir", response_model=LibraryImportResponse)
@@ -1742,12 +1942,29 @@ def import_library_from_dir(payload: LibraryImportFromDirRequest) -> LibraryImpo
             detail={"code": "NO_PDF_FILES", "message": f"目录中未找到 PDF: {source_dir}"},
         )
 
-    result = run_import_workflow(
-        uploaded_files=pdf_paths,
-        topic=payload.topic,
+    active = _find_active_task("library_import")
+    if active is not None:
+        return LibraryImportResponse(
+            ok=True,
+            message="已有论文导入任务正在运行，已复用现有任务。",
+            task_id=active.task_id,
+            task_kind=active.task_kind,
+            task_state=active.state,
+            accepted=False,
+        )
+
+    task_id = f"task_library_import_{uuid4().hex}"
+    task = _start_library_import_task(task_id=task_id, upload_paths=pdf_paths, topic=payload.topic)
+    return LibraryImportResponse(
+        ok=True,
+        message=f"已接收目录中的 {len(pdf_paths)} 个 PDF，后台正在导入。",
+        success_count=len(pdf_paths),
+        failed_count=0,
+        task_id=task.task_id,
+        task_kind=task.task_kind,
+        task_state=task.state,
+        accepted=task.accepted,
     )
-    _write_latest_pipeline_status(result=result, updated_at=_iso_now())
-    return LibraryImportResponse.model_validate(result)
 
 
 @app.post("/qa", response_model=KernelChatResponse)
