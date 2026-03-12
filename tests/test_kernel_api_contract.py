@@ -6,7 +6,10 @@ import time
 import tempfile
 from pathlib import Path
 
+from fastapi.testclient import TestClient
+
 from app.kernel_api import (
+    app,
     _TASK_CANCEL_EVENTS,
     _TASKS,
     _TASKS_LOCK,
@@ -20,6 +23,7 @@ from app.kernel_api import (
     _run_qa_once,
     qa_stream,
     start_graph_build_task,
+    _start_library_import_task,
     GraphBuildTaskStartRequest,
 )
 
@@ -29,6 +33,7 @@ class KernelApiContractTests(unittest.TestCase):
         with _TASKS_LOCK:
             _TASKS.clear()
             _TASK_CANCEL_EVENTS.clear()
+        self.client = TestClient(app)
 
     def test_source_contract_isomorphic_fields(self) -> None:
         qa_report = {
@@ -237,6 +242,45 @@ class KernelApiContractTests(unittest.TestCase):
                 self.assertEqual([stage.stage for stage in result.pipeline_stages], ["import", "clean", "index", "graph_build"])
                 self.assertEqual(result.pipeline_stages[0].state, "succeeded")
                 self.assertEqual(result.pipeline_stages[1].state, "succeeded")
+
+    def test_library_import_task_runs_in_background(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            upload = Path(tmp) / "demo.pdf"
+            upload.write_bytes(b"%PDF-1.4\n")
+
+            with patch(
+                "app.kernel_api.run_import_workflow",
+                return_value={"ok": True, "message": "导入完成", "success_count": 1, "failed_count": 0},
+            ):
+                started = _start_library_import_task(
+                    task_id="task_library_import_test",
+                    upload_paths=[upload],
+                    topic="topic-a",
+                )
+                self.assertEqual(started.task_kind, "library_import")
+                self.assertIn(started.state, {"queued", "running", "succeeded"})
+                for _ in range(20):
+                    current = get_task_status(started.task_id)
+                    if current.state == "succeeded":
+                        break
+                    time.sleep(0.01)
+                self.assertEqual(current.state, "succeeded")
+                self.assertIsNotNone(current.result)
+                self.assertEqual(current.result.get("success_count"), 1)
+
+    def test_library_import_endpoint_returns_accepted_task_immediately(self) -> None:
+        with patch("app.kernel_api.run_import_workflow", side_effect=lambda **_: {"ok": True, "message": "导入完成"}):
+            response = self.client.post(
+                "/api/library/import",
+                data={"topic": "topic-a"},
+                files={"files": ("demo.pdf", b"%PDF-1.4\n", "application/pdf")},
+            )
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertTrue(payload["ok"])
+        self.assertEqual(payload["task_kind"], "library_import")
+        self.assertIn(payload["task_state"], {"queued", "running", "succeeded"})
+        self.assertTrue(str(payload["message"]).startswith("已接收"))
 
 
 if __name__ == '__main__':

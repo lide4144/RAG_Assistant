@@ -1,10 +1,39 @@
 import { expect, test, type Page } from '@playwright/test';
+import type { MarkerLlmSummaryField, RuntimeOverview, RuntimeSource } from '../lib/types';
 
 type StageKey = 'answer' | 'embedding' | 'rerank' | 'rewrite' | 'graph_entity';
 
 type StagePayload = { provider: string; api_base: string; api_key: string; model: string };
 
 type FullPayload = Record<StageKey, StagePayload>;
+type MarkerLlmConfigPayload = {
+  use_llm: boolean;
+  llm_service: string;
+  [key: string]: unknown;
+};
+type MarkerTuningPayload = {
+  recognition_batch_size: number;
+  detector_batch_size: number;
+  layout_batch_size: number;
+  ocr_error_batch_size: number;
+  table_rec_batch_size: number;
+  model_dtype: string;
+};
+type PipelineConfigState = {
+  configured: boolean;
+  saved: {
+    marker_tuning: MarkerTuningPayload;
+    marker_llm: MarkerLlmConfigPayload;
+  };
+  effective: {
+    marker_tuning: MarkerTuningPayload;
+    marker_llm: MarkerLlmConfigPayload;
+  };
+  effective_source: {
+    marker_tuning: Partial<Record<keyof MarkerTuningPayload, RuntimeSource>>;
+    marker_llm: Record<string, RuntimeSource>;
+  };
+};
 
 const allStages: StageKey[] = ['answer', 'embedding', 'rerank', 'rewrite', 'graph_entity'];
 
@@ -722,7 +751,7 @@ test('settings page saves marker llm service config and shows runtime summary', 
 test('settings page posts marker llm config and refreshes runtime summary after save', async ({ page }) => {
   let savedMarkerLlm: Record<string, unknown> | null = null;
   let detectPayload: Record<string, unknown> | null = null;
-  let pipelineConfigState = {
+  let pipelineConfigState: PipelineConfigState = {
     configured: true,
     saved: {
       marker_tuning: {
@@ -757,7 +786,7 @@ test('settings page posts marker llm config and refreshes runtime summary after 
       marker_llm: {}
     }
   };
-  let runtimeOverviewState = {
+  let runtimeOverviewState: RuntimeOverview = {
     llm: {
       answer: { provider: 'openai', model: 'gpt-4o-mini', configured: true },
       embedding: { provider: 'siliconflow', model: 'bge', configured: true },
@@ -1004,7 +1033,7 @@ test('settings page keeps marker llm inputs when backend returns field errors', 
             llm_service: '',
             configured: false,
             status: 'disabled',
-            summary_fields: []
+            summary_fields: [] as MarkerLlmSummaryField[]
           },
           last_ingest: {
             degraded: false,
