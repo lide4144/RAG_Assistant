@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import unittest
 from unittest.mock import patch
 import time
@@ -13,10 +14,13 @@ from app.kernel_api import (
     _TASK_CANCEL_EVENTS,
     _TASKS,
     _TASKS_LOCK,
+    _build_marker_artifacts,
     cancel_task,
     KernelChatRequest,
     KernelChatResponse,
     SourceItem,
+    TaskProgressInfo,
+    TaskStatusResponse,
     get_latest_import_result,
     _build_sources_from_qa_report,
     get_task_status,
@@ -225,7 +229,13 @@ class KernelApiContractTests(unittest.TestCase):
             run_dir.mkdir(parents=True, exist_ok=True)
             report_path = run_dir / "ingest_report.json"
             report_path.write_text(
-                '{"import_summary":{"added":1,"skipped":2,"failed":1},"import_outcomes":[{"status":"failed","reason":"bad pdf"}]}',
+                (
+                    '{"import_summary":{"added":1,"skipped":2,"failed":1},'
+                    '"import_outcomes":[{"status":"failed","reason":"bad pdf"}],'
+                    '"import_stage":{"updated_at":"2026-03-06T00:00:01Z"},'
+                    '"clean_stage":{"updated_at":"2026-03-06T00:00:01Z"},'
+                    '"index_stage":{"status":"success","updated_at":"2026-03-06T00:00:02Z"}}'
+                ),
                 encoding="utf-8",
             )
 
@@ -242,6 +252,58 @@ class KernelApiContractTests(unittest.TestCase):
                 self.assertEqual([stage.stage for stage in result.pipeline_stages], ["import", "clean", "index", "graph_build"])
                 self.assertEqual(result.pipeline_stages[0].state, "succeeded")
                 self.assertEqual(result.pipeline_stages[1].state, "succeeded")
+                self.assertEqual(result.pipeline_stages[0].updated_at, "2026-03-06T00:00:01Z")
+                self.assertEqual(result.pipeline_stages[2].updated_at, "2026-03-06T00:00:02Z")
+                self.assertEqual(result.stage_updated_at["import"], "2026-03-06T00:00:01Z")
+                self.assertEqual(result.stage_updated_at["index"], "2026-03-06T00:00:02Z")
+
+    def test_marker_artifacts_compare_against_related_stage_time(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            data_dir = Path(tmp)
+            processed = data_dir / "processed"
+            indexes = data_dir / "indexes"
+            processed.mkdir(parents=True, exist_ok=True)
+            indexes.mkdir(parents=True, exist_ok=True)
+
+            artifacts = {
+                processed / "chunks.jsonl": 1710000000,
+                processed / "chunks_clean.jsonl": 1710000005,
+                processed / "papers.json": 1710000000,
+                processed / "paper_summary.json": 1710000005,
+                indexes / "bm25_index.json": 1710000010,
+                indexes / "vec_index.json": 1710000020,
+                indexes / "vec_index_embed.json": 1710000020,
+            }
+            for path, ts in artifacts.items():
+                path.write_text("{}", encoding="utf-8")
+                os.utime(path, (ts, ts))
+
+            with patch(
+                "app.kernel_api._ARTIFACT_INDEX",
+                (
+                    ("indexes:bmp25", indexes / "bm25_index.json", "bm25-index", "index"),
+                    ("indexes:vec", indexes / "vec_index.json", "vector-index", "index"),
+                    ("indexes:embed", indexes / "vec_index_embed.json", "embedding-index", "index"),
+                    ("processed:chunks", processed / "chunks.jsonl", "chunks", "import"),
+                    ("processed:chunks_clean", processed / "chunks_clean.jsonl", "clean-chunks", "clean"),
+                    ("processed:papers", processed / "papers.json", "papers-catalog", "import"),
+                    ("processed:paper_summary", processed / "paper_summary.json", "paper-summary", "clean"),
+                ),
+            ):
+                items = _build_marker_artifacts(
+                    stage_updated_at={
+                        "import": "2024-03-09T16:00:00Z",
+                        "clean": "2024-03-09T16:00:05Z",
+                        "index": "2024-03-09T16:00:20Z",
+                    }
+                )
+
+            by_key = {item.key: item for item in items}
+            self.assertEqual(by_key["processed:chunks"].status, "healthy")
+            self.assertEqual(by_key["processed:chunks_clean"].status, "healthy")
+            self.assertEqual(by_key["processed:papers"].status, "healthy")
+            self.assertEqual(by_key["indexes:bmp25"].status, "stale")
+            self.assertEqual(by_key["indexes:vec"].status, "healthy")
 
     def test_library_import_task_runs_in_background(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -281,6 +343,41 @@ class KernelApiContractTests(unittest.TestCase):
         self.assertEqual(payload["task_kind"], "library_import")
         self.assertIn(payload["task_state"], {"queued", "running", "succeeded"})
         self.assertTrue(str(payload["message"]).startswith("已接收"))
+
+    def test_library_import_endpoint_reuses_active_task(self) -> None:
+        with _TASKS_LOCK:
+            _TASKS["task_library_import_existing"] = TaskStatusResponse(
+                task_id="task_library_import_existing",
+                task_kind="library_import",
+                state="running",
+                created_at="2026-03-13T00:00:00Z",
+                updated_at="2026-03-13T00:00:01Z",
+                progress=TaskProgressInfo(
+                    stage="import_prepare",
+                    processed=2,
+                    total=6,
+                    elapsed_ms=500,
+                    message="正在处理",
+                ),
+                accepted=True,
+                error=None,
+                result=None,
+            )
+
+        response = self.client.post(
+            "/api/library/import",
+            data={"topic": "topic-a"},
+            files={"files": ("demo.pdf", b"%PDF-1.4\n", "application/pdf")},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertTrue(payload["ok"])
+        self.assertFalse(payload["accepted"])
+        self.assertEqual(payload["task_id"], "task_library_import_existing")
+        self.assertEqual(payload["task_kind"], "library_import")
+        self.assertEqual(payload["task_state"], "running")
+        self.assertIn("复用", payload["message"])
 
 
 if __name__ == '__main__':
