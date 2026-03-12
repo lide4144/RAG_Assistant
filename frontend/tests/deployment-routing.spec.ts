@@ -61,7 +61,7 @@ test('chat page derives websocket url from current origin instead of localhost',
   await installSocketRecorder(page);
   await page.goto('http://127.0.0.1:3000/chat');
 
-  await expect(page.getByText('🟢 已连接').first()).toBeVisible();
+  await expect(page.getByTestId('global-runtime-status')).toContainText('已连接');
   await expect.poll(() => page.evaluate(() => (window as typeof window & { __wsUrls?: string[] }).__wsUrls ?? [])).toEqual([
     'ws://127.0.0.1:3000/ws'
   ]);

@@ -78,10 +78,11 @@ test('chat page shows empty state and blocks usage when model is not configured'
 
   await expect(page.getByText('向你的研究知识库提问')).toBeVisible();
   await expect(page.getByRole('button', { name: '总结当前知识库里关于 GraphRAG 的核心方法差异' })).toBeVisible();
-  await expect(page.getByText('检测到 Answer 路由不可用')).toBeVisible();
+  await expect(page.getByText('当前推理模型不可用。请先前往')).toBeVisible();
   await expect(page.getByRole('main').getByRole('link', { name: '模型设置', exact: true })).toBeVisible();
-  await expect(page.getByTestId('chat-runtime-summary')).toContainText('当前会话模型摘要');
-  await expect(page.getByText('🟢 已连接').first()).toBeVisible();
+  await expect(page.getByTestId('chat-session-aside')).toContainText('本次会话速览');
+  await expect(page.getByTestId('chat-session-aside')).toContainText('开始提问后，这里会持续汇总当前会话的引用和阅读重点。');
+  await expect(page.getByTestId('global-runtime-status')).toContainText('已连接');
   await page.locator('footer input').first().fill('blocked 下尝试发送');
   await expect(page.getByRole('button', { name: '发送' })).toBeDisabled();
 });
@@ -195,8 +196,8 @@ test('chat page renders markdown code and math with stream response', async ({ p
   });
 
   await page.goto('http://127.0.0.1:3000/chat');
-  await expect(page.getByText('🟢 已连接').first()).toBeVisible();
-  await expect(page.getByText('检测到 Answer 路由不可用')).toHaveCount(0);
+  await expect(page.getByTestId('global-runtime-status')).toContainText('已连接');
+  await expect(page.getByText('当前推理模型不可用。请先前往')).toHaveCount(0);
   const input = page.locator('footer input').first();
   const sendBtn = page.getByRole('button', { name: '发送' });
   await expect(input).toBeVisible();

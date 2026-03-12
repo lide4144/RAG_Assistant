@@ -4,11 +4,11 @@
 待定 - 由归档变更 add-llm-visual-config-and-model-detection 创建。归档后请更新目的。
 ## 需求
 ### 需求:系统必须持久化 LLM 路由配置
-系统必须提供持久化结构保存管理员选择的路由配置，并支持读取最新生效配置。持久化配置必须覆盖 `answer`、`embedding`、`rerank` 三个 stage，每个 stage 至少包含 `api_base`、`api_key`、`model` 与 `provider`。系统必须支持向后兼容旧格式配置并映射到新结构。
+系统必须提供持久化结构保存管理员选择的路由配置，并支持读取最新生效配置。持久化配置必须覆盖 `answer`、`embedding`、`rerank`、`rewrite` 与 `graph_entity` 五个位点，每个位点至少包含 `provider`、`api_base`、`api_key` 与 `model`。系统必须支持向后兼容旧格式配置并映射到新结构。
 
 #### 场景:保存后读取多 stage 配置
-- **当** 管理员保存 answer、embedding、rerank 的配置
-- **那么** 系统必须在后续读取时返回三个 stage 的最新保存值
+- **当** 管理员保存全模型位点配置
+- **那么** 系统必须在后续读取时返回完整位点结构且字段语义一致
 
 ### 需求:系统必须保护敏感配置输出
 系统必须在日志和 API 响应中对 `api_key` 做脱敏处理，禁止明文回显。
@@ -38,3 +38,9 @@
 - **当** embedding 未配置可用 API key 且 answer 配置完整
 - **那么** 系统必须保持 answer 路由可用，并将 embedding 标记为不可用或降级
 
+### 需求:系统必须消除 rewrite 对 answer 的隐式覆盖
+系统必须将 `rewrite` 视为独立位点并单独生效，禁止在配置加载阶段强制使用 `answer` 路由覆盖 `rewrite` 路由。
+
+#### 场景:rewrite 与 answer 使用不同模型
+- **当** 管理员将 `rewrite` 与 `answer` 配置为不同模型
+- **那么** 系统必须按各自位点配置生效，且不得在加载时将 rewrite 覆盖为 answer
