@@ -398,3 +398,167 @@ test('pipeline workbench covers marker artifact actions and delete confirmation'
   await expect(page.getByText('已删除 chunks_clean.jsonl')).toBeVisible();
   await expect(page.getByTestId('artifact-card-processed-chunks-clean')).toHaveCount(0);
 });
+
+test('pipeline workbench submits import task and refreshes after task completion', async ({ page }) => {
+  let importRequestCount = 0;
+  let taskPollCount = 0;
+  let importCompleted = false;
+  let importHistoryRefreshed = 0;
+  let markerArtifactsRefreshed = 0;
+
+  await page.route('**/api/admin/llm-config', async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ configured: false })
+    });
+  });
+  await page.route('**/api/admin/runtime-overview', async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        llm: {
+          answer: { provider: 'openai', model: 'gpt-4o-mini', configured: true },
+          embedding: { provider: 'siliconflow', model: 'bge', configured: true },
+          rerank: { provider: 'siliconflow', model: 'rerank', configured: true },
+          rewrite: { provider: 'ollama', model: 'rewrite', configured: true },
+          graph_entity: { provider: 'siliconflow', model: 'graph', configured: true }
+        },
+        pipeline: {
+          marker_tuning: {
+            recognition_batch_size: 2,
+            detector_batch_size: 2,
+            layout_batch_size: 2,
+            ocr_error_batch_size: 1,
+            table_rec_batch_size: 1,
+            model_dtype: 'float16'
+          },
+          effective_source: { marker_tuning: {} }
+        },
+        status: { level: 'READY', reasons: [] }
+      })
+    });
+  });
+  await page.route('**/api/library/import', async (route) => {
+    importRequestCount += 1;
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        ok: true,
+        message: '已接收 1 个文件，后台正在导入。',
+        task_id: 'task-library-import-1',
+        task_kind: 'library_import',
+        task_state: 'queued',
+        accepted: true
+      })
+    });
+  });
+  await page.route('**/api/tasks/task-library-import-1', async (route) => {
+    taskPollCount += 1;
+    importCompleted = true;
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        task_id: 'task-library-import-1',
+        task_kind: 'library_import',
+        state: 'succeeded',
+        updated_at: '2026-03-13T00:00:03Z',
+        accepted: true,
+        progress: {
+          stage: 'done',
+          processed: 6,
+          total: 6,
+          elapsed_ms: 1200,
+          message: '导入完成，可以直接前往 Chat 提问或生成灵感卡片。'
+        },
+        result: {
+          success_count: 1,
+          failed_count: 0
+        }
+      })
+    });
+  });
+  await page.route('**/api/library/import-latest', async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify(
+        importCompleted
+          ? {
+              added: 1,
+              skipped: 0,
+              failed: 0,
+              failure_reasons: [],
+              total_papers: 1,
+              pipeline_stages: [
+                { stage: 'import', state: 'succeeded', updated_at: '2026-03-13T00:00:03Z' },
+                { stage: 'clean', state: 'succeeded', updated_at: '2026-03-13T00:00:03Z' },
+                { stage: 'index', state: 'succeeded', updated_at: '2026-03-13T00:00:03Z' },
+                { stage: 'graph_build', state: 'not_started', updated_at: null, message: '尚未启动图构建任务' }
+              ]
+            }
+          : {
+              added: 0,
+              skipped: 0,
+              failed: 0,
+              failure_reasons: [],
+              total_papers: 0,
+              pipeline_stages: [
+                { stage: 'import', state: 'not_started', updated_at: null },
+                { stage: 'clean', state: 'not_started', updated_at: null },
+                { stage: 'index', state: 'not_started', updated_at: null },
+                { stage: 'graph_build', state: 'not_started', updated_at: null, message: '尚未启动图构建任务' }
+              ]
+            }
+      )
+    });
+  });
+  await page.route('**/api/library/import-history?limit=10', async (route) => {
+    importHistoryRefreshed += 1;
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify(
+        importCompleted
+          ? [{ run_id: 'import_task_library_import_1', updated_at: '2026-03-13T00:00:03Z', added: 1, skipped: 0, failed: 0, total_candidates: 1, report_path: '/runs/import_task_library_import_1/ingest_report.json' }]
+          : []
+      )
+    });
+  });
+  await page.route('**/api/library/marker-artifacts', async (route) => {
+    markerArtifactsRefreshed += 1;
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        items: [],
+        summary: { counts: { healthy: importCompleted ? 3 : 0, missing: 0, stale: 0 } },
+        updated_at: importCompleted ? '2026-03-13T00:00:03Z' : null
+      })
+    });
+  });
+
+  await page.goto('http://127.0.0.1:3000/chat');
+  await page.locator('[data-testid="nav-pipeline-link"]:visible').first().click();
+  await expect(page.getByRole('heading', { name: '知识库处理进度中心' })).toBeVisible();
+
+  await page.locator('input[type="file"]').setInputFiles([
+    {
+      name: 'demo.pdf',
+      mimeType: 'application/pdf',
+      buffer: Buffer.from('%PDF-1.4 demo')
+    }
+  ]);
+  await page.getByTestId('pipeline-import-submit-btn').click();
+
+  await expect.poll(() => importRequestCount).toBe(1);
+  await expect(page.getByText('导入完成，可以直接前往 Chat 提问或生成灵感卡片。')).toBeVisible();
+  await expect(page.getByTestId('pipeline-import-added')).toContainText('1');
+  await expect(page.getByTestId('pipeline-import-failed')).toContainText('0');
+  await expect.poll(() => taskPollCount).toBeGreaterThan(0);
+  await expect.poll(() => importHistoryRefreshed).toBeGreaterThan(1);
+  await expect.poll(() => markerArtifactsRefreshed).toBeGreaterThan(1);
+});

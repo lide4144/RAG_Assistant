@@ -52,7 +52,11 @@ _CACHED_ARTIFACTS: dict[str, Any] | None = None
 class _TimeoutGuard:
     def __init__(self, timeout_sec: float) -> None:
         self._timeout_sec = max(0.0, float(timeout_sec))
-        self._enabled = hasattr(signal, "setitimer") and self._timeout_sec > 0
+        self._enabled = (
+            hasattr(signal, "setitimer")
+            and self._timeout_sec > 0
+            and threading.current_thread() is threading.main_thread()
+        )
         self._prev_handler: Any = None
 
     def _on_timeout(self, signum: int, frame: FrameType | None) -> None:
