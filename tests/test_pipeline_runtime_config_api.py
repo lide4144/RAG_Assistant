@@ -8,6 +8,7 @@ from unittest.mock import patch
 from app.admin_llm_config import RuntimeLLMConfig, RuntimeStageConfig
 from app.kernel_api import (
     AdminSavePipelineConfigRequest,
+    ImportLatestResultResponse,
     get_admin_pipeline_config,
     get_runtime_overview,
     save_admin_pipeline_config,
@@ -157,6 +158,51 @@ class PipelineRuntimeConfigApiTests(unittest.TestCase):
         self.assertEqual(payload["status"]["level"], "READY")
         self.assertEqual(payload["llm"]["answer"]["configured"], True)
         self.assertEqual(payload["pipeline"]["marker_tuning"]["model_dtype"], "float16")
+
+    def test_runtime_overview_exposes_stage_updated_at(self) -> None:
+        llm = RuntimeLLMConfig(
+            answer=RuntimeStageConfig(provider="openai", api_base="https://api.example.com/v1", api_key="a", model="gpt-4.1"),
+            embedding=RuntimeStageConfig(provider="siliconflow", api_base="https://api.example.com/v1", api_key="b", model="bge"),
+            rerank=RuntimeStageConfig(provider="siliconflow", api_base="https://api.example.com/v1", api_key="c", model="rerank"),
+            rewrite=RuntimeStageConfig(provider="siliconflow", api_base="https://api.example.com/v1", api_key="d", model="rewrite"),
+            graph_entity=RuntimeStageConfig(provider="siliconflow", api_base="https://api.example.com/v1", api_key="e", model="graph"),
+            updated_at="2026-03-07T00:00:00Z",
+        )
+        latest_import = ImportLatestResultResponse(
+            updated_at="2026-03-12T16:15:30Z",
+            stage_updated_at={
+                "import": "2026-03-12T16:15:20Z",
+                "clean": "2026-03-12T16:15:24Z",
+                "index": "2026-03-12T16:15:30Z",
+            },
+            artifact_summary={"counts": {"healthy": 3, "missing": 0, "stale": 0}},
+        )
+        with (
+            patch("app.kernel_api.load_runtime_llm_config", return_value=(llm, None)),
+            patch(
+                "app.kernel_api.resolve_effective_marker_tuning",
+                return_value=type(
+                    "EffectiveMarker",
+                    (),
+                    {
+                        "values": MarkerTuning(),
+                        "source": {
+                            "recognition_batch_size": "runtime",
+                            "detector_batch_size": "runtime",
+                            "layout_batch_size": "runtime",
+                            "ocr_error_batch_size": "runtime",
+                            "table_rec_batch_size": "runtime",
+                            "model_dtype": "runtime",
+                        },
+                        "warnings": [],
+                    },
+                )(),
+            ),
+            patch("app.kernel_api._load_latest_import_result", return_value=latest_import),
+        ):
+            payload = get_runtime_overview()
+        self.assertEqual(payload["pipeline"]["last_ingest"]["updated_at"], "2026-03-12T16:15:30Z")
+        self.assertEqual(payload["pipeline"]["last_ingest"]["stage_updated_at"]["clean"], "2026-03-12T16:15:24Z")
 
 
 if __name__ == "__main__":

@@ -66,6 +66,31 @@ class LibraryQuickIngestionTests(unittest.TestCase):
             self.assertEqual(result.get("import_summary", {}).get("skipped"), 2)
             self.assertEqual(result.get("index_stage", {}).get("status"), "success")
 
+    def test_import_feedback_keeps_stage_updated_at_when_index_conflicts(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            pdf = Path(tmp) / "paper.pdf"
+            pdf.write_bytes(b"%PDF-1.4 test")
+
+            def _fake_ingest(args) -> int:
+                run_dir = Path(str(args.run_dir))
+                run_dir.mkdir(parents=True, exist_ok=True)
+                (run_dir / "ingest_report.json").write_text(
+                    '{"import_summary":{"added":1,"skipped":0,"conflicts":0,"failed":0},"import_outcomes":[]}',
+                    encoding="utf-8",
+                )
+                return 0
+
+            with patch.object(library, "run_ingest", side_effect=_fake_ingest), patch.object(
+                library, "file_lock", side_effect=library.FileLockTimeoutError("busy")
+            ):
+                result = library.run_import_workflow(uploaded_files=[pdf], topic="")
+
+            self.assertFalse(result["ok"])
+            self.assertEqual(result.get("index_stage", {}).get("status"), "conflict")
+            self.assertIn("updated_at", result.get("import_stage", {}))
+            self.assertIn("updated_at", result.get("clean_stage", {}))
+            self.assertIn("updated_at", result.get("index_stage", {}))
+
 
 if __name__ == "__main__":
     unittest.main()
