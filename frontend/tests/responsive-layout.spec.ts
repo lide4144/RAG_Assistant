@@ -34,6 +34,18 @@ test('core pages remain usable on mobile viewport', async ({ page }) => {
   await page.route('**/api/admin/llm-config', async (route) => {
     await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ configured: false }) });
   });
+  await page.route('**/api/admin/pipeline-config', async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        configured: true,
+        saved: { marker_tuning: { recognition_batch_size: 2, detector_batch_size: 2, layout_batch_size: 2, ocr_error_batch_size: 1, table_rec_batch_size: 1, model_dtype: 'float16' } },
+        effective: { marker_tuning: { recognition_batch_size: 2, detector_batch_size: 2, layout_batch_size: 2, ocr_error_batch_size: 1, table_rec_batch_size: 1, model_dtype: 'float16' } },
+        effective_source: { marker_tuning: {} }
+      })
+    });
+  });
 
   await page.route('**/api/library/import-latest', async (route) => {
     await route.fulfill({
@@ -56,11 +68,11 @@ test('core pages remain usable on mobile viewport', async ({ page }) => {
 
   await page.goto('http://127.0.0.1:3000/chat');
   await expect(page.locator('[data-testid="nav-chat-link"]:visible').first()).toBeVisible();
-  await expect(page.getByRole('heading', { name: '知识问答与证据追踪' })).toBeVisible();
+  await expect(page.getByTestId('chat-shell-title')).toBeVisible();
 
   await page.locator('[data-testid="nav-pipeline-link"]:visible').first().click();
-  await expect(page.getByRole('heading', { name: '知识库构建流水线' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: '知识库处理进度中心' })).toBeVisible();
 
   await page.locator('[data-testid="nav-settings-link"]:visible').first().click();
-  await expect(page.getByRole('heading', { name: '统一配置 LLM 连接' })).toBeVisible();
+  await expect(page.getByTestId('settings-shell-title')).toBeVisible();
 });

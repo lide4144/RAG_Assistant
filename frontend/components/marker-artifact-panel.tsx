@@ -16,8 +16,8 @@ type MarkerArtifactPanelProps = {
 };
 
 const groupLabels: Record<'indexes' | 'processed', string> = {
-  indexes: 'Index Artifacts',
-  processed: 'Processed Artifacts'
+  indexes: '索引文件',
+  processed: '处理结果'
 };
 
 const statusTone: Record<MarkerArtifactItem['status'], string> = {
@@ -49,7 +49,7 @@ export function MarkerArtifactPanel({
       <div className="grid gap-0 lg:grid-cols-[1.2fr_1.8fr]">
         <div className="relative overflow-hidden border-b border-[#d7d0c7] p-5 lg:border-b-0 lg:border-r">
           <div className="absolute inset-x-0 top-0 h-20 bg-[radial-gradient(circle_at_top_left,rgba(167,139,84,0.22),transparent_65%)]" />
-          <p className="relative text-[11px] font-semibold uppercase tracking-[0.28em] text-[#7a6341]">Marker Watch</p>
+          <p className="relative text-[11px] font-semibold uppercase tracking-[0.28em] text-[#7a6341]">导入健康检查</p>
           <div
             className={`relative mt-4 rounded-[22px] border px-4 py-4 ${
               degraded ? 'border-amber-300 bg-[rgba(255,244,214,0.8)]' : 'border-emerald-200 bg-[rgba(236,253,245,0.86)]'
@@ -60,12 +60,12 @@ export function MarkerArtifactPanel({
                 <ShieldAlert className="h-4 w-4" />
               </div>
               <div>
-                <p className="text-sm font-semibold text-[#2f2417]">{degraded ? 'Import degraded but completed' : 'Import path healthy'}</p>
+                <p className="text-sm font-semibold text-[#2f2417]">{degraded ? '已触发兜底导入，但任务已完成' : '导入链路正常'}</p>
                 <p className="mt-1 text-xs leading-5 text-[#6c5840]">{fallbackReason || '最近一次导入没有暴露 Marker 降级原因。'}</p>
               </div>
             </div>
             <div className="mt-3 grid gap-2 text-[11px] text-[#5c4a35]">
-              <p>Fallback path: {fallbackPath || '-'}</p>
+              <p>兜底路径：{fallbackPath || '-'}</p>
               <p>{confidenceNote || '暂无可信度附注。'}</p>
             </div>
           </div>
@@ -75,11 +75,13 @@ export function MarkerArtifactPanel({
         <div className="p-5">
           <div className="mb-4 flex items-center justify-between gap-3">
             <div>
-              <p className="text-[11px] font-semibold uppercase tracking-[0.28em] text-[#7a6341]">Artifact Management</p>
-              <h3 className="mt-1 text-xl font-semibold tracking-tight text-[#2c2218]">Index / processed 产物总览</h3>
+              <p className="text-[11px] font-semibold uppercase tracking-[0.28em] text-[#7a6341]">生成文件管理</p>
+              <h3 data-testid="artifact-panel-title" className="mt-1 text-xl font-semibold tracking-tight text-[#2c2218]">
+                索引文件与处理结果总览
+              </h3>
             </div>
             <div className="rounded-full border border-[#d7d0c7] bg-white/70 px-3 py-1 text-[11px] font-medium text-[#6c5840]">
-              {items.length} items
+              共 {items.length} 项
             </div>
           </div>
 
@@ -101,11 +103,11 @@ export function MarkerArtifactPanel({
                           <div>
                             <p className="text-sm font-semibold text-[#2c2218]">{item.file_name}</p>
                             <p className="mt-1 text-[11px] text-[#6c5840]">
-                              {item.artifact_type} · {item.related_stage} · {item.updated_at || 'unknown time'}
+                              {item.artifact_type} · {item.related_stage} · {item.updated_at || '时间未知'}
                             </p>
                           </div>
                           <span className={`rounded-full border px-2 py-1 text-[10px] font-semibold uppercase ${statusTone[item.status]}`}>
-                            {item.status}
+                            {item.status === 'healthy' ? '正常' : item.status === 'missing' ? '缺失' : '待更新'}
                           </span>
                         </div>
                         <p className="mt-2 line-clamp-2 text-[11px] leading-5 text-[#6c5840]">{item.health_message || item.path}</p>
@@ -117,7 +119,7 @@ export function MarkerArtifactPanel({
                             className="inline-flex items-center gap-1 rounded-full border border-[#d7d0c7] bg-white px-3 py-1.5 text-[11px] font-medium text-[#4e3e2c]"
                           >
                             <Copy className="h-3.5 w-3.5" />
-                            Copy path
+                            复制路径
                           </button>
                           <button
                             type="button"
@@ -126,7 +128,7 @@ export function MarkerArtifactPanel({
                             className="inline-flex items-center gap-1 rounded-full border border-[#d5c2a0] bg-[#f7ecd8] px-3 py-1.5 text-[11px] font-medium text-[#6a4d1f]"
                           >
                             <RotateCcw className="h-3.5 w-3.5" />
-                            Rebuild
+                            重建
                           </button>
                           <button
                             type="button"
@@ -135,7 +137,7 @@ export function MarkerArtifactPanel({
                             className="inline-flex items-center gap-1 rounded-full border border-[#e8c5bf] bg-[#fff1ee] px-3 py-1.5 text-[11px] font-medium text-[#9a3d2e]"
                           >
                             <Trash2 className="h-3.5 w-3.5" />
-                            Delete
+                            删除
                           </button>
                         </div>
                       </div>

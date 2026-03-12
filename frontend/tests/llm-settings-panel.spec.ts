@@ -76,6 +76,10 @@ async function mockRuntimePanels(page: Page) {
   });
 }
 
+async function openAdvancedSettings(page: Page) {
+  await page.getByTestId('advanced-settings-toggle').click();
+}
+
 test('llm settings page stays usable when llm-config returns non-json html', async ({ page }) => {
   await mockRuntimePanels(page);
   await page.route('**/api/admin/llm-config', async (route) => {
@@ -93,7 +97,7 @@ test('llm settings page stays usable when llm-config returns non-json html', asy
 
   await page.goto('http://127.0.0.1:3000/settings');
 
-  await expect(page.getByRole('heading', { name: '统一配置 LLM 连接' })).toBeVisible();
+  await expect(page.getByTestId('settings-shell-title')).toBeVisible();
   await expect(page.getByTestId('llm-ready-text')).toBeVisible();
   expect(pageErrors.join('\n')).not.toContain("Unexpected token '<'");
 });
@@ -165,19 +169,26 @@ test('llm settings panel can save and reload full-stage config', async ({ page }
   });
 
   await page.route('**/api/admin/detect-models', async (route) => {
+    const payload = route.request().postDataJSON() as { api_base?: string };
+    const apiBase = payload.api_base ?? '';
+    let models = [{ id: 'gpt-4o-mini' }, { id: 'gpt-4.1-mini' }];
+    if (apiBase.includes('embedding.example.com')) {
+      models = [{ id: 'bge-m3' }, { id: 'bge-large-zh-v1.5' }];
+    } else if (apiBase.includes('rerank.example.com')) {
+      models = [{ id: 'Qwen/Qwen3-Reranker-8B' }, { id: 'Qwen/Qwen3-Reranker-4B' }];
+    }
     await route.fulfill({
       status: 200,
       contentType: 'application/json',
       body: JSON.stringify({
-        raw_count: 2,
-        models: [{ id: 'gpt-4o-mini' }, { id: 'gpt-4.1-mini' }]
+        raw_count: models.length,
+        models
       })
     });
   });
 
   await page.goto('http://127.0.0.1:3000/settings');
-  await expect(page.getByRole('heading', { name: '统一配置 LLM 连接' })).toBeVisible();
-  await expect(page.getByText('统一配置 LLM 连接')).toBeVisible();
+  await expect(page.getByTestId('settings-shell-title')).toBeVisible();
 
   await page.getByTestId('llm-answer-api-base-input').fill('https://answer.example.com/v1');
   await page.getByTestId('llm-answer-api-key-input').fill('sk-answer');
@@ -187,6 +198,8 @@ test('llm settings panel can save and reload full-stage config', async ({ page }
   await page.getByTestId('llm-embedding-api-base-input').fill('https://embedding.example.com/v1');
   await page.getByTestId('llm-embedding-api-key-input').fill('sk-embedding');
   await page.getByTestId('llm-embedding-detect-btn').click();
+  await expect(page.getByTestId('llm-embedding-model-select')).toContainText('bge-m3');
+  await page.getByTestId('llm-embedding-model-select').selectOption('bge-m3');
   await expect(page.getByTestId('llm-embedding-model-select')).toHaveValue('bge-m3');
 
   await page.getByTestId('llm-rerank-api-base-input').fill('https://rerank.example.com/v1');
@@ -244,7 +257,7 @@ test('llm settings panel handles legacy three-stage payload and can still save f
   });
 
   await page.goto('http://127.0.0.1:3000/settings');
-  await expect(page.getByRole('heading', { name: '统一配置 LLM 连接' })).toBeVisible();
+  await expect(page.getByTestId('settings-shell-title')).toBeVisible();
 
   await expect(page.getByTestId('llm-answer-api-base-input')).toHaveValue('https://answer.legacy.example.com/v1');
   await expect(page.getByTestId('llm-embedding-api-base-input')).toHaveValue('http://127.0.0.1:11434/v1');
@@ -284,7 +297,7 @@ test('llm settings panel shows auth failed message when detect returns AUTH_FAIL
   });
 
   await page.goto('http://127.0.0.1:3000/settings');
-  await expect(page.getByRole('heading', { name: '统一配置 LLM 连接' })).toBeVisible();
+  await expect(page.getByTestId('settings-shell-title')).toBeVisible();
 
   await page.getByTestId('llm-answer-api-base-input').fill('https://api.example.com/v1');
   await page.getByTestId('llm-answer-api-key-input').fill('sk-invalid');
@@ -330,7 +343,7 @@ test('llm settings panel shows stage-specific save error for rewrite and keeps o
   });
 
   await page.goto('http://127.0.0.1:3000/settings');
-  await expect(page.getByRole('heading', { name: '统一配置 LLM 连接' })).toBeVisible();
+  await expect(page.getByTestId('settings-shell-title')).toBeVisible();
 
   await page.getByTestId('llm-answer-api-key-input').fill('sk-answer');
   await page.getByTestId('llm-answer-detect-btn').click();
@@ -355,7 +368,7 @@ test('llm settings provider preset auto-fills api base and allows manual overrid
   });
 
   await page.goto('http://127.0.0.1:3000/settings');
-  await expect(page.getByRole('heading', { name: '统一配置 LLM 连接' })).toBeVisible();
+  await expect(page.getByTestId('settings-shell-title')).toBeVisible();
 
   await page.getByTestId('llm-answer-provider-select').selectOption({ label: 'Ollama' });
   await expect(page.getByTestId('llm-answer-provider-select')).toHaveValue('ollama');
@@ -376,7 +389,7 @@ test('llm settings api key visibility toggle switches type and keeps value', asy
   });
 
   await page.goto('http://127.0.0.1:3000/settings');
-  await expect(page.getByRole('heading', { name: '统一配置 LLM 连接' })).toBeVisible();
+  await expect(page.getByTestId('settings-shell-title')).toBeVisible();
 
   const apiKeyInput = page.getByTestId('llm-answer-api-key-input');
   await apiKeyInput.fill('sk-keep-value');
@@ -473,7 +486,8 @@ test('settings page supports marker tuning save and runtime overview panel', asy
   });
 
   await page.goto('http://127.0.0.1:3000/settings');
-  await expect(page.getByTestId('runtime-overview-panel')).toContainText('当前生效配置概览');
+  await expect(page.getByTestId('runtime-overview-panel')).toContainText('核心模型选择');
+  await openAdvancedSettings(page);
   await page.getByTestId('pipeline-recognition_batch_size-input').fill('8');
   await page.getByTestId('pipeline-model-dtype-select').selectOption('float32');
   await page.getByTestId('pipeline-8gb-preset-btn').click();
@@ -562,6 +576,7 @@ test('settings page keeps marker tuning inputs when backend returns field_errors
 
   await page.goto('http://127.0.0.1:3000/settings');
   await expect.poll(() => pipelineConfigLoaded).toBeTruthy();
+  await openAdvancedSettings(page);
   await page.getByTestId('pipeline-detector_batch_size-input').fill('5');
   await page.getByTestId('pipeline-layout_batch_size-input').fill('4');
   await page.getByTestId('pipeline-model-dtype-select').selectOption('float32');
@@ -586,12 +601,12 @@ test('settings page shows unsaved badge and supports override toggle for inherit
   });
 
   await page.goto('http://127.0.0.1:3000/settings');
-  await expect(page.getByRole('heading', { name: '统一配置 LLM 连接' })).toBeVisible();
+  await expect(page.getByTestId('settings-shell-title')).toBeVisible();
 
   await page.getByTestId('llm-answer-api-base-input').fill('https://override-answer.example.com/v1');
   await expect(page.getByText('⚠️ 未保存').first()).toBeVisible();
 
-  const rewriteCard = page.locator('article').filter({ hasText: 'Rewrite 模型' }).first();
+  const rewriteCard = page.locator('article').filter({ has: page.getByTestId('llm-rewrite-detect-btn') }).first();
   await expect(rewriteCard.getByText('🔄 已继承全局配置')).toBeVisible();
   await rewriteCard.getByRole('checkbox', { name: '独立配置 (Override)' }).check();
   await expect(page.getByTestId('llm-rewrite-api-base-input')).toBeVisible();
@@ -698,10 +713,10 @@ test('settings page saves marker llm service config and shows runtime summary', 
   });
 
   await page.goto('http://127.0.0.1:3000/settings');
-  await expect(page.getByTestId('marker-llm-panel')).toContainText('Marker LLM Services');
+  await expect(page.getByTestId('marker-llm-panel')).toContainText('导入增强服务');
   await expect(page.getByTestId('runtime-overview-panel')).toContainText('marker parse timeout');
   await expect(page.getByText('openai_model:')).toBeVisible();
-  await expect(page.getByText('最近导入: 降级完成')).toBeVisible();
+  await expect(page.getByText('最近导入：触发兜底')).toBeVisible();
 });
 
 test('settings page posts marker llm config and refreshes runtime summary after save', async ({ page }) => {
@@ -879,6 +894,7 @@ test('settings page posts marker llm config and refreshes runtime summary after 
 
   await page.goto('http://127.0.0.1:3000/settings');
   await expect(page.getByTestId('llm-ready-text')).toBeVisible();
+  await openAdvancedSettings(page);
   await page.getByTestId('marker-llm-use-toggle').check();
   await page.getByTestId('marker-llm-service-select').selectOption('marker.services.openai.OpenAIService');
   await expect(page.getByLabel('OpenAI API Key')).toBeVisible();
@@ -1012,6 +1028,7 @@ test('settings page keeps marker llm inputs when backend returns field errors', 
 
   await page.goto('http://127.0.0.1:3000/settings');
   await expect(page.getByTestId('llm-ready-text')).toBeVisible();
+  await openAdvancedSettings(page);
   await expect(page.getByTestId('pipeline-detector_batch_size-input')).toHaveValue('2');
   await page.getByTestId('pipeline-detector_batch_size-input').fill('5');
   await expect(page.getByTestId('pipeline-detector_batch_size-input')).toHaveValue('5');
