@@ -22,6 +22,66 @@ DEFAULT_RAW_IMPORT_DIR = DATA_DIR / "raw" / "imported"
 DEFAULT_PROCESSED_DIR = DATA_DIR / "processed"
 
 
+def _normalize_item_name(value: str) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return "unknown-item"
+    return Path(text).name or text
+
+
+def _recent_items_from_files(
+    uploaded_files: list[Path],
+    *,
+    stage: str,
+    copied_names: set[str],
+    failed_reasons: dict[str, str],
+    active_name: str | None = None,
+) -> list[dict[str, str]]:
+    rows: list[dict[str, str]] = []
+    for path in uploaded_files[:6]:
+        name = path.name
+        if name in failed_reasons:
+            rows.append({"name": name, "state": "failed", "stage": stage, "message": failed_reasons[name]})
+            continue
+        if name not in copied_names:
+            rows.append({"name": name, "state": "queued", "stage": stage, "message": "等待校验"})
+            continue
+        rows.append(
+            {
+                "name": name,
+                "state": "running" if active_name and name == active_name else "queued",
+                "stage": stage,
+                "message": "正在处理" if active_name and name == active_name else "等待当前阶段",
+            }
+        )
+    return rows
+
+
+def _recent_items_from_outcomes(outcomes: Any, *, stage: str) -> list[dict[str, str]]:
+    if not isinstance(outcomes, list):
+        return []
+    rows: list[dict[str, str]] = []
+    for row in outcomes:
+        if not isinstance(row, dict):
+            continue
+        status = str(row.get("status", "")).strip().lower() or "running"
+        if status in {"added", "succeeded", "success", "completed", "imported", "skipped"}:
+            state = "succeeded"
+        elif status in {"failed", "error"}:
+            state = "failed"
+        else:
+            state = "running"
+        rows.append(
+            {
+                "name": _normalize_item_name(str(row.get("title") or row.get("source_uri") or row.get("paper_id") or "")),
+                "state": state,
+                "stage": stage,
+                "message": str(row.get("reason", status)).strip() or status,
+            }
+        )
+    return rows[:6]
+
+
 def load_papers(path: Path = DEFAULT_PAPERS_PATH) -> list[dict[str, Any]]:
     if not path.exists():
         return []
@@ -101,11 +161,43 @@ def run_import_workflow(
     uploaded_files: list[Path],
     topic: str,
     config_path: str = str(CONFIGS_DIR / "default.yaml"),
-    progress_callback: Callable[[int, int, str], None] | None = None,
+    progress_callback: Callable[[dict[str, Any]], None] | None = None,
 ) -> dict[str, Any]:
-    def _progress(step: int, total: int, message: str) -> None:
+    def _progress(event: dict[str, Any]) -> None:
         if progress_callback is not None:
-            progress_callback(step, total, message)
+            progress_callback(event)
+
+    total_files = len(uploaded_files)
+
+    def _emit_progress(
+        *,
+        stage: str,
+        stage_processed: int,
+        stage_total: int,
+        message: str,
+        batch_completed: int = 0,
+        batch_running: int = 0,
+        batch_failed: int = 0,
+        current_item_name: str | None = None,
+        recent_items: list[dict[str, str]] | None = None,
+    ) -> None:
+        _progress(
+            {
+                "stage": stage,
+                "current_stage": stage,
+                "processed": max(0, int(stage_processed)),
+                "total": max(0, int(stage_total)),
+                "stage_processed": max(0, int(stage_processed)),
+                "stage_total": max(0, int(stage_total)),
+                "message": message,
+                "batch_total": max(0, total_files),
+                "batch_completed": max(0, int(batch_completed)),
+                "batch_running": max(0, int(batch_running)),
+                "batch_failed": max(0, int(batch_failed)),
+                "current_item_name": current_item_name,
+                "recent_items": list(recent_items or []),
+            }
+        )
 
     if not uploaded_files:
         return {
@@ -123,11 +215,30 @@ def run_import_workflow(
     failed_count = 0
     failure_reasons: list[str] = []
     copied: list[Path] = []
-    _progress(1, 6, "检查上传文件")
+    _emit_progress(
+        stage="import_validate",
+        stage_processed=0,
+        stage_total=total_files,
+        message="检查上传文件",
+        batch_completed=0,
+        batch_running=min(1, total_files),
+        batch_failed=0,
+        current_item_name=uploaded_files[0].name if uploaded_files else None,
+        recent_items=_recent_items_from_files(
+            uploaded_files,
+            stage="import_validate",
+            copied_names=set(),
+            failed_reasons={},
+            active_name=uploaded_files[0].name if uploaded_files else None,
+        ),
+    )
+    failed_reason_map: dict[str, str] = {}
     for src in uploaded_files:
         if not src.exists() or src.suffix.lower() != ".pdf":
             failed_count += 1
-            failure_reasons.append(f"{src.name}: 仅支持 PDF 文件")
+            reason = f"{src.name}: 仅支持 PDF 文件"
+            failure_reasons.append(reason)
+            failed_reason_map[src.name] = reason
             continue
         dst = DEFAULT_RAW_IMPORT_DIR / src.name
         if dst.exists():
@@ -135,6 +246,26 @@ def run_import_workflow(
         shutil.copyfile(src, dst)
         copied.append(dst)
         success_count += 1
+
+    copied_names = {path.name for path in copied}
+    active_name = copied[0].name if copied else None
+    _emit_progress(
+        stage="import_prepare",
+        stage_processed=len(copied),
+        stage_total=max(1, len(copied)),
+        message="准备导入批次",
+        batch_completed=0,
+        batch_running=min(1, len(copied)),
+        batch_failed=failed_count,
+        current_item_name=active_name,
+        recent_items=_recent_items_from_files(
+            uploaded_files,
+            stage="import_prepare",
+            copied_names=copied_names,
+            failed_reasons=failed_reason_map,
+            active_name=active_name,
+        ),
+    )
 
     if not copied:
         return {
@@ -149,7 +280,6 @@ def run_import_workflow(
     with tempfile.TemporaryDirectory() as tmp:
         input_dir = Path(tmp) / "input"
         input_dir.mkdir(parents=True, exist_ok=True)
-        _progress(2, 6, "准备导入批次")
         for path in copied:
             shutil.copyfile(path, input_dir / path.name)
 
@@ -164,7 +294,23 @@ def run_import_workflow(
             run_dir=str(ingest_run_dir),
             lock_timeout_sec=10.0,
         )
-        _progress(3, 6, "执行入库与清洗")
+        _emit_progress(
+            stage="import_clean",
+            stage_processed=0,
+            stage_total=max(1, len(copied)),
+            message="执行入库与清洗",
+            batch_completed=0,
+            batch_running=min(1, len(copied)),
+            batch_failed=failed_count,
+            current_item_name=active_name,
+            recent_items=_recent_items_from_files(
+                uploaded_files,
+                stage="import_clean",
+                copied_names=copied_names,
+                failed_reasons=failed_reason_map,
+                active_name=active_name,
+            ),
+        )
         ingest_rc = run_ingest(ingest_args)
         ingest_finished_at = time.time()
         ingest_report: dict[str, Any] = {}
@@ -199,7 +345,23 @@ def run_import_workflow(
                     "message": "导入失败，请检查 PDF 内容是否可解析。",
                 }
 
-        _progress(4, 6, "准备知识库")
+        import_summary = ingest_report.get("import_summary")
+        if not isinstance(import_summary, dict):
+            import_summary = {}
+        import_outcomes = ingest_report.get("import_outcomes", [])
+        terminal_completed = int(import_summary.get("added", 0) or 0) + int(import_summary.get("skipped", 0) or 0)
+        terminal_failed = int(import_summary.get("failed", 0) or 0)
+        _emit_progress(
+            stage="index_build",
+            stage_processed=terminal_completed + terminal_failed,
+            stage_total=max(1, len(copied)),
+            message="准备知识库",
+            batch_completed=terminal_completed,
+            batch_running=0,
+            batch_failed=terminal_failed,
+            current_item_name=None,
+            recent_items=_recent_items_from_outcomes(import_outcomes, stage="index_build"),
+        )
         index_started = time.perf_counter()
         index_status = "success"
         try:
@@ -268,7 +430,17 @@ def run_import_workflow(
         index_finished_at = time.time()
 
     if topic_name:
-        _progress(5, 6, "更新专题映射")
+        _emit_progress(
+            stage="topic_assign",
+            stage_processed=terminal_completed + terminal_failed,
+            stage_total=max(1, len(copied)),
+            message="更新专题映射",
+            batch_completed=terminal_completed,
+            batch_running=0,
+            batch_failed=terminal_failed,
+            current_item_name=None,
+            recent_items=_recent_items_from_outcomes(import_outcomes, stage="topic_assign"),
+        )
         papers = load_papers()
         paper_paths = {Path(row.get("path", "")).name: str(row.get("paper_id", "")) for row in papers}
         topics = load_topics()
@@ -278,17 +450,29 @@ def run_import_workflow(
                 topics = assign_topic(topics, topic_name, pid)
         save_topics(topics)
 
-    _progress(6, 6, "导入完成")
+    recent_items = _recent_items_from_outcomes(import_outcomes, stage="done")
+    _emit_progress(
+        stage="done",
+        stage_processed=max(1, len(copied)),
+        stage_total=max(1, len(copied)),
+        message="导入完成",
+        batch_completed=terminal_completed,
+        batch_running=0,
+        batch_failed=terminal_failed,
+        current_item_name=None,
+        recent_items=recent_items,
+    )
     return {
         "ok": True,
         "success_count": success_count,
         "failed_count": failed_count,
         "failure_reasons": failure_reasons,
-        "import_summary": ingest_report.get("import_summary", {}),
+        "import_summary": import_summary,
         "fallback_reason": ingest_report.get("fallback_reason"),
         "fallback_path": ingest_report.get("fallback_path"),
         "confidence_note": ingest_report.get("confidence_note"),
-        "import_outcomes": ingest_report.get("import_outcomes", []),
+        "import_outcomes": import_outcomes,
+        "recent_items": recent_items,
         "import_stage": {
             "updated_at": datetime.fromtimestamp(ingest_finished_at, timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
         },

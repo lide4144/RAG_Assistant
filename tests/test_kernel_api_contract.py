@@ -256,6 +256,11 @@ class KernelApiContractTests(unittest.TestCase):
                 self.assertEqual(result.pipeline_stages[2].updated_at, "2026-03-06T00:00:02Z")
                 self.assertEqual(result.stage_updated_at["import"], "2026-03-06T00:00:01Z")
                 self.assertEqual(result.stage_updated_at["index"], "2026-03-06T00:00:02Z")
+                self.assertEqual(result.batch_total, 4)
+                self.assertEqual(result.batch_completed, 3)
+                self.assertEqual(result.batch_failed, 1)
+                self.assertEqual(len(result.recent_items), 1)
+                self.assertEqual(result.recent_items[0].state, "failed")
 
     def test_marker_artifacts_compare_against_related_stage_time(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -310,10 +315,45 @@ class KernelApiContractTests(unittest.TestCase):
             upload = Path(tmp) / "demo.pdf"
             upload.write_bytes(b"%PDF-1.4\n")
 
-            with patch(
-                "app.kernel_api.run_import_workflow",
-                return_value={"ok": True, "message": "导入完成", "success_count": 1, "failed_count": 0},
-            ):
+            def _fake_import_workflow(*, progress_callback=None, **_kwargs):
+                if callable(progress_callback):
+                    progress_callback(
+                        {
+                            "stage": "import_clean",
+                            "processed": 1,
+                            "total": 3,
+                            "stage_processed": 1,
+                            "stage_total": 3,
+                            "message": "正在处理 demo.pdf",
+                            "batch_total": 3,
+                            "batch_completed": 1,
+                            "batch_running": 1,
+                            "batch_failed": 0,
+                            "current_stage": "import_clean",
+                            "current_item_name": "demo.pdf",
+                            "recent_items": [
+                                {"name": "demo.pdf", "state": "running", "stage": "import_clean", "message": "抽取正文"},
+                                {"name": "beta.pdf", "state": "queued", "stage": "import_clean", "message": "等待处理"},
+                            ],
+                        }
+                    )
+                return {
+                    "ok": True,
+                    "message": "导入完成",
+                    "success_count": 1,
+                    "failed_count": 0,
+                    "import_summary": {"added": 1, "skipped": 1, "failed": 1, "total_candidates": 3},
+                    "recent_items": [
+                        {"name": "demo.pdf", "state": "succeeded", "stage": "done", "message": "完成"},
+                        {"name": "broken.pdf", "state": "failed", "stage": "done", "message": "bad pdf"},
+                    ],
+                    "import_outcomes": [
+                        {"source_uri": "demo.pdf", "status": "added"},
+                        {"source_uri": "broken.pdf", "status": "failed", "reason": "bad pdf"},
+                    ],
+                }
+
+            with patch("app.kernel_api.run_import_workflow", side_effect=_fake_import_workflow):
                 started = _start_library_import_task(
                     task_id="task_library_import_test",
                     upload_paths=[upload],
@@ -329,6 +369,14 @@ class KernelApiContractTests(unittest.TestCase):
                 self.assertEqual(current.state, "succeeded")
                 self.assertIsNotNone(current.result)
                 self.assertEqual(current.result.get("success_count"), 1)
+                self.assertIsNotNone(current.progress)
+                assert current.progress is not None
+                self.assertEqual(current.progress.batch_total, 3)
+                self.assertEqual(current.progress.batch_completed, 2)
+                self.assertEqual(current.progress.batch_failed, 1)
+                self.assertEqual(current.progress.current_stage, "done")
+                self.assertEqual(len(current.progress.recent_items), 2)
+                self.assertEqual(current.progress.recent_items[1].state, "failed")
 
     def test_library_import_endpoint_returns_accepted_task_immediately(self) -> None:
         with patch("app.kernel_api.run_import_workflow", side_effect=lambda **_: {"ok": True, "message": "导入完成"}):

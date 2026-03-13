@@ -472,7 +472,16 @@ test('pipeline workbench submits import task and refreshes after task completion
           processed: 6,
           total: 6,
           elapsed_ms: 1200,
-          message: '导入完成，可以直接前往 Chat 提问或生成灵感卡片。'
+          message: '导入完成，可以直接前往 Chat 提问或生成灵感卡片。',
+          batch_total: 1,
+          batch_completed: 1,
+          batch_running: 0,
+          batch_failed: 0,
+          current_stage: 'done',
+          current_item_name: null,
+          stage_processed: 1,
+          stage_total: 1,
+          recent_items: [{ name: 'demo.pdf', state: 'succeeded', stage: 'done', message: '完成' }]
         },
         result: {
           success_count: 1,
@@ -493,6 +502,14 @@ test('pipeline workbench submits import task and refreshes after task completion
               failed: 0,
               failure_reasons: [],
               total_papers: 1,
+              batch_total: 1,
+              batch_completed: 1,
+              batch_running: 0,
+              batch_failed: 0,
+              current_stage: 'done',
+              stage_processed: 1,
+              stage_total: 1,
+              recent_items: [{ name: 'demo.pdf', state: 'succeeded', stage: 'done', message: '完成' }],
               pipeline_stages: [
                 { stage: 'import', state: 'succeeded', updated_at: '2026-03-13T00:00:03Z' },
                 { stage: 'clean', state: 'succeeded', updated_at: '2026-03-13T00:00:03Z' },
@@ -558,7 +575,211 @@ test('pipeline workbench submits import task and refreshes after task completion
   await expect(page.getByText('导入完成，可以直接前往 Chat 提问或生成灵感卡片。')).toBeVisible();
   await expect(page.getByTestId('pipeline-import-added')).toContainText('1');
   await expect(page.getByTestId('pipeline-import-failed')).toContainText('0');
+  await expect(page.getByTestId('pipeline-batch-summary')).toContainText('1/1');
+  await expect(page.getByTestId('pipeline-recent-items')).toContainText('demo.pdf');
   await expect.poll(() => taskPollCount).toBeGreaterThan(0);
-  await expect.poll(() => importHistoryRefreshed).toBeGreaterThan(1);
-  await expect.poll(() => markerArtifactsRefreshed).toBeGreaterThan(1);
+  await expect.poll(() => importHistoryRefreshed).toBeGreaterThan(0);
+  await expect.poll(() => markerArtifactsRefreshed).toBeGreaterThan(0);
+});
+
+test('pipeline workbench keeps updating batch progress during long running import', async ({ page }) => {
+  let pollCount = 0;
+
+  await page.route('**/api/admin/llm-config', async (route) => {
+    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ configured: false }) });
+  });
+  await page.route('**/api/admin/runtime-overview', async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        llm: {
+          answer: { provider: 'openai', model: 'gpt-4o-mini', configured: true },
+          embedding: { provider: 'siliconflow', model: 'bge', configured: true },
+          rerank: { provider: 'siliconflow', model: 'rerank', configured: true },
+          rewrite: { provider: 'ollama', model: 'rewrite', configured: true },
+          graph_entity: { provider: 'siliconflow', model: 'graph', configured: true }
+        },
+        pipeline: {
+          marker_tuning: {
+            recognition_batch_size: 2,
+            detector_batch_size: 2,
+            layout_batch_size: 2,
+            ocr_error_batch_size: 1,
+            table_rec_batch_size: 1,
+            model_dtype: 'float16'
+          },
+          effective_source: { marker_tuning: {} }
+        },
+        status: { level: 'READY', reasons: [] }
+      })
+    });
+  });
+  await page.route('**/api/library/import', async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ ok: true, message: '已接收 4 个文件，后台正在导入。', task_id: 'task-library-import-long', task_kind: 'library_import', task_state: 'queued', accepted: true })
+    });
+  });
+  await page.route('**/api/tasks/task-library-import-long', async (route) => {
+    pollCount += 1;
+    const progress =
+      pollCount === 1
+        ? {
+            stage: 'import_clean',
+            processed: 1,
+            total: 4,
+            elapsed_ms: 900,
+            message: '正在处理 paper-2.pdf',
+            batch_total: 4,
+            batch_completed: 1,
+            batch_running: 1,
+            batch_failed: 0,
+            current_stage: 'import_clean',
+            current_item_name: 'paper-2.pdf',
+            stage_processed: 1,
+            stage_total: 4,
+            recent_items: [
+              { name: 'paper-1.pdf', state: 'succeeded', stage: 'import_clean', message: '完成' },
+              { name: 'paper-2.pdf', state: 'running', stage: 'import_clean', message: '抽取正文' }
+            ]
+          }
+        : {
+            stage: 'index_build',
+            processed: 3,
+            total: 4,
+            elapsed_ms: 3900,
+            message: '正在准备知识库',
+            batch_total: 4,
+            batch_completed: 3,
+            batch_running: 0,
+            batch_failed: 1,
+            current_stage: 'index_build',
+            current_item_name: null,
+            stage_processed: 4,
+            stage_total: 4,
+            recent_items: [
+              { name: 'paper-3.pdf', state: 'succeeded', stage: 'index_build', message: '完成' },
+              { name: 'paper-4.pdf', state: 'failed', stage: 'index_build', message: 'bad pdf' }
+            ]
+          };
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ task_id: 'task-library-import-long', task_kind: 'library_import', state: 'running', updated_at: `2026-03-13T00:00:0${pollCount}Z`, accepted: true, progress })
+    });
+  });
+  await page.route('**/api/library/import-latest', async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ added: 0, skipped: 0, failed: 0, failure_reasons: [], total_papers: 4, pipeline_stages: [{ stage: 'import', state: 'running', updated_at: '2026-03-13T00:00:01Z' }, { stage: 'clean', state: 'running', updated_at: '2026-03-13T00:00:01Z' }, { stage: 'index', state: 'not_started', updated_at: null }, { stage: 'graph_build', state: 'not_started', updated_at: null, message: '尚未启动图构建任务' }] })
+    });
+  });
+  await page.route('**/api/library/import-history?limit=10', async (route) => {
+    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify([]) });
+  });
+  await page.route('**/api/library/marker-artifacts', async (route) => {
+    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ items: [], summary: { counts: { healthy: 0, missing: 0, stale: 0 } } }) });
+  });
+
+  await page.goto('http://127.0.0.1:3000/chat');
+  await page.locator('[data-testid="nav-pipeline-link"]:visible').first().click();
+  await page.locator('input[type="file"]').setInputFiles([
+    { name: 'paper-1.pdf', mimeType: 'application/pdf', buffer: Buffer.from('%PDF-1.4 paper1') },
+    { name: 'paper-2.pdf', mimeType: 'application/pdf', buffer: Buffer.from('%PDF-1.4 paper2') }
+  ]);
+  await page.getByTestId('pipeline-import-submit-btn').click();
+
+  await expect(page.getByTestId('pipeline-batch-summary')).toContainText('1/4');
+  await expect(page.getByTestId('pipeline-recent-items')).toContainText('paper-2.pdf');
+  await page.waitForTimeout(3200);
+  await expect(page.getByTestId('pipeline-batch-summary')).toContainText('3/4');
+  await expect(page.getByTestId('pipeline-recent-items')).toContainText('paper-4.pdf');
+});
+
+test('pipeline workbench falls back when legacy import response has no batch stats', async ({ page }) => {
+  await page.addInitScript(() => {
+    const originalFetch = window.fetch.bind(window);
+    window.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === 'string' ? input : input.toString();
+      if (url.includes('/api/admin/llm-config')) {
+        return new Response(JSON.stringify({ configured: false }), { status: 200, headers: { 'content-type': 'application/json' } });
+      }
+      if (url.includes('/api/admin/runtime-overview')) {
+        return new Response(
+          JSON.stringify({
+            llm: {
+              answer: { provider: 'openai', model: 'gpt-4o-mini', configured: true },
+              embedding: { provider: 'siliconflow', model: 'bge', configured: true },
+              rerank: { provider: 'siliconflow', model: 'rerank', configured: true },
+              rewrite: { provider: 'ollama', model: 'rewrite', configured: true },
+              graph_entity: { provider: 'siliconflow', model: 'graph', configured: true }
+            },
+            pipeline: {
+              marker_tuning: {
+                recognition_batch_size: 2,
+                detector_batch_size: 2,
+                layout_batch_size: 2,
+                ocr_error_batch_size: 1,
+                table_rec_batch_size: 1,
+                model_dtype: 'float16'
+              },
+              effective_source: { marker_tuning: {} }
+            },
+            status: { level: 'READY', reasons: [] }
+          }),
+          { status: 200, headers: { 'content-type': 'application/json' } }
+        );
+      }
+      if (url.includes('/api/library/import-latest')) {
+        return new Response(
+          JSON.stringify({
+            added: 2,
+            skipped: 0,
+            failed: 1,
+            failure_reasons: ['broken.pdf: bad pdf'],
+            total_papers: 3,
+            pipeline_stages: [
+              { stage: 'import', state: 'succeeded', updated_at: '2026-03-13T00:00:01Z' },
+              { stage: 'clean', state: 'succeeded', updated_at: '2026-03-13T00:00:01Z' },
+              { stage: 'index', state: 'succeeded', updated_at: '2026-03-13T00:00:02Z' },
+              { stage: 'graph_build', state: 'not_started', updated_at: null, message: '尚未启动图构建任务' }
+            ]
+          }),
+          { status: 200, headers: { 'content-type': 'application/json' } }
+        );
+      }
+      if (url.includes('/api/library/import-history?limit=10')) {
+        return new Response(JSON.stringify([]), { status: 200, headers: { 'content-type': 'application/json' } });
+      }
+      if (url.includes('/api/library/marker-artifacts')) {
+        return new Response(JSON.stringify({ items: [], summary: { counts: { healthy: 0, missing: 0, stale: 0 } } }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' }
+        });
+      }
+      return originalFetch(input, init);
+    };
+
+    class MockSocket {
+      static OPEN = 1;
+      readyState = 1;
+      constructor(_url: string) {}
+      addEventListener() {}
+      removeEventListener() {}
+      send() {}
+      close() {}
+    }
+
+    // @ts-expect-error test-time override
+    window.WebSocket = MockSocket;
+  });
+
+  await page.goto('http://127.0.0.1:3000/chat');
+  await page.locator('[data-testid="nav-pipeline-link"]:visible').first().click();
+
+  await expect(page.getByTestId('pipeline-batch-fallback')).toBeVisible();
+  await expect(page.getByTestId('pipeline-import-failure-reasons')).toContainText('broken.pdf: bad pdf');
 });

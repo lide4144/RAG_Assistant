@@ -188,12 +188,28 @@ class TaskErrorInfo(BaseModel):
     recovery: str
 
 
+class TaskProgressItem(BaseModel):
+    name: str
+    state: str
+    stage: str
+    message: str = ""
+
+
 class TaskProgressInfo(BaseModel):
     stage: str
     processed: int = 0
     total: int = 0
     elapsed_ms: int = 0
     message: str = ""
+    batch_total: int | None = None
+    batch_completed: int | None = None
+    batch_running: int | None = None
+    batch_failed: int | None = None
+    current_stage: str | None = None
+    current_item_name: str | None = None
+    stage_processed: int | None = None
+    stage_total: int | None = None
+    recent_items: list[TaskProgressItem] = Field(default_factory=list)
 
 
 class TaskStatusResponse(BaseModel):
@@ -249,6 +265,15 @@ class ImportLatestResultResponse(BaseModel):
     artifact_summary: dict[str, Any] = Field(default_factory=dict)
     parser_diagnostics: list[dict[str, Any]] = Field(default_factory=list)
     stage_updated_at: dict[str, str] = Field(default_factory=dict)
+    batch_total: int | None = None
+    batch_completed: int | None = None
+    batch_running: int | None = None
+    batch_failed: int | None = None
+    current_stage: str | None = None
+    current_item_name: str | None = None
+    stage_processed: int | None = None
+    stage_total: int | None = None
+    recent_items: list[TaskProgressItem] = Field(default_factory=list)
 
 
 class LibraryImportResponse(BaseModel):
@@ -864,6 +889,91 @@ def _extract_import_failure_reasons(report: dict[str, Any]) -> list[str]:
     return reasons
 
 
+def _safe_int(value: Any, default: int = 0) -> int:
+    try:
+        return int(value)
+    except Exception:
+        return default
+
+
+def _normalize_task_progress_items(rows: Any) -> list[TaskProgressItem]:
+    if not isinstance(rows, list):
+        return []
+    items: list[TaskProgressItem] = []
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        name = str(row.get("name", "")).strip()
+        if not name:
+            continue
+        items.append(
+            TaskProgressItem(
+                name=name,
+                state=str(row.get("state", "queued")).strip() or "queued",
+                stage=str(row.get("stage", "queued")).strip() or "queued",
+                message=str(row.get("message", "")).strip(),
+            )
+        )
+    return items
+
+
+def _build_task_progress(
+    *,
+    stage: str,
+    processed: int,
+    total: int,
+    elapsed_ms: int,
+    message: str,
+    batch_total: int | None = None,
+    batch_completed: int | None = None,
+    batch_running: int | None = None,
+    batch_failed: int | None = None,
+    current_stage: str | None = None,
+    current_item_name: str | None = None,
+    stage_processed: int | None = None,
+    stage_total: int | None = None,
+    recent_items: list[TaskProgressItem] | None = None,
+) -> TaskProgressInfo:
+    normalized_stage_processed = max(0, stage_processed if stage_processed is not None else processed)
+    normalized_stage_total = max(0, stage_total if stage_total is not None else total)
+    return TaskProgressInfo(
+        stage=stage,
+        processed=max(0, processed),
+        total=max(0, total),
+        elapsed_ms=max(0, elapsed_ms),
+        message=message,
+        batch_total=None if batch_total is None else max(0, batch_total),
+        batch_completed=None if batch_completed is None else max(0, batch_completed),
+        batch_running=None if batch_running is None else max(0, batch_running),
+        batch_failed=None if batch_failed is None else max(0, batch_failed),
+        current_stage=current_stage or stage,
+        current_item_name=current_item_name or None,
+        stage_processed=normalized_stage_processed,
+        stage_total=normalized_stage_total,
+        recent_items=list(recent_items or []),
+    )
+
+
+def _task_progress_from_event(event: dict[str, Any], *, elapsed_ms: int) -> TaskProgressInfo:
+    stage = str(event.get("stage", "running")).strip() or "running"
+    return _build_task_progress(
+        stage=stage,
+        processed=max(0, _safe_int(event.get("processed", event.get("stage_processed", 0)), 0)),
+        total=max(0, _safe_int(event.get("total", event.get("stage_total", 0)), 0)),
+        elapsed_ms=elapsed_ms,
+        message=str(event.get("message", "")).strip(),
+        batch_total=_safe_int(event.get("batch_total"), 0) if event.get("batch_total") is not None else None,
+        batch_completed=_safe_int(event.get("batch_completed"), 0) if event.get("batch_completed") is not None else None,
+        batch_running=_safe_int(event.get("batch_running"), 0) if event.get("batch_running") is not None else None,
+        batch_failed=_safe_int(event.get("batch_failed"), 0) if event.get("batch_failed") is not None else None,
+        current_stage=str(event.get("current_stage", stage)).strip() or stage,
+        current_item_name=str(event.get("current_item_name", "")).strip() or None,
+        stage_processed=_safe_int(event.get("stage_processed"), 0) if event.get("stage_processed") is not None else None,
+        stage_total=_safe_int(event.get("stage_total"), 0) if event.get("stage_total") is not None else None,
+        recent_items=_normalize_task_progress_items(event.get("recent_items")),
+    )
+
+
 def _latest_task(task_kind: TaskKind) -> TaskStatusResponse | None:
     with _TASKS_LOCK:
         candidates = [task for task in _TASKS.values() if task.task_kind == task_kind]
@@ -907,7 +1017,24 @@ def _start_library_import_task(*, task_id: str, upload_paths: list[Path], topic:
         state="queued",
         created_at=now,
         updated_at=now,
-        progress=TaskProgressInfo(stage="queued", processed=0, total=6, elapsed_ms=0, message="论文导入任务已排队"),
+        progress=_build_task_progress(
+            stage="queued",
+            processed=0,
+            total=max(1, len(upload_paths)),
+            elapsed_ms=0,
+            message="论文导入任务已排队",
+            batch_total=len(upload_paths),
+            batch_completed=0,
+            batch_running=0,
+            batch_failed=0,
+            current_stage="queued",
+            stage_processed=0,
+            stage_total=len(upload_paths),
+            recent_items=[
+                TaskProgressItem(name=path.name, state="queued", stage="queued", message="等待处理")
+                for path in upload_paths[:6]
+            ],
+        ),
     )
     _save_task(task)
     cancel_event = threading.Event()
@@ -925,37 +1052,40 @@ def _start_library_import_task(*, task_id: str, upload_paths: list[Path], topic:
                 local.progress = TaskProgressInfo(
                     stage="running",
                     processed=0,
-                    total=6,
+                    total=max(1, len(upload_paths)),
                     elapsed_ms=0,
                     message="论文导入任务已启动",
+                    batch_total=len(upload_paths),
+                    batch_completed=0,
+                    batch_running=min(1, len(upload_paths)),
+                    batch_failed=0,
+                    current_stage="running",
+                    current_item_name=upload_paths[0].name if upload_paths else None,
+                    stage_processed=0,
+                    stage_total=len(upload_paths),
+                    recent_items=[
+                        TaskProgressItem(
+                            name=path.name,
+                            state="running" if idx == 0 else "queued",
+                            stage="import_validate",
+                            message="等待导入开始" if idx else "开始检查文件",
+                        )
+                        for idx, path in enumerate(upload_paths[:6])
+                    ],
                 )
                 _TASKS[task_id] = local
 
-            def on_progress(step: int, total: int, message: str) -> None:
+            def on_progress(event: dict[str, Any]) -> None:
                 nonlocal latest_stage
                 if cancel_event.is_set():
                     raise _TaskCancelledError("task cancelled by user")
-                stage_map = {
-                    1: "import_validate",
-                    2: "import_prepare",
-                    3: "import_clean",
-                    4: "index_build",
-                    5: "topic_assign",
-                    6: "done",
-                }
-                latest_stage = stage_map.get(step, "running")
+                latest_stage = str(event.get("stage", "running")).strip() or "running"
                 elapsed_ms = int((time.perf_counter() - started) * 1000)
                 with _TASKS_LOCK:
                     local = _TASKS[task_id]
                     if local.state == "cancelled":
                         raise _TaskCancelledError("task cancelled by user")
-                    local.progress = TaskProgressInfo(
-                        stage=latest_stage,
-                        processed=max(0, int(step)),
-                        total=max(1, int(total)),
-                        elapsed_ms=max(0, elapsed_ms),
-                        message=message,
-                    )
+                    local.progress = _task_progress_from_event(event, elapsed_ms=elapsed_ms)
                     local.updated_at = _iso_now()
                     _TASKS[task_id] = local
 
@@ -971,6 +1101,9 @@ def _start_library_import_task(*, task_id: str, upload_paths: list[Path], topic:
                     "message": str(result.get("message", "") or ""),
                     "success_count": int(result.get("success_count", 0) or 0),
                     "failed_count": int(result.get("failed_count", 0) or 0),
+                    "import_summary": result.get("import_summary", {}),
+                    "import_outcomes": result.get("import_outcomes", []),
+                    "failure_reasons": result.get("failure_reasons", []),
                 }
                 if not is_cancelled:
                     local.error = (
@@ -983,28 +1116,57 @@ def _start_library_import_task(*, task_id: str, upload_paths: list[Path], topic:
                         )
                     )
                 if local.progress is None:
-                    local.progress = TaskProgressInfo(
+                    local.progress = _build_task_progress(
                         stage="cancelled" if is_cancelled else ("done" if result.get("ok") else latest_stage),
-                        processed=0 if is_cancelled else 6,
-                        total=6,
+                        processed=0 if is_cancelled else max(1, len(upload_paths)),
+                        total=max(1, len(upload_paths)),
                         elapsed_ms=int((time.perf_counter() - started) * 1000),
                         message="论文导入已取消" if is_cancelled else str(result.get("message", "") or "论文导入已结束"),
                     )
                 elif is_cancelled:
-                    local.progress = TaskProgressInfo(
+                    local.progress = _build_task_progress(
                         stage="cancelled",
                         processed=local.progress.processed,
                         total=local.progress.total,
                         elapsed_ms=int((time.perf_counter() - started) * 1000),
                         message="论文导入已取消",
+                        batch_total=local.progress.batch_total,
+                        batch_completed=local.progress.batch_completed,
+                        batch_running=0,
+                        batch_failed=local.progress.batch_failed,
+                        current_stage="cancelled",
+                        current_item_name=local.progress.current_item_name,
+                        stage_processed=local.progress.stage_processed,
+                        stage_total=local.progress.stage_total,
+                        recent_items=local.progress.recent_items,
                     )
                 else:
-                    local.progress = TaskProgressInfo(
+                    summary = result.get("import_summary")
+                    if not isinstance(summary, dict):
+                        summary = {}
+                    total_candidates = max(
+                        len(upload_paths),
+                        _safe_int(summary.get("total_candidates"), 0),
+                        _safe_int(summary.get("added"), 0)
+                        + _safe_int(summary.get("skipped"), 0)
+                        + _safe_int(summary.get("failed"), 0),
+                    )
+                    recent_items = _normalize_task_progress_items(result.get("recent_items"))
+                    local.progress = _build_task_progress(
                         stage="done" if result.get("ok") else latest_stage,
-                        processed=6,
-                        total=6,
+                        processed=max(1, total_candidates),
+                        total=max(1, total_candidates),
                         elapsed_ms=int((time.perf_counter() - started) * 1000),
                         message=str(result.get("message", "") or "论文导入已结束"),
+                        batch_total=total_candidates,
+                        batch_completed=_safe_int(summary.get("added"), 0) + _safe_int(summary.get("skipped"), 0),
+                        batch_running=0,
+                        batch_failed=_safe_int(summary.get("failed"), 0),
+                        current_stage="done" if result.get("ok") else latest_stage,
+                        current_item_name=str(result.get("current_item_name", "")).strip() or None,
+                        stage_processed=max(1, total_candidates),
+                        stage_total=max(1, total_candidates),
+                        recent_items=recent_items,
                     )
                 _TASKS[task_id] = local
         except _TaskCancelledError:
@@ -1012,12 +1174,21 @@ def _start_library_import_task(*, task_id: str, upload_paths: list[Path], topic:
                 local = _TASKS[task_id]
                 local.state = "cancelled"
                 local.updated_at = _iso_now()
-                local.progress = TaskProgressInfo(
+                local.progress = _build_task_progress(
                     stage="cancelled",
                     processed=local.progress.processed if local.progress else 0,
-                    total=local.progress.total if local.progress else 6,
+                    total=local.progress.total if local.progress else max(1, len(upload_paths)),
                     elapsed_ms=int((time.perf_counter() - started) * 1000),
                     message="论文导入已取消",
+                    batch_total=local.progress.batch_total if local.progress else len(upload_paths),
+                    batch_completed=local.progress.batch_completed if local.progress else 0,
+                    batch_running=0,
+                    batch_failed=local.progress.batch_failed if local.progress else 0,
+                    current_stage="cancelled",
+                    current_item_name=local.progress.current_item_name if local.progress else None,
+                    stage_processed=local.progress.stage_processed if local.progress else 0,
+                    stage_total=local.progress.stage_total if local.progress else len(upload_paths),
+                    recent_items=local.progress.recent_items if local.progress else [],
                 )
                 _TASKS[task_id] = local
         except Exception as exc:  # pragma: no cover - defensive
@@ -1030,12 +1201,21 @@ def _start_library_import_task(*, task_id: str, upload_paths: list[Path], topic:
                     message=str(exc),
                     recovery="请检查上传文件、磁盘空间或模型配置后重试",
                 )
-                local.progress = TaskProgressInfo(
+                local.progress = _build_task_progress(
                     stage=latest_stage or "failed",
                     processed=local.progress.processed if local.progress else 0,
-                    total=local.progress.total if local.progress else 6,
+                    total=local.progress.total if local.progress else max(1, len(upload_paths)),
                     elapsed_ms=int((time.perf_counter() - started) * 1000),
                     message="论文导入失败",
+                    batch_total=local.progress.batch_total if local.progress else len(upload_paths),
+                    batch_completed=local.progress.batch_completed if local.progress else 0,
+                    batch_running=0,
+                    batch_failed=local.progress.batch_failed if local.progress else 0,
+                    current_stage=latest_stage or "failed",
+                    current_item_name=local.progress.current_item_name if local.progress else None,
+                    stage_processed=local.progress.stage_processed if local.progress else 0,
+                    stage_total=local.progress.stage_total if local.progress else len(upload_paths),
+                    recent_items=local.progress.recent_items if local.progress else [],
                 )
                 _TASKS[task_id] = local
         finally:
@@ -1095,6 +1275,82 @@ def _fallback_graph_state() -> tuple[str, str | None, str | None]:
     return "not_started", None, "尚未启动图构建任务"
 
 
+def _recent_item_name_from_outcome(row: dict[str, Any]) -> str:
+    title = str(row.get("title", "")).strip()
+    if title:
+        return title
+    source_uri = str(row.get("source_uri", "")).strip()
+    if source_uri:
+        return Path(source_uri).name or source_uri
+    paper_id = str(row.get("paper_id", "")).strip()
+    if paper_id:
+        return paper_id
+    return "unknown-item"
+
+
+def _recent_item_state_from_outcome(status: str) -> str:
+    normalized = status.strip().lower()
+    if normalized in {"added", "succeeded", "success", "completed", "imported", "skipped"}:
+        return "succeeded"
+    if normalized in {"failed", "error"}:
+        return "failed"
+    return "running"
+
+
+def _build_recent_items_from_outcomes(outcomes: Any, *, stage: str) -> list[TaskProgressItem]:
+    if not isinstance(outcomes, list):
+        return []
+    items: list[TaskProgressItem] = []
+    for row in outcomes:
+        if not isinstance(row, dict):
+            continue
+        status = str(row.get("status", "")).strip() or "running"
+        items.append(
+            TaskProgressItem(
+                name=_recent_item_name_from_outcome(row),
+                state=_recent_item_state_from_outcome(status),
+                stage=stage,
+                message=str(row.get("reason", status)).strip(),
+            )
+        )
+    return items[:6]
+
+
+def _build_import_result_progress(report: dict[str, Any], total_papers: int) -> dict[str, Any]:
+    import_summary = report.get("import_summary")
+    if not isinstance(import_summary, dict):
+        import_summary = {}
+    total_candidates = max(
+        total_papers,
+        _safe_int(import_summary.get("total_candidates"), 0),
+        _safe_int(import_summary.get("added"), 0)
+        + _safe_int(import_summary.get("skipped"), 0)
+        + _safe_int(import_summary.get("failed"), 0),
+    )
+    completed = _safe_int(import_summary.get("added"), 0) + _safe_int(import_summary.get("skipped"), 0)
+    failed = _safe_int(import_summary.get("failed"), 0)
+    current_stage = "done"
+    index_stage = report.get("index_stage")
+    if isinstance(index_stage, dict):
+        index_status = str(index_stage.get("status", "")).strip().lower()
+        if index_status in {"running", "queued", "conflict", "failed"}:
+            current_stage = "index_build"
+    outcomes = report.get("import_outcomes")
+    recent_items = _build_recent_items_from_outcomes(outcomes, stage=current_stage)
+    current_item_name = next((item.name for item in recent_items if item.state == "running"), None)
+    return {
+        "batch_total": total_candidates if total_candidates > 0 else None,
+        "batch_completed": completed if total_candidates > 0 else None,
+        "batch_running": 0 if total_candidates > 0 else None,
+        "batch_failed": failed if total_candidates > 0 else None,
+        "current_stage": current_stage if total_candidates > 0 else None,
+        "current_item_name": current_item_name,
+        "stage_processed": total_candidates if total_candidates > 0 else None,
+        "stage_total": total_candidates if total_candidates > 0 else None,
+        "recent_items": recent_items,
+    }
+
+
 def _build_pipeline_stages(*, report: dict[str, Any], updated_at: str | None) -> list[PipelineStageStatus]:
     import_summary = report.get("import_summary")
     if not isinstance(import_summary, dict):
@@ -1133,6 +1389,7 @@ def _write_latest_pipeline_status(*, result: dict[str, Any], updated_at: str) ->
     payload = {
         "updated_at": updated_at,
         "import_summary": result.get("import_summary", {}),
+        "import_outcomes": result.get("import_outcomes", []),
         "index_stage": result.get("index_stage", {}),
         "failure_reasons": result.get("failure_reasons", []),
         "fallback_reason": result.get("fallback_reason"),
@@ -1182,6 +1439,7 @@ def _load_latest_import_result() -> ImportLatestResultResponse:
             updated_at=None,
             artifact_summary=_summarize_marker_artifacts(_build_marker_artifacts()),
             parser_diagnostics=[],
+            recent_items=[],
         )
     report_paths = sorted(
         RUNS_DIR.glob("import_*/ingest_report.json"),
@@ -1194,6 +1452,7 @@ def _load_latest_import_result() -> ImportLatestResultResponse:
             pipeline_stages=_build_pipeline_stages(report={}, updated_at=None),
             artifact_summary=_summarize_marker_artifacts(_build_marker_artifacts()),
             parser_diagnostics=[],
+            recent_items=[],
         )
 
     latest = report_paths[0]
@@ -1206,6 +1465,7 @@ def _load_latest_import_result() -> ImportLatestResultResponse:
             pipeline_stages=_build_pipeline_stages(report={}, updated_at=None),
             artifact_summary=_summarize_marker_artifacts(_build_marker_artifacts()),
             parser_diagnostics=[],
+            recent_items=[],
         )
 
     import_summary = payload.get("import_summary")
@@ -1224,6 +1484,9 @@ def _load_latest_import_result() -> ImportLatestResultResponse:
         recent_index_stage = latest_pipeline.get("index_stage")
         if isinstance(recent_index_stage, dict):
             payload["index_stage"] = recent_index_stage
+        recent_outcomes = latest_pipeline.get("import_outcomes")
+        if isinstance(recent_outcomes, list):
+            payload["import_outcomes"] = recent_outcomes
         recent_failure_reasons = latest_pipeline.get("failure_reasons")
         if isinstance(recent_failure_reasons, list):
             failure_reasons = [str(item) for item in recent_failure_reasons if str(item).strip()]
@@ -1247,6 +1510,7 @@ def _load_latest_import_result() -> ImportLatestResultResponse:
     degradation = _extract_ingest_degradation(payload)
     diagnostics = _extract_parser_diagnostics(payload)
     artifacts = _build_marker_artifacts(latest_updated_at=updated_at, stage_updated_at=stage_updated_at)
+    progress = _build_import_result_progress(payload, total_papers)
 
     return ImportLatestResultResponse(
         added=max(0, int(import_summary.get("added", 0) or 0)),
@@ -1264,6 +1528,15 @@ def _load_latest_import_result() -> ImportLatestResultResponse:
         artifact_summary=_summarize_marker_artifacts(artifacts),
         parser_diagnostics=diagnostics,
         stage_updated_at=stage_updated_at,
+        batch_total=progress["batch_total"],
+        batch_completed=progress["batch_completed"],
+        batch_running=progress["batch_running"],
+        batch_failed=progress["batch_failed"],
+        current_stage=progress["current_stage"],
+        current_item_name=progress["current_item_name"],
+        stage_processed=progress["stage_processed"],
+        stage_total=progress["stage_total"],
+        recent_items=progress["recent_items"],
     )
 
 
