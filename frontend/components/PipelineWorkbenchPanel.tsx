@@ -23,6 +23,15 @@ export interface PipelineTaskPanelState {
   accepted?: boolean;
   error?: { stage: string; message: string; recovery: string };
   result?: Record<string, unknown>;
+  batchTotal?: number | null;
+  batchCompleted?: number | null;
+  batchRunning?: number | null;
+  batchFailed?: number | null;
+  currentStage?: string | null;
+  currentItemName?: string | null;
+  stageProcessed?: number | null;
+  stageTotal?: number | null;
+  recentItems?: Array<{ name: string; state: string; stage: string; message: string }>;
 }
 
 interface ImportLatestResult {
@@ -57,6 +66,20 @@ interface ImportLatestResult {
   artifact_summary?: {
     counts?: Partial<Record<'healthy' | 'missing' | 'stale', number>>;
   };
+  batch_total?: number | null;
+  batch_completed?: number | null;
+  batch_running?: number | null;
+  batch_failed?: number | null;
+  current_stage?: string | null;
+  current_item_name?: string | null;
+  stage_processed?: number | null;
+  stage_total?: number | null;
+  recent_items?: Array<{
+    name: string;
+    state: string;
+    stage: string;
+    message: string;
+  }>;
 }
 
 interface ImportHistoryItem {
@@ -90,6 +113,20 @@ interface BackendTaskStatus {
     total: number;
     elapsed_ms: number;
     message: string;
+    batch_total?: number | null;
+    batch_completed?: number | null;
+    batch_running?: number | null;
+    batch_failed?: number | null;
+    current_stage?: string | null;
+    current_item_name?: string | null;
+    stage_processed?: number | null;
+    stage_total?: number | null;
+    recent_items?: Array<{
+      name: string;
+      state: string;
+      stage: string;
+      message: string;
+    }>;
   } | null;
   error?: {
     stage: string;
@@ -122,6 +159,31 @@ function stageStateFromTaskState(state: PipelineTaskState): string {
   return 'idle';
 }
 
+type ImportRecentItem = { name: string; state: string; stage: string; message: string };
+
+function resolveImportPipelineStage(raw?: string | null): 'import' | 'clean' | 'index' | 'graph_build' | null {
+  const value = String(raw ?? '').toLowerCase();
+  if (!value) return null;
+  if (['queued', 'import_validate', 'import_prepare', 'topic_assign', 'done'].includes(value)) return 'import';
+  if (['import_clean', 'clean'].includes(value)) return 'clean';
+  if (['index_build', 'index'].includes(value)) return 'index';
+  if (value.includes('graph')) return 'graph_build';
+  return null;
+}
+
+function normalizeImportRecentItems(items: unknown): ImportRecentItem[] {
+  if (!Array.isArray(items)) return [];
+  return items
+    .filter((item) => item && typeof item === 'object')
+    .map((item) => ({
+      name: String((item as { name?: string }).name ?? '').trim(),
+      state: String((item as { state?: string }).state ?? 'queued').trim() || 'queued',
+      stage: String((item as { stage?: string }).stage ?? 'queued').trim() || 'queued',
+      message: String((item as { message?: string }).message ?? '').trim()
+    }))
+    .filter((item) => item.name);
+}
+
 export function PipelineWorkbenchPanel({
   statusText,
   taskPanel,
@@ -143,6 +205,7 @@ export function PipelineWorkbenchPanel({
   const [importSubmitMessage, setImportSubmitMessage] = useState('');
   const [importTaskId, setImportTaskId] = useState('');
   const [importTaskState, setImportTaskState] = useState<PipelineTaskState | null>(null);
+  const [importTaskSnapshot, setImportTaskSnapshot] = useState<BackendTaskStatus | null>(null);
   const [artifactItems, setArtifactItems] = useState<MarkerArtifactItem[]>([]);
   const [artifactActionMessage, setArtifactActionMessage] = useState('');
   const [llmConcurrency, setLlmConcurrency] = useState(8);
@@ -169,6 +232,14 @@ export function PipelineWorkbenchPanel({
   }, [importResult?.pipeline_stages]);
   const liveStageMap = useMemo(() => {
     const next = new Map(stageMap);
+    const importStageKey = resolveImportPipelineStage(importTaskSnapshot?.progress?.current_stage ?? importTaskSnapshot?.progress?.stage);
+    if (importStageKey && importTaskSnapshot) {
+      next.set(importStageKey, {
+        state: stageStateFromTaskState(importTaskSnapshot.state),
+        message: importTaskSnapshot.progress?.message ?? importTaskSnapshot.error?.message ?? importTaskSnapshot.message,
+        updated_at: importTaskSnapshot.updated_at
+      });
+    }
     if (!taskPanel) {
       return next;
     }
@@ -180,12 +251,63 @@ export function PipelineWorkbenchPanel({
     return next;
   }, [stageMap, taskPanel]);
 
+  const libraryImportProgress = useMemo(() => {
+    const progress = importTaskSnapshot?.progress;
+    if (progress) {
+      return {
+        batchTotal: progress.batch_total ?? null,
+        batchCompleted: progress.batch_completed ?? null,
+        batchRunning: progress.batch_running ?? null,
+        batchFailed: progress.batch_failed ?? null,
+        currentStage: progress.current_stage ?? progress.stage,
+        currentItemName: progress.current_item_name ?? null,
+        stageProcessed: progress.stage_processed ?? progress.processed ?? null,
+        stageTotal: progress.stage_total ?? progress.total ?? null,
+        recentItems: normalizeImportRecentItems(progress.recent_items),
+        message: progress.message ?? '',
+        updatedAt: importTaskSnapshot.updated_at
+      };
+    }
+    if (!importResult) {
+      return null;
+    }
+    return {
+      batchTotal: importResult.batch_total ?? null,
+      batchCompleted: importResult.batch_completed ?? null,
+      batchRunning: importResult.batch_running ?? null,
+      batchFailed: importResult.batch_failed ?? null,
+      currentStage: importResult.current_stage ?? null,
+      currentItemName: importResult.current_item_name ?? null,
+      stageProcessed: importResult.stage_processed ?? null,
+      stageTotal: importResult.stage_total ?? null,
+      recentItems: importResult.recent_items ?? [],
+      message: importSubmitMessage || '',
+      updatedAt: importResult.updated_at ?? null
+    };
+  }, [importResult, importSubmitMessage, importTaskSnapshot]);
+
   const taskProgressPercent = useMemo(() => {
     if (!taskPanel || taskPanel.total <= 0) {
       return 0;
     }
     return Math.max(0, Math.min(100, Math.round((taskPanel.processed / taskPanel.total) * 100)));
   }, [taskPanel]);
+  const batchProgressKnown =
+    libraryImportProgress?.batchTotal !== null &&
+    libraryImportProgress?.batchTotal !== undefined &&
+    (libraryImportProgress.batchTotal ?? 0) > 0 &&
+    libraryImportProgress.batchCompleted !== null &&
+    libraryImportProgress.batchFailed !== null &&
+    libraryImportProgress.batchRunning !== null;
+  const batchProgressPercent = batchProgressKnown
+    ? Math.max(
+        0,
+        Math.min(
+          100,
+          Math.round((((libraryImportProgress?.batchCompleted ?? 0) + (libraryImportProgress?.batchFailed ?? 0)) / Math.max(1, libraryImportProgress?.batchTotal ?? 1)) * 100)
+        )
+      )
+    : null;
   const showTerminal = taskPanel !== null;
 
   useEffect(() => {
@@ -259,7 +381,16 @@ export function PipelineWorkbenchPanel({
                     : {}
               }))
           : [],
-        artifact_summary: payload.artifact_summary ?? {}
+        artifact_summary: payload.artifact_summary ?? {},
+        batch_total: payload.batch_total ?? null,
+        batch_completed: payload.batch_completed ?? null,
+        batch_running: payload.batch_running ?? null,
+        batch_failed: payload.batch_failed ?? null,
+        current_stage: payload.current_stage ?? null,
+        current_item_name: payload.current_item_name ?? null,
+        stage_processed: payload.stage_processed ?? null,
+        stage_total: payload.stage_total ?? null,
+        recent_items: normalizeImportRecentItems(payload.recent_items)
       });
     } catch (error) {
       setImportError(error instanceof Error ? error.message : '加载导入结果失败');
@@ -387,6 +518,7 @@ export function PipelineWorkbenchPanel({
         const payload = result.data;
         const nextState = payload.state;
         setImportTaskState(nextState);
+        setImportTaskSnapshot(payload);
         const progressMessage = payload.progress?.message?.trim() || payload.error?.message?.trim() || payload.message?.trim();
         if (progressMessage) {
           setImportSubmitMessage(progressMessage);
@@ -509,11 +641,13 @@ export function PipelineWorkbenchPanel({
       setImportSubmitMessage(payload.message ?? '导入任务已提交。');
       setImportTaskId(payload.task_id ?? '');
       setImportTaskState(payload.task_state ?? 'queued');
+      setImportTaskSnapshot(null);
       setImportFiles([]);
     } catch (error) {
       setImportSubmitMessage(error instanceof Error ? error.message : '导入失败');
       setImportTaskId('');
       setImportTaskState('failed');
+      setImportTaskSnapshot(null);
     } finally {
       setImportSubmitLoading(false);
       window.dispatchEvent(new CustomEvent(importBusyEventName, { detail: { busy: false } }));
@@ -628,7 +762,12 @@ export function PipelineWorkbenchPanel({
     const state = liveStageMap.get(stage.key)?.state ?? 'not_started';
     return ['done', 'succeeded', 'completed', 'success'].includes(String(state).toLowerCase());
   }).length;
+  const importActiveStageKey =
+    importTaskSnapshot && (importTaskSnapshot.state === 'running' || importTaskSnapshot.state === 'queued')
+      ? resolveImportPipelineStage(libraryImportProgress?.currentStage)
+      : null;
   const activeStageKey =
+    importActiveStageKey ??
     stageOrder.find((stage) => {
       const state = String(liveStageMap.get(stage.key)?.state ?? '').toLowerCase();
       return ['running', 'queued', 'processing'].includes(state);
@@ -638,11 +777,18 @@ export function PipelineWorkbenchPanel({
       return !['done', 'succeeded', 'completed', 'success'].includes(state);
     })?.key ??
     'graph_build';
-  const importPipelinePercent = Math.max(
-    taskProgressPercent,
-    Math.min(100, Math.round((completedStageCount / stageOrder.length) * 100))
-  );
   const importSelectedCount = importFiles.length;
+  const recentImportItems = libraryImportProgress?.recentItems ?? [];
+  const importSummaryLine = batchProgressKnown
+    ? `${libraryImportProgress?.batchTotal ?? 0} 篇论文 · 已完成 ${libraryImportProgress?.batchCompleted ?? 0} · 处理中 ${libraryImportProgress?.batchRunning ?? 0} · 失败 ${libraryImportProgress?.batchFailed ?? 0}`
+    : importTaskState === 'running' || importTaskState === 'queued'
+      ? '任务已受理，正在同步后台导入进度。'
+      : '等待下一次导入任务，系统会在拿到真实批次统计后再显示总体进度。';
+  const importSummaryBadge = batchProgressKnown
+    ? `${libraryImportProgress?.batchCompleted ?? 0}/${libraryImportProgress?.batchTotal ?? 0} 完成`
+    : importTaskState === 'running' || importTaskState === 'queued'
+      ? '进度同步中'
+      : `${completedStageCount}/4 阶段完成`;
 
   return (
     <section className="glass-card rounded-[34px] p-5 md:p-6">
@@ -756,27 +902,54 @@ export function PipelineWorkbenchPanel({
               <p className="mt-1 text-sm text-slate-600">系统会明确告诉你目前走到哪一步，而不是只显示“待处理”。</p>
             </div>
             <span className="rounded-full border border-emerald-200 bg-emerald-50 px-3 py-1 text-xs font-medium text-emerald-700">
-              {activeStageKey === 'graph_build' && taskPanel ? `已处理 ${taskPanel.processed}/${taskPanel.total || 0}` : `${completedStageCount}/4 阶段完成`}
+              {importSummaryBadge}
             </span>
           </div>
 
-          <div className="mt-4 rounded-[22px] border border-slate-200 bg-white p-4">
-            <div className="flex items-center justify-between gap-3 text-sm">
+          <div data-testid="pipeline-batch-summary" className="mt-4 rounded-[22px] border border-slate-200 bg-white p-4">
+            <div className="flex items-start justify-between gap-3 text-sm">
               <div>
-                <p className="font-medium text-slate-900">当前环节：{stageOrder.find((stage) => stage.key === activeStageKey)?.label}</p>
-                <p className="mt-1 text-xs text-slate-500">
-                  {taskPanel
-                    ? `图构建阶段已处理 ${taskPanel.processed}/${taskPanel.total || 0}，耗时 ${taskPanel.elapsedMs}ms`
-                    : '导入后会自动刷新每个阶段的状态与说明'}
+                <p className="font-medium text-slate-900">
+                  {batchProgressKnown ? `本批次已完成 ${libraryImportProgress?.batchCompleted ?? 0}/${libraryImportProgress?.batchTotal ?? 0}` : '批次总体进度'}
                 </p>
+                <p className="mt-1 text-xs text-slate-500" data-testid="pipeline-batch-summary-text">
+                  {importSummaryLine}
+                </p>
+                {libraryImportProgress?.currentItemName ? (
+                  <p className="mt-2 text-xs font-medium text-slate-700">当前处理：{libraryImportProgress.currentItemName}</p>
+                ) : null}
               </div>
-              <p className="text-2xl font-semibold text-slate-950">{importPipelinePercent}%</p>
+              <p className="text-right text-2xl font-semibold text-slate-950">
+                {batchProgressPercent !== null ? `${batchProgressPercent}%` : '...'}
+              </p>
             </div>
-            <div className="mt-3 h-3 overflow-hidden rounded-full bg-slate-100">
-              <div
-                className="h-full rounded-full bg-[linear-gradient(90deg,#0f766e,#38bdf8,#f59e0b)] transition-all"
-                style={{ width: `${importPipelinePercent}%` }}
-              />
+            <div className="mt-3 h-3 overflow-hidden rounded-full bg-slate-100" data-testid="pipeline-batch-progress">
+              {batchProgressPercent !== null ? (
+                <div
+                  className="h-full rounded-full bg-[linear-gradient(90deg,#0f766e,#38bdf8,#f59e0b)] transition-all"
+                  style={{ width: `${batchProgressPercent}%` }}
+                />
+              ) : (
+                <div className="h-full w-1/3 rounded-full bg-[linear-gradient(90deg,#cbd5e1,#94a3b8,#cbd5e1)] animate-pulse" />
+              )}
+            </div>
+            {!batchProgressKnown ? (
+              <p data-testid="pipeline-batch-fallback" className="mt-2 text-[11px] text-amber-700">
+                当前响应缺少可靠批次统计，界面已退回阶段级提示，不显示伪精确百分比。
+              </p>
+            ) : null}
+            <div className="mt-4 grid gap-3 sm:grid-cols-4">
+              {[
+                { label: '已完成', value: libraryImportProgress?.batchCompleted ?? 0 },
+                { label: '处理中', value: libraryImportProgress?.batchRunning ?? 0 },
+                { label: '失败', value: libraryImportProgress?.batchFailed ?? 0 },
+                { label: '阶段内', value: `${libraryImportProgress?.stageProcessed ?? 0}/${libraryImportProgress?.stageTotal ?? 0}` }
+              ].map((item) => (
+                <article key={item.label} className="rounded-2xl border border-slate-200 bg-slate-50/80 px-3 py-3">
+                  <p className="text-[11px] uppercase tracking-[0.14em] text-slate-400">{item.label}</p>
+                  <p className="mt-2 text-xl font-semibold tabular-nums text-slate-950">{item.value}</p>
+                </article>
+              ))}
             </div>
           </div>
 
@@ -806,9 +979,55 @@ export function PipelineWorkbenchPanel({
                 {stageData?.message || stageData?.detail ? (
                   <p className="mt-1 text-[11px] leading-5 text-slate-500">{stageData?.detail || stageData?.message}</p>
                 ) : null}
+                {isActive && libraryImportProgress?.stageTotal ? (
+                  <p className="mt-2 text-[11px] font-medium text-slate-700">
+                    当前阶段 {libraryImportProgress.stageProcessed ?? 0}/{libraryImportProgress.stageTotal}
+                  </p>
+                ) : null}
               </article>
             );
           })}
+          </div>
+
+          <div className="mt-4 rounded-[22px] border border-slate-200 bg-slate-50/70 p-4" data-testid="pipeline-recent-items">
+            <div className="flex items-center justify-between gap-2">
+              <div>
+                <h4 className="text-sm font-semibold text-slate-900">单篇论文状态</h4>
+                <p className="mt-1 text-xs text-slate-600">优先展示最近处理项、失败项和仍在运行的条目。</p>
+              </div>
+              {libraryImportProgress?.updatedAt ? (
+                <span className="text-[11px] text-slate-500">更新于 {formatTime(libraryImportProgress.updatedAt)}</span>
+              ) : null}
+            </div>
+            {recentImportItems.length ? (
+              <div className="mt-3 space-y-2">
+                {recentImportItems.map((item) => {
+                  const itemState = item.state.toLowerCase();
+                  const tone =
+                    itemState === 'failed'
+                      ? 'border-rose-200 bg-rose-50 text-rose-700'
+                      : itemState === 'succeeded'
+                        ? 'border-emerald-200 bg-emerald-50 text-emerald-700'
+                        : 'border-sky-200 bg-sky-50 text-sky-700';
+                  return (
+                    <article key={`${item.name}-${item.stage}`} className="flex flex-wrap items-start justify-between gap-3 rounded-2xl border border-slate-200 bg-white px-3 py-3">
+                      <div>
+                        <p className="text-sm font-medium text-slate-900">{item.name}</p>
+                        <p className="mt-1 text-[11px] text-slate-500">{item.message || item.stage}</p>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <span className="rounded-full border border-slate-200 bg-slate-50 px-2 py-1 text-[11px] text-slate-600">
+                          {resolveImportPipelineStage(item.stage) ?? item.stage}
+                        </span>
+                        <span className={`rounded-full border px-2 py-1 text-[11px] font-medium ${tone}`}>{item.state}</span>
+                      </div>
+                    </article>
+                  );
+                })}
+              </div>
+            ) : (
+              <p className="mt-3 text-sm text-slate-500">暂无逐项状态。导入开始后，这里会显示最近处理的论文与失败原因。</p>
+            )}
           </div>
         </section>
       </div>

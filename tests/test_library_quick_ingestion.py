@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import tempfile
 import unittest
 import uuid
@@ -90,6 +91,41 @@ class LibraryQuickIngestionTests(unittest.TestCase):
             self.assertIn("updated_at", result.get("import_stage", {}))
             self.assertIn("updated_at", result.get("clean_stage", {}))
             self.assertIn("updated_at", result.get("index_stage", {}))
+
+    def test_import_workflow_emits_batch_progress_events(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            pdf = Path(tmp) / "paper.pdf"
+            pdf.write_bytes(b"%PDF-1.4 test")
+            events: list[dict] = []
+
+            def _fake_ingest(args) -> int:
+                run_dir = Path(str(args.run_dir))
+                run_dir.mkdir(parents=True, exist_ok=True)
+                (run_dir / "ingest_report.json").write_text(
+                    json.dumps(
+                        {
+                            "import_summary": {"added": 1, "skipped": 0, "conflicts": 0, "failed": 0, "total_candidates": 1},
+                            "import_outcomes": [{"source_uri": str(pdf), "status": "added"}],
+                        },
+                        ensure_ascii=False,
+                    ),
+                    encoding="utf-8",
+                )
+                return 0
+
+            with patch.object(library, "run_ingest", side_effect=_fake_ingest), patch.object(
+                library, "run_build_indexes", return_value=0
+            ):
+                result = library.run_import_workflow(uploaded_files=[pdf], topic="", progress_callback=events.append)
+
+            self.assertTrue(result["ok"])
+            self.assertGreaterEqual(len(events), 4)
+            final_event = events[-1]
+            self.assertEqual(final_event["batch_total"], 1)
+            self.assertEqual(final_event["batch_completed"], 1)
+            self.assertEqual(final_event["batch_failed"], 0)
+            self.assertEqual(final_event["stage"], "done")
+            self.assertEqual(final_event["recent_items"][0]["state"], "succeeded")
 
 
 if __name__ == "__main__":
