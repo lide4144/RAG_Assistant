@@ -38,6 +38,7 @@ from app.pipeline_runtime_config import (
     resolve_effective_marker_tuning,
 )
 from app.paths import CONFIGS_DIR, DATA_DIR, RUNS_DIR
+from app.planner_shell import HAS_LANGGRAPH, run_planner_shell
 from app.index_vec import load_vec_index
 from app.qa import parse_args, run_qa
 
@@ -434,7 +435,53 @@ def _load_qa_report(run_id: str) -> dict[str, Any]:
     return json.loads(report_path.read_text(encoding="utf-8"))
 
 
-def _run_qa_once(payload: KernelChatRequest, on_stream_delta: Callable[[str], None] | None = None) -> KernelChatResponse:
+def _load_run_trace(run_id: str) -> dict[str, Any]:
+    trace_path = Path(RUNS_DIR) / run_id / "run_trace.json"
+    if not trace_path.exists():
+        raise FileNotFoundError(f"run_trace not found: {trace_path}")
+    return json.loads(trace_path.read_text(encoding="utf-8"))
+
+
+def _save_run_artifact(path: Path, payload: dict[str, Any]) -> None:
+    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def _merge_planner_shell_observation(run_id: str, observation: dict[str, Any]) -> None:
+    run_dir = Path(RUNS_DIR) / run_id
+    planner = dict(observation.get("planner") or {})
+    extra = {
+        "planner_shell_used": bool(observation.get("planner_shell_used", True)),
+        "planner_shell_backend": observation.get("planner_shell_backend"),
+        "planner_shell_fallback": bool(observation.get("planner_shell_fallback", False)),
+        "planner_shell_fallback_reason": observation.get("planner_shell_fallback_reason"),
+        "planner_shell_passthrough": bool(observation.get("planner_shell_passthrough", False)),
+        "selected_path": observation.get("selected_path"),
+        "execution_trace": observation.get("execution_trace"),
+        "short_circuit": observation.get("short_circuit"),
+        "truncated": bool(observation.get("truncated", False)),
+    }
+    if planner:
+        extra.setdefault("planner_used", planner.get("planner_used"))
+        extra.setdefault("planner_source", planner.get("planner_source"))
+        extra.setdefault("planner_fallback", planner.get("planner_fallback"))
+        extra.setdefault("planner_fallback_reason", planner.get("planner_fallback_reason"))
+        extra.setdefault("planner_confidence", planner.get("planner_confidence"))
+        extra.setdefault("primary_capability", planner.get("primary_capability"))
+        extra.setdefault("strictness", planner.get("strictness"))
+        extra.setdefault("action_plan", planner.get("action_plan"))
+
+    for filename in ("run_trace.json", "qa_report.json"):
+        path = run_dir / filename
+        if not path.exists():
+            continue
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        payload.update({key: value for key, value in extra.items() if value is not None})
+        _save_run_artifact(path, payload)
+
+
+def _run_qa_pipeline(
+    payload: KernelChatRequest, on_stream_delta: Callable[[str], None] | None = None
+) -> tuple[KernelChatResponse, str]:
     run_id = f"kernel_api_{uuid4().hex}"
     args = _build_qa_args(payload, run_id, on_stream_delta)
     code = run_qa(args)
@@ -448,7 +495,169 @@ def _run_qa_once(payload: KernelChatRequest, on_stream_delta: Callable[[str], No
 
     sources = _build_sources_from_qa_report(qa_report)
     trace_id = payload.traceId or f"trace_{run_id}"
-    return KernelChatResponse(traceId=trace_id, answer=answer, sources=sources)
+    return KernelChatResponse(traceId=trace_id, answer=answer, sources=sources), run_id
+
+
+def _run_qa_once(payload: KernelChatRequest, on_stream_delta: Callable[[str], None] | None = None) -> KernelChatResponse:
+    response, _ = _run_qa_pipeline(payload, on_stream_delta)
+    return response
+
+
+def _planner_shell_route_executor(
+    payload: KernelChatRequest,
+    *,
+    selected_path: str,
+    on_stream_delta: Callable[[str], None] | None = None,
+    planner_shell_fallback: bool = False,
+    planner_shell_fallback_reason: str | None = None,
+    planner_result: Any = None,
+) -> KernelChatResponse:
+    response, run_id = _run_qa_pipeline(payload, on_stream_delta)
+    observation = {
+        "planner_shell_used": True,
+        "planner_shell_backend": "langgraph" if HAS_LANGGRAPH else "fallback",
+        "planner_shell_fallback": planner_shell_fallback,
+        "planner_shell_fallback_reason": planner_shell_fallback_reason,
+        "planner_shell_passthrough": selected_path.endswith("_passthrough") or selected_path == "legacy_fallback",
+        "selected_path": selected_path,
+        "planner": {
+            "planner_used": getattr(planner_result, "planner_used", None),
+            "planner_source": getattr(planner_result, "planner_source", None),
+            "planner_fallback": getattr(planner_result, "planner_fallback", None),
+            "planner_fallback_reason": getattr(planner_result, "planner_fallback_reason", None),
+            "planner_confidence": getattr(planner_result, "planner_confidence", None),
+            "primary_capability": getattr(planner_result, "primary_capability", None),
+            "strictness": getattr(planner_result, "strictness", None),
+            "action_plan": getattr(planner_result, "action_plan", None),
+        },
+    }
+    try:
+        trace = _load_run_trace(run_id)
+        observation["planner_shell_backend"] = (
+            "langgraph" if trace.get("planner_shell_used") is None else trace.get("planner_shell_backend", "langgraph")
+        )
+        observation["execution_trace"] = trace.get("execution_trace", [])
+        observation["short_circuit"] = trace.get("short_circuit", {"triggered": False, "reason": None, "step": None})
+        observation["truncated"] = bool(trace.get("truncated", False))
+    except FileNotFoundError:
+        observation["execution_trace"] = []
+        observation["short_circuit"] = {"triggered": False, "reason": None, "step": None}
+        observation["truncated"] = False
+    _merge_planner_shell_observation(run_id, observation)
+    return response
+
+
+def _run_planner_shell_once(
+    payload: KernelChatRequest, on_stream_delta: Callable[[str], None] | None = None
+) -> KernelChatResponse:
+    result = run_planner_shell(
+        payload,
+        fact_qa_executor=_planner_shell_route_executor,
+        compat_executor=_planner_shell_route_executor,
+        legacy_executor=_planner_shell_route_executor,
+        on_stream_delta=on_stream_delta,
+    )
+    return result["response"]
+
+
+def _build_streaming_chat_response(
+    payload: KernelChatRequest,
+    runner: Callable[[KernelChatRequest, Callable[[str], None] | None], KernelChatResponse],
+) -> StreamingResponse:
+    trace_id = payload.traceId or f"trace_{uuid4().hex}"
+
+    def event_stream() -> Iterator[str]:
+        queue: Queue[dict[str, Any]] = Queue()
+
+        def send_sse(event_name: str, data: dict[str, Any]) -> str:
+            return f"event: {event_name}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
+
+        def on_delta(piece: str) -> None:
+            _ = piece
+
+        def worker() -> None:
+            try:
+                response = runner(payload, on_delta)
+                queue.put(
+                    {
+                        "event": "sources",
+                        "data": {
+                            "type": "sources",
+                            "traceId": trace_id,
+                            "mode": payload.mode,
+                            "sources": [item.dict() for item in response.sources],
+                        },
+                    }
+                )
+                queue.put(
+                    {
+                        "event": "message",
+                        "data": {
+                            "type": "message",
+                            "traceId": trace_id,
+                            "mode": payload.mode,
+                            "content": response.answer,
+                        },
+                    }
+                )
+                queue.put(
+                    {
+                        "event": "messageEnd",
+                        "data": {
+                            "type": "messageEnd",
+                            "traceId": trace_id,
+                            "mode": payload.mode,
+                        },
+                    }
+                )
+            except FileNotFoundError as exc:
+                queue.put(
+                    {
+                        "event": "error",
+                        "data": {
+                            "type": "error",
+                            "traceId": trace_id,
+                            "code": "KERNEL_BAD_RESPONSE",
+                            "message": str(exc),
+                        },
+                    }
+                )
+            except Exception as exc:
+                queue.put(
+                    {
+                        "event": "error",
+                        "data": {
+                            "type": "error",
+                            "traceId": trace_id,
+                            "code": "KERNEL_UNKNOWN",
+                            "message": str(exc),
+                        },
+                    }
+                )
+            finally:
+                queue.put({"event": "done", "data": {}})
+
+        thread = threading.Thread(target=worker, daemon=True)
+        thread.start()
+
+        stream_completed = False
+        while not stream_completed:
+            try:
+                event = queue.get(timeout=15)
+            except Empty:
+                yield ": keep-alive\n\n"
+                continue
+
+            name = str(event.get("event"))
+            data = event.get("data", {})
+            if name == "done":
+                stream_completed = True
+                continue
+            if name == "error":
+                stream_completed = True
+            yield send_sse(name, data if isinstance(data, dict) else {})
+
+    return StreamingResponse(event_stream(), media_type="text/event-stream")
 
 
 def _normalize_admin_api_base(value: str) -> str:
@@ -2310,100 +2519,19 @@ def qa(payload: KernelChatRequest) -> KernelChatResponse:
 
 @app.post("/qa/stream")
 def qa_stream(payload: KernelChatRequest) -> StreamingResponse:
-    trace_id = payload.traceId or f"trace_{uuid4().hex}"
+    return _build_streaming_chat_response(payload, _run_qa_once)
 
-    def event_stream() -> Iterator[str]:
-        queue: Queue[dict[str, Any]] = Queue()
 
-        def send_sse(event_name: str, data: dict[str, Any]) -> str:
-            return f"event: {event_name}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
+@app.post("/planner/qa", response_model=KernelChatResponse)
+def planner_qa(payload: KernelChatRequest) -> KernelChatResponse:
+    try:
+        return _run_planner_shell_once(payload)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=500, detail={"code": "KERNEL_BAD_RESPONSE", "message": str(exc)}) from exc
+    except Exception as exc:  # pragma: no cover - defensive
+        raise HTTPException(status_code=500, detail={"code": "KERNEL_UNKNOWN", "message": str(exc)}) from exc
 
-        def on_delta(piece: str) -> None:
-            # The answer LLM currently streams raw JSON payload tokens.
-            # Emitting these chunks directly causes broken frontend rendering.
-            # Keep callback for future use but do not forward raw deltas.
-            _ = piece
 
-        def worker() -> None:
-            try:
-                response = _run_qa_once(payload, on_stream_delta=on_delta)
-                queue.put(
-                    {
-                        "event": "sources",
-                        "data": {
-                            "type": "sources",
-                            "traceId": trace_id,
-                            "mode": payload.mode,
-                            "sources": [item.dict() for item in response.sources],
-                        },
-                    }
-                )
-                queue.put(
-                    {
-                        "event": "message",
-                        "data": {
-                            "type": "message",
-                            "traceId": trace_id,
-                            "mode": payload.mode,
-                            "content": response.answer,
-                        },
-                    }
-                )
-                queue.put(
-                    {
-                        "event": "messageEnd",
-                        "data": {
-                            "type": "messageEnd",
-                            "traceId": trace_id,
-                            "mode": payload.mode,
-                        },
-                    }
-                )
-            except FileNotFoundError as exc:
-                queue.put(
-                    {
-                        "event": "error",
-                        "data": {
-                            "type": "error",
-                            "traceId": trace_id,
-                            "code": "KERNEL_BAD_RESPONSE",
-                            "message": str(exc),
-                        },
-                    }
-                )
-            except Exception as exc:
-                queue.put(
-                    {
-                        "event": "error",
-                        "data": {
-                            "type": "error",
-                            "traceId": trace_id,
-                            "code": "KERNEL_UNKNOWN",
-                            "message": str(exc),
-                        },
-                    }
-                )
-            finally:
-                queue.put({"event": "done", "data": {}})
-
-        thread = threading.Thread(target=worker, daemon=True)
-        thread.start()
-
-        stream_completed = False
-        while not stream_completed:
-            try:
-                event = queue.get(timeout=15)
-            except Empty:
-                yield ": keep-alive\n\n"
-                continue
-
-            name = str(event.get("event"))
-            data = event.get("data", {})
-            if name == "done":
-                stream_completed = True
-                continue
-            if name == "error":
-                stream_completed = True
-            yield send_sse(name, data if isinstance(data, dict) else {})
-
-    return StreamingResponse(event_stream(), media_type="text/event-stream")
+@app.post("/planner/qa/stream")
+def planner_qa_stream(payload: KernelChatRequest) -> StreamingResponse:
+    return _build_streaming_chat_response(payload, _run_planner_shell_once)

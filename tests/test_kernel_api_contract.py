@@ -25,7 +25,10 @@ from app.kernel_api import (
     _build_sources_from_qa_report,
     get_task_status,
     _run_qa_once,
+    _run_planner_shell_once,
     qa_stream,
+    planner_qa,
+    planner_qa_stream,
     start_graph_build_task,
     _start_library_import_task,
     GraphBuildTaskStartRequest,
@@ -135,6 +138,52 @@ class KernelApiContractTests(unittest.TestCase):
                     )
                     self.assertTrue((response.media_type or "").startswith("text/event-stream"))
                     self.assertIsNotNone(response.body_iterator)
+
+    def test_planner_qa_endpoint_uses_shell_runner(self) -> None:
+        mocked_response = KernelChatResponse(
+            traceId="trace-planner",
+            answer="planner answer [1]",
+            sources=[
+                SourceItem(
+                    source_type="local",
+                    source_id="chunk-1",
+                    title="Paper A",
+                    snippet="snippet",
+                    locator="p.1",
+                    score=0.9,
+                )
+            ],
+        )
+        with patch("app.kernel_api._run_planner_shell_once", return_value=mocked_response):
+            response = planner_qa(
+                KernelChatRequest(sessionId="s1", mode="local", query="q1", history=[], traceId="trace-planner")
+            )
+
+        self.assertEqual(response.traceId, "trace-planner")
+        self.assertEqual(response.answer, "planner answer [1]")
+
+    def test_planner_stream_contract_mode_consistency_and_message_end(self) -> None:
+        mocked_response = KernelChatResponse(
+            traceId="trace-planner-stream",
+            answer="planner stream answer [1]",
+            sources=[
+                SourceItem(
+                    source_type="local",
+                    source_id="chunk-1",
+                    title="Paper A",
+                    snippet="snippet",
+                    locator="p.1",
+                    score=0.9,
+                )
+            ],
+        )
+        with patch("app.kernel_api._run_planner_shell_once", return_value=mocked_response):
+            response = planner_qa_stream(
+                KernelChatRequest(sessionId="s1", mode="local", query="q1", history=[], traceId="trace-planner-stream")
+            )
+
+        self.assertTrue((response.media_type or "").startswith("text/event-stream"))
+        self.assertIsNotNone(response.body_iterator)
 
     def test_graph_build_task_start_and_status_contract(self) -> None:
         def _fake_run_graph_build(
