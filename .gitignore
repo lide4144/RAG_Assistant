@@ -69,6 +69,7 @@ example_projects/
 # Local non-code asset folders
 截图/
 论文/
+云端文件/
 
 # Keep selected lightweight metadata in data/
 !data/library_topics.json
@@ -80,3 +81,5 @@ test-results/.last-run.json
 data/processed/graph.json
 data/processed/paper_summary.json
 data/processed/papers.json
+data/processed/pipeline_status_latest.json
+*.Zone.Identifier
