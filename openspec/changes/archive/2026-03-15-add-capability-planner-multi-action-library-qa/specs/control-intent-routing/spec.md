@@ -1,14 +1,13 @@
-# control-intent-routing 规范
+## 新增需求
 
-## 目的
-待定 - 由归档变更 improve-paper-qa-control-intent-routing 创建。归档后请更新目的。
-## 需求
 ### 需求:系统必须输出能力规划结果而非单一意图标签
 系统必须在路由阶段输出能力规划结果，至少包含 `primary_capability`、`strictness`、`action_plan` 与 `planner_confidence`；禁止仅以单一 `intent_type` 作为复合查询的唯一决策产物。
 
 #### 场景:复合查询输出能力规划
 - **当** 用户输入同时包含目录过滤与跨文档对比的复合查询
 - **那么** 系统必须输出包含多个顺序动作的能力规划结果，而不是只返回单一 `retrieval_query`
+
+## 修改需求
 
 ### 需求:系统必须在检索前执行控制意图路由
 系统必须将控制意图识别升级为语义路由，并输出结构化结果（至少包含 `intent_type` 与必要参数）；禁止仅依赖关键词/正则列表作为唯一识别手段。对于能力规划模式，系统必须在同一轮输出 `primary_capability`、`strictness`、`action_plan` 与必要参数，以支持目录查询、总结与严格事实问答分流。
@@ -42,3 +41,5 @@
 #### 场景:能力规划字段完整
 - **当** 一次请求经过统一 planner
 - **那么** trace 中必须包含 `primary_capability`、`strictness`、`action_plan` 与 `planner_confidence`
+
+## 移除需求

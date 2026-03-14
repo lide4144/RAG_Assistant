@@ -154,6 +154,16 @@ class PipelineConfig:
     intent_control_min_confidence: float = 0.75
     style_control_reuse_last_topic: bool = True
     style_control_max_turn_distance: int = 3
+    planner_enabled: bool = True
+    planner_use_llm: bool = False
+    planner_provider: str = "siliconflow"
+    planner_model: str = "Pro/deepseek-ai/DeepSeek-V3.2"
+    planner_api_base: str = "https://api.siliconflow.cn/v1"
+    planner_api_key_env: str = "SILICONFLOW_API_KEY"
+    planner_timeout_ms: int = 6000
+    planner_max_steps: int = 3
+    planner_max_papers: int = 20
+    planner_summary_min_papers: int = 2
     index_incremental_enabled: bool = False
     index_incremental_strategy: str = "rebuild"
     dense_backend: str = "embedding"
