@@ -2185,6 +2185,17 @@ def _build_answer(
     )
 
 
+def _resolve_run_dir(args: argparse.Namespace) -> Path:
+    run_dir_arg = str(getattr(args, "run_dir", "")).strip()
+    if run_dir_arg:
+        run_dir = Path(run_dir_arg)
+        run_dir.mkdir(parents=True, exist_ok=True)
+        return run_dir
+
+    run_id_arg = str(getattr(args, "run_id", "")).strip() or None
+    return create_run_dir(RUNS_DIR, run_id_arg)
+
+
 def run_qa(args: argparse.Namespace) -> int:
     session_id = str(getattr(args, "session_id", "default"))
     session_store = str(getattr(args, "session_store", str(DATA_DIR / "session_store.json")))
@@ -3197,10 +3208,7 @@ def run_qa(args: argparse.Namespace) -> int:
         for item in group["evidence"]:
             print(f"  - {item['chunk_id']} [{item['section_page']}] {item['quote']}")
 
-    run_dir_arg = str(getattr(args, "run_dir", "")).strip()
-    run_id_arg = str(getattr(args, "run_id", "")).strip()
-    run_dir = Path(run_dir_arg) if run_dir_arg else create_run_dir(RUNS_DIR)
-    run_dir.mkdir(parents=True, exist_ok=True)
+    run_dir = _resolve_run_dir(args)
     need_scope_clarification = decision == "clarify" or scope_mode == "clarify_scope" or (
         not bool(scope_reason.get("has_paper_clue")) and "请提供论文标题/作者/年份" in answer
     )
