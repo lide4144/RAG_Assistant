@@ -11,6 +11,15 @@ const client = axios.create({
   }
 });
 
+const PLANNER_QA_PATH = '/planner/qa';
+const PLANNER_QA_STREAM_PATH = '/planner/qa/stream';
+const LEGACY_QA_PATH = '/qa';
+const LEGACY_QA_STREAM_PATH = '/qa/stream';
+
+function shouldFallbackPlannerShell(status: number | undefined): boolean {
+  return status === 404 || status === 405 || status === 501 || status === 502 || status === 503;
+}
+
 export type KernelStreamEvent =
   | { type: 'message'; traceId: string; mode: 'local' | 'web' | 'hybrid'; content: string }
   | {
@@ -65,8 +74,48 @@ export async function healthcheckKernel(): Promise<boolean> {
 }
 
 export async function requestKernelAnswer(payload: KernelChatRequest): Promise<KernelChatResponse> {
+  if (payload.mode !== 'local') {
+    return requestKernelAnswerLegacy(payload);
+  }
   try {
-    const response = await client.post<KernelChatResponse>('/qa', payload);
+    const response = await client.post<KernelChatResponse>(PLANNER_QA_PATH, payload);
+    if (!response.data?.answer || !Array.isArray(response.data?.sources)) {
+      throw new KernelClientError(
+        KernelErrorCode.BAD_RESPONSE,
+        'Kernel response missing required fields',
+        response.status
+      );
+    }
+    return response.data;
+  } catch (error) {
+    if (error instanceof KernelClientError) {
+      throw error;
+    }
+
+    if (error instanceof AxiosError) {
+      if (shouldFallbackPlannerShell(error.response?.status)) {
+        return requestKernelAnswerLegacy(payload);
+      }
+      if (error.code === 'ECONNABORTED') {
+        throw new KernelClientError(KernelErrorCode.TIMEOUT, 'Kernel request timed out');
+      }
+      if (error.response) {
+        throw new KernelClientError(
+          KernelErrorCode.BAD_RESPONSE,
+          `Kernel returned ${error.response.status}`,
+          error.response.status
+        );
+      }
+      throw new KernelClientError(KernelErrorCode.NETWORK, 'Kernel request failed due to network error');
+    }
+
+    throw new KernelClientError(KernelErrorCode.UNKNOWN, 'Kernel request failed with unknown error');
+  }
+}
+
+async function requestKernelAnswerLegacy(payload: KernelChatRequest): Promise<KernelChatResponse> {
+  try {
+    const response = await client.post<KernelChatResponse>(LEGACY_QA_PATH, payload);
     if (!response.data?.answer || !Array.isArray(response.data?.sources)) {
       throw new KernelClientError(
         KernelErrorCode.BAD_RESPONSE,
@@ -192,7 +241,69 @@ export async function streamKernelAnswer(
   payload: KernelChatRequest,
   onEvent: (event: KernelStreamEvent) => void
 ): Promise<void> {
-  const response = await fetch(`${config.kernelBaseUrl}/qa/stream`, {
+  if (payload.mode !== 'local') {
+    return streamKernelAnswerLegacy(payload, onEvent);
+  }
+  let response = await fetch(`${config.kernelBaseUrl}${PLANNER_QA_STREAM_PATH}`, {
+    method: 'POST',
+    headers: {
+      'content-type': 'application/json'
+    },
+    body: JSON.stringify(payload)
+  });
+
+  if ((!response.ok || !response.body) && shouldFallbackPlannerShell(response.status)) {
+    response = await fetch(`${config.kernelBaseUrl}${LEGACY_QA_STREAM_PATH}`, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json'
+      },
+      body: JSON.stringify(payload)
+    });
+  }
+
+  if (!response.ok || !response.body) {
+    throw new KernelClientError(
+      KernelErrorCode.BAD_RESPONSE,
+      `Kernel stream returned ${response.status}`,
+      response.status
+    );
+  }
+
+  const decoder = new TextDecoder();
+  const reader = response.body.getReader();
+  let buffer = '';
+
+  while (true) {
+    const { value, done } = await reader.read();
+    if (done) {
+      break;
+    }
+    buffer += decoder.decode(value, { stream: true });
+
+    const parsed = parseSseData(buffer);
+    buffer = buffer.slice(parsed.consumed);
+    for (const event of parsed.events) {
+      onEvent(event);
+      if (event.type === 'error') {
+        return;
+      }
+    }
+  }
+
+  if (buffer.trim()) {
+    const parsed = parseSseData(`${buffer}\n\n`);
+    for (const event of parsed.events) {
+      onEvent(event);
+    }
+  }
+}
+
+async function streamKernelAnswerLegacy(
+  payload: KernelChatRequest,
+  onEvent: (event: KernelStreamEvent) => void
+): Promise<void> {
+  const response = await fetch(`${config.kernelBaseUrl}${LEGACY_QA_STREAM_PATH}`, {
     method: 'POST',
     headers: {
       'content-type': 'application/json'
