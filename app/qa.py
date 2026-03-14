@@ -12,6 +12,12 @@ from typing import Any, Callable
 
 import yaml
 
+from app.capability_planner import (
+    build_planner_fallback,
+    build_rule_based_plan,
+    compose_catalog_answer,
+    execute_catalog_lookup,
+)
 from app.context_budget import ContextAssemblyResult, assemble_prompt_with_budget
 from app.config import load_and_validate_config
 from app.document_structure import (
@@ -48,6 +54,7 @@ from app.session_state import (
     derive_rewrite_context,
     load_dialog_state,
     load_history_window,
+    load_pending_clarify,
     merge_with_pending_clarify,
     rewrite_with_history_context,
 )
@@ -2228,6 +2235,14 @@ def run_qa(args: argparse.Namespace) -> int:
         redis_key_prefix=session_redis_key_prefix,
         redis_fallback_to_file=session_redis_fallback_to_file,
     )
+    pending_clarify = load_pending_clarify(
+        session_id,
+        store_path=session_store,
+        backend=session_backend,
+        redis_url=session_redis_url,
+        redis_key_prefix=session_redis_key_prefix,
+        redis_fallback_to_file=session_redis_fallback_to_file,
+    )
     (
         last_turn_decision,
         last_turn_warnings,
@@ -2242,7 +2257,17 @@ def run_qa(args: argparse.Namespace) -> int:
     if open_summary_intent and transient_constraints:
         history_constraint_dropped = True
         dropped_constraints = list(transient_constraints)
-    should_merge_pending = (not open_summary_intent) or dialog_state in {"need_clarify", "waiting_followup"}
+    preplanner = build_rule_based_plan(
+        user_input=args.q,
+        standalone_query=args.q,
+        dialog_state=dialog_state,
+        history_topic_anchors=history_topic_anchors,
+        pending_clarify=pending_clarify,
+        max_steps=1,
+        catalog_limit=1,
+    )
+    preplanner_should_clear_pending = preplanner.should_clear_pending_clarify
+    should_merge_pending = ((not open_summary_intent) or dialog_state in {"need_clarify", "waiting_followup"}) and not preplanner_should_clear_pending
     effective_input, merged_from_clarify = merge_with_pending_clarify(
         session_id,
         args.q,
@@ -2298,9 +2323,95 @@ def run_qa(args: argparse.Namespace) -> int:
         history_window,
         current_topic_anchors,
     )
+    planner_error: str | None = None
+    if bool(getattr(config, "planner_enabled", True)):
+        try:
+            planner_result = build_rule_based_plan(
+                user_input=args.q,
+                standalone_query=standalone_query,
+                dialog_state=dialog_state,
+                history_topic_anchors=history_topic_anchors,
+                pending_clarify=pending_clarify,
+                max_steps=int(getattr(config, "planner_max_steps", 3)),
+                catalog_limit=int(getattr(config, "planner_max_papers", 20)),
+            )
+        except Exception as exc:
+            planner_error = str(exc)
+            planner_result = build_planner_fallback(user_input=args.q, standalone_query=standalone_query, reason="planner_exception")
+    else:
+        planner_result = build_planner_fallback(user_input=args.q, standalone_query=standalone_query, reason="planner_disabled")
+    standalone_query = planner_result.standalone_query or standalone_query
+    open_summary_intent = open_summary_intent or planner_result.strictness == "summary"
+    planner_primary_capability = planner_result.primary_capability
+    planner_strictness = planner_result.strictness
+    planner_action_plan = list(planner_result.action_plan or [])
+    execution_trace: list[dict[str, Any]] = []
+    planner_short_circuit: dict[str, Any] | None = None
+    catalog_result: dict[str, Any] | None = None
+    if planner_action_plan and str(planner_action_plan[0].get("action", "")) == "catalog_lookup":
+        catalog_result = execute_catalog_lookup(
+            query=str(planner_action_plan[0].get("query") or standalone_query),
+            papers_path=(Path(args.chunks).parent / "papers.json"),
+            max_papers=int(getattr(config, "planner_max_papers", 20)),
+        )
+        execution_trace.append(
+            {
+                "step": 1,
+                "action": "catalog_lookup",
+                "state": str(catalog_result.get("state", "ready")),
+                "depends_on": [],
+                "produces": ["paper_set"],
+                "matched_count": int(catalog_result.get("matched_count", 0)),
+                "selected_count": int(catalog_result.get("selected_count", 0)),
+                "truncated": bool(catalog_result.get("truncated", False)),
+                "short_circuit": bool(catalog_result.get("short_circuit", False)),
+                "short_circuit_reason": catalog_result.get("short_circuit_reason"),
+            }
+        )
+        if catalog_result.get("short_circuit"):
+            planner_short_circuit = {
+                "triggered": True,
+                "reason": catalog_result.get("short_circuit_reason"),
+                "step": "catalog_lookup",
+            }
+            if len(planner_action_plan) > 1:
+                execution_trace.append(
+                    {
+                        "step": 2,
+                        "action": str(planner_action_plan[1].get("action", "")),
+                        "state": "short_circuit",
+                        "depends_on": list(planner_action_plan[1].get("depends_on") or []),
+                        "produces": [],
+                        "short_circuit": True,
+                        "short_circuit_reason": "missing_paper_set_dependency",
+                    }
+                )
+        else:
+            topic_paper_ids = {
+                str(row.get("paper_id", "")).strip()
+                for row in list(catalog_result.get("paper_set") or [])
+                if str(row.get("paper_id", "")).strip()
+            } or topic_paper_ids
+            if len(planner_action_plan) > 1:
+                execution_trace.append(
+                    {
+                        "step": 2,
+                        "action": str(planner_action_plan[1].get("action", "")),
+                        "state": "ready",
+                        "depends_on": list(planner_action_plan[1].get("depends_on") or []),
+                        "produces": [],
+                        "short_circuit": False,
+                        "short_circuit_reason": None,
+                    }
+                )
+    else:
+        planner_short_circuit = {"triggered": False, "reason": None, "step": None}
     if open_summary_intent and transient_constraints and not dropped_constraints:
         history_constraint_dropped = True
         dropped_constraints = list(transient_constraints)
+    topic_switched = topic_switched or planner_result.is_new_topic
+    if planner_result.is_new_topic:
+        clarify_streak_before_turn = 0
 
     intent_router_enabled = bool(getattr(config, "intent_router_enabled", False))
     intent_type = "retrieval_query"
@@ -2771,23 +2882,63 @@ def run_qa(args: argparse.Namespace) -> int:
     assistant_mode_force_legacy_gate = bool(getattr(config, "assistant_mode_force_legacy_gate", False))
     clarify_limit = max(1, int(getattr(config, "assistant_mode_clarify_limit", 2)))
     force_partial_answer_on_limit = bool(getattr(config, "assistant_mode_force_partial_answer_on_limit", True))
-    sufficiency_gate = run_sufficiency_gate(
-        question=standalone_query,
-        query_used=query_used,
-        topic_query_source=topic_query_source,
-        topic_query_text=(anchor_query if topic_query_source == "anchor_query" else query_used),
-        open_summary_intent=(open_summary_intent and not assistant_mode_force_legacy_gate),
-        scope_mode=scope_mode,
-        evidence_grouped=evidence_grouped,
-        config=config,
-        clarify_count_for_topic=clarify_streak_before_turn,
-        clarify_limit=clarify_limit,
-        force_partial_answer_on_limit=force_partial_answer_on_limit,
-    )
+    if planner_short_circuit and bool(planner_short_circuit.get("triggered")):
+        sufficiency_gate = {
+            "decision": "answer",
+            "reason": "planner_short_circuit",
+            "triggered_rules": [str(planner_short_circuit.get("reason") or "planner_short_circuit")],
+            "clarify_questions": [],
+            "clarify_limit_hit": False,
+            "forced_partial_answer": False,
+            "missing_key_elements": [],
+            "semantic_policy": planner_strictness,
+        }
+        decision = "answer"
+        decision_reason = "未找到符合条件的论文，因此未继续执行后续步骤。"
+    elif planner_strictness == "summary":
+        sufficiency_gate = {
+            "decision": "answer",
+            "reason": "summary_route_bypass_strict_gate",
+            "triggered_rules": ["summary_route"],
+            "clarify_questions": [],
+            "clarify_limit_hit": False,
+            "forced_partial_answer": False,
+            "missing_key_elements": [],
+            "semantic_policy": "summary",
+        }
+        decision = "answer"
+        decision_reason = "summary 路径绕过 strict fact 门控。"
+    elif planner_strictness == "catalog":
+        sufficiency_gate = {
+            "decision": "answer",
+            "reason": "catalog_route_bypass_retrieval_gate",
+            "triggered_rules": ["catalog_route"],
+            "clarify_questions": [],
+            "clarify_limit_hit": False,
+            "forced_partial_answer": False,
+            "missing_key_elements": [],
+            "semantic_policy": "catalog",
+        }
+        decision = "answer"
+        decision_reason = "catalog 路径绕过正文证据门控。"
+    else:
+        sufficiency_gate = run_sufficiency_gate(
+            question=standalone_query,
+            query_used=query_used,
+            topic_query_source=topic_query_source,
+            topic_query_text=(anchor_query if topic_query_source == "anchor_query" else query_used),
+            open_summary_intent=(open_summary_intent and not assistant_mode_force_legacy_gate),
+            scope_mode=scope_mode,
+            evidence_grouped=evidence_grouped,
+            config=config,
+            clarify_count_for_topic=clarify_streak_before_turn,
+            clarify_limit=clarify_limit,
+            force_partial_answer_on_limit=force_partial_answer_on_limit,
+        )
+        decision = str(sufficiency_gate.get("decision", "answer"))
+        decision_reason = str(sufficiency_gate.get("reason", "")).strip()
     retrieval_metrics["semantic_similarity_score"] = sufficiency_gate.get("semantic_similarity_score")
-    retrieval_metrics["semantic_strategy_tier"] = sufficiency_gate.get("semantic_policy", "balanced")
-    decision = str(sufficiency_gate.get("decision", "answer"))
-    decision_reason = str(sufficiency_gate.get("reason", "")).strip()
+    retrieval_metrics["semantic_strategy_tier"] = sufficiency_gate.get("semantic_policy", planner_strictness)
     if force_clarify_due_to_anchor:
         decision_reason = force_clarify_reason
         sufficiency_gate["reason"] = force_clarify_reason
@@ -2903,13 +3054,24 @@ def run_qa(args: argparse.Namespace) -> int:
         final_refuse_source = None
         return True
 
+    evidence_policy_gate: dict[str, Any] = {"enabled": bool(config.evidence_policy_enforced), "skipped": "not_evaluated"}
     if decision == "answer":
-        if assistant_mode_enabled and open_summary_intent and not assistant_mode_force_legacy_gate:
+        if planner_strictness == "catalog" or (planner_short_circuit and bool(planner_short_circuit.get("triggered"))):
+            answer = compose_catalog_answer(catalog_result or {})
+            answer_citations = []
+            assistant_summary_suggestions = []
+            answer_llm_used = False
+            answer_llm_fallback = False
+            answer_llm_diagnostics = None
+            answer_stream_observation = dict(empty_stream_observation)
+            context_budget = dict(empty_context_budget)
+            evidence_policy_gate = {"enabled": bool(config.evidence_policy_enforced), "skipped": "catalog_route"}
+        elif assistant_mode_enabled and open_summary_intent and not assistant_mode_force_legacy_gate:
             assistant_mode_used = True
             answer, answer_citations, assistant_summary_suggestions, summary_ready = _build_assistant_summary_answer(
                 question=standalone_query,
                 evidence_grouped=evidence_grouped,
-                min_topics=(1 if forced_partial_answer else 3),
+                min_topics=max(1, int(getattr(config, "planner_summary_min_papers", 2))) if not forced_partial_answer else 1,
                 low_confidence_note=forced_partial_answer,
             )
             if summary_ready:
@@ -2962,7 +3124,7 @@ def run_qa(args: argparse.Namespace) -> int:
                 history_turns=history_window,
                 on_stream_delta=_cli_stream_delta,
             )
-        if decision == "answer" and not forced_partial_answer:
+        if decision == "answer" and not forced_partial_answer and planner_strictness == "strict_fact":
             answer, answer_citations, evidence_policy_gate = _apply_evidence_policy_gate(
                 question=standalone_query,
                 answer=answer,
@@ -3037,7 +3199,7 @@ def run_qa(args: argparse.Namespace) -> int:
 
     run_dir_arg = str(getattr(args, "run_dir", "")).strip()
     run_id_arg = str(getattr(args, "run_id", "")).strip()
-    run_dir = Path(run_dir_arg) if run_dir_arg else create_run_dir(RUNS_DIR, timestamp=(run_id_arg or None))
+    run_dir = Path(run_dir_arg) if run_dir_arg else create_run_dir(RUNS_DIR)
     run_dir.mkdir(parents=True, exist_ok=True)
     need_scope_clarification = decision == "clarify" or scope_mode == "clarify_scope" or (
         not bool(scope_reason.get("has_paper_clue")) and "请提供论文标题/作者/年份" in answer
@@ -3045,12 +3207,20 @@ def run_qa(args: argparse.Namespace) -> int:
     final_decision = (
         "need_scope_clarification"
         if need_scope_clarification
-        else ("insufficient_evidence" if decision == "refuse" else ("llm_answer_with_evidence" if answer_llm_used else ("answer_with_evidence" if evidence_flat else "insufficient_evidence")))
+        else (
+            "insufficient_evidence"
+            if decision == "refuse"
+            else (
+                "answer_with_catalog"
+                if planner_strictness == "catalog" or bool((planner_short_circuit or {}).get("triggered"))
+                else ("llm_answer_with_evidence" if answer_llm_used else ("answer_with_evidence" if evidence_flat else "insufficient_evidence"))
+            )
+        )
     )
     next_transient_constraints = [str(x).strip() for x in sufficiency_gate.get("missing_key_elements", []) if str(x).strip()]
     if not need_scope_clarification:
         next_transient_constraints = []
-    clarify_count = clarify_streak_before_turn + (1 if decision == "clarify" else 0)
+    clarify_count = (0 if planner_result.is_new_topic else clarify_streak_before_turn) + (1 if decision == "clarify" else 0)
 
     turn_number = append_turn_record(
         session_id,
@@ -3064,7 +3234,7 @@ def run_qa(args: argparse.Namespace) -> int:
         transient_constraints=next_transient_constraints,
         clarify_count_for_topic=(clarify_count if decision == "clarify" else 0),
         session_reset_applied=session_reset_applied,
-        clear_pending_clarify=not need_scope_clarification,
+        clear_pending_clarify=(planner_result.should_clear_pending_clarify or not need_scope_clarification),
         set_pending_clarify=(
             {
                 "original_question": standalone_query,
@@ -3104,6 +3274,20 @@ def run_qa(args: argparse.Namespace) -> int:
         "dropped_constraints": dropped_constraints,
         "coreference_resolved": bool(coreference_resolved or merged_from_clarify),
         "standalone_query": standalone_query,
+        "is_new_topic": planner_result.is_new_topic,
+        "should_clear_pending_clarify": planner_result.should_clear_pending_clarify,
+        "relation_to_previous": planner_result.relation_to_previous,
+        "planner_used": planner_result.planner_used,
+        "planner_source": planner_result.planner_source,
+        "planner_fallback": planner_result.planner_fallback,
+        "planner_fallback_reason": planner_result.planner_fallback_reason or planner_error,
+        "planner_confidence": planner_result.planner_confidence,
+        "primary_capability": planner_primary_capability,
+        "strictness": planner_strictness,
+        "action_plan": planner_action_plan,
+        "execution_trace": execution_trace,
+        "short_circuit": planner_short_circuit or {"triggered": False, "reason": None, "step": None},
+        "truncated": bool(catalog_result and catalog_result.get("truncated")),
         "intent_router_enabled": intent_router_enabled,
         "intent_type": intent_type,
         "intent_confidence": intent_confidence,
@@ -3205,7 +3389,7 @@ def run_qa(args: argparse.Namespace) -> int:
         "answer_stream_first_token_ms": answer_stream_observation["answer_stream_first_token_ms"],
         "answer_stream_fallback_reason": answer_stream_observation["answer_stream_fallback_reason"],
         "answer_stream_events": answer_stream_observation["answer_stream_events"],
-        "claim_binding": answer_stream_observation["claim_binding"],
+        "claim_binding": answer_stream_observation.get("claim_binding", empty_stream_observation["claim_binding"]),
         "papers_ranked": papers_ranked,
         "evidence_grouped": evidence_grouped,
         "answer_citations": answer_citations,
@@ -3300,6 +3484,20 @@ def run_qa(args: argparse.Namespace) -> int:
         "dropped_constraints": dropped_constraints,
         "coreference_resolved": bool(coreference_resolved or merged_from_clarify),
         "standalone_query": standalone_query,
+        "is_new_topic": planner_result.is_new_topic,
+        "should_clear_pending_clarify": planner_result.should_clear_pending_clarify,
+        "relation_to_previous": planner_result.relation_to_previous,
+        "planner_used": planner_result.planner_used,
+        "planner_source": planner_result.planner_source,
+        "planner_fallback": planner_result.planner_fallback,
+        "planner_fallback_reason": planner_result.planner_fallback_reason or planner_error,
+        "planner_confidence": planner_result.planner_confidence,
+        "primary_capability": planner_primary_capability,
+        "strictness": planner_strictness,
+        "action_plan": planner_action_plan,
+        "execution_trace": execution_trace,
+        "short_circuit": planner_short_circuit or {"triggered": False, "reason": None, "step": None},
+        "truncated": bool(catalog_result and catalog_result.get("truncated")),
         "intent_router_enabled": intent_router_enabled,
         "intent_type": intent_type,
         "intent_confidence": intent_confidence,
@@ -3381,7 +3579,7 @@ def run_qa(args: argparse.Namespace) -> int:
         "answer_stream_first_token_ms": answer_stream_observation["answer_stream_first_token_ms"],
         "answer_stream_fallback_reason": answer_stream_observation["answer_stream_fallback_reason"],
         "answer_stream_events": answer_stream_observation["answer_stream_events"],
-        "claim_binding": answer_stream_observation["claim_binding"],
+        "claim_binding": answer_stream_observation.get("claim_binding", empty_stream_observation["claim_binding"]),
         "top_k": top_k,
         "answer": answer,
         "answer_citations": answer_citations,

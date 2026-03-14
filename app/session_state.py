@@ -768,3 +768,33 @@ def load_dialog_state(
     if value not in ALLOWED_DIALOG_STATES:
         return "normal"
     return value
+
+
+def load_pending_clarify(
+    session_id: str,
+    *,
+    store_path: str | Path = "data/session_store.json",
+    backend: str | None = None,
+    redis_url: str | None = None,
+    redis_key_prefix: str = "rag",
+    redis_fallback_to_file: bool = True,
+) -> dict[str, Any] | None:
+    session, _ = _read_session_record(
+        session_id,
+        store_path=store_path,
+        backend=backend,
+        redis_url=redis_url,
+        redis_key_prefix=redis_key_prefix,
+        redis_fallback_to_file=redis_fallback_to_file,
+    )
+    pending = session.get("pending_clarify")
+    if not isinstance(pending, dict):
+        return None
+    original_question = str(pending.get("original_question", "")).strip()
+    clarify_question = str(pending.get("clarify_question", "")).strip()
+    if not original_question and not clarify_question:
+        return None
+    return {
+        "original_question": original_question,
+        "clarify_question": clarify_question,
+    }

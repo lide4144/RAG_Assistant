@@ -269,6 +269,26 @@ def validate_trace_schema(trace: dict[str, Any]) -> tuple[bool, list[str]]:
     standalone_query = trace.get("standalone_query")
     if standalone_query is not None and not isinstance(standalone_query, str):
         errors.append("standalone_query must be string or null")
+    for key in ("is_new_topic", "should_clear_pending_clarify", "planner_used", "planner_fallback", "truncated"):
+        value = trace.get(key)
+        if value is not None and not isinstance(value, bool):
+            errors.append(f"{key} must be bool or null")
+    for key in ("relation_to_previous", "planner_source", "planner_fallback_reason", "primary_capability", "strictness"):
+        value = trace.get(key)
+        if value is not None and not isinstance(value, str):
+            errors.append(f"{key} must be string or null")
+    planner_confidence = trace.get("planner_confidence")
+    if planner_confidence is not None and not isinstance(planner_confidence, (int, float)):
+        errors.append("planner_confidence must be number or null")
+    action_plan = trace.get("action_plan")
+    if action_plan is not None and not isinstance(action_plan, list):
+        errors.append("action_plan must be list or null")
+    execution_trace = trace.get("execution_trace")
+    if execution_trace is not None and not isinstance(execution_trace, list):
+        errors.append("execution_trace must be list or null")
+    short_circuit = trace.get("short_circuit")
+    if short_circuit is not None and not isinstance(short_circuit, dict):
+        errors.append("short_circuit must be object or null")
     intent_type = trace.get("intent_type")
     if intent_type is not None and not isinstance(intent_type, str):
         errors.append("intent_type must be string or null")
