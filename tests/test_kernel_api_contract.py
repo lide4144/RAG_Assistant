@@ -30,6 +30,7 @@ from app.kernel_api import (
     _start_library_import_task,
     GraphBuildTaskStartRequest,
 )
+from app.qa import _resolve_run_dir
 
 
 class KernelApiContractTests(unittest.TestCase):
@@ -99,6 +100,15 @@ class KernelApiContractTests(unittest.TestCase):
         self.assertEqual(response.answer, 'hello [1]')
         self.assertEqual(len(response.sources), 1)
         self.assertIsInstance(response.sources[0], SourceItem)
+
+    def test_resolve_run_dir_prefers_run_id_when_run_dir_missing(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            args = type("Args", (), {"run_dir": "", "run_id": "kernel_api_demo"})()
+            with patch("app.qa.RUNS_DIR", Path(tmp)):
+                run_dir = _resolve_run_dir(args)
+
+            self.assertEqual(run_dir, Path(tmp) / "kernel_api_demo")
+            self.assertTrue(run_dir.exists())
 
     def test_stream_contract_mode_consistency_and_message_end(self) -> None:
         modes = ("local", "web", "hybrid")

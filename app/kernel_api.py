@@ -2359,6 +2359,18 @@ def qa_stream(payload: KernelChatRequest) -> StreamingResponse:
                         },
                     }
                 )
+            except FileNotFoundError as exc:
+                queue.put(
+                    {
+                        "event": "error",
+                        "data": {
+                            "type": "error",
+                            "traceId": trace_id,
+                            "code": "KERNEL_BAD_RESPONSE",
+                            "message": str(exc),
+                        },
+                    }
+                )
             except Exception as exc:
                 queue.put(
                     {
