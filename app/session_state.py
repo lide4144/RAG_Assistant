@@ -283,7 +283,24 @@ def _ensure_session(payload: dict[str, Any], session_id: str) -> dict[str, Any]:
             if value and value not in normalized_semantic:
                 normalized_semantic.append(value)
         state["semantic_recall_memory"] = normalized_semantic[:12]
+    planner_summary = state.get("last_planner_summary")
+    if not isinstance(planner_summary, dict):
+        state["last_planner_summary"] = {}
     return session
+
+
+def _normalize_planner_summary(summary: dict[str, Any] | None) -> dict[str, Any] | None:
+    if not isinstance(summary, dict):
+        return None
+    normalized: dict[str, Any] = {}
+    for key in ("decision_result", "primary_capability", "strictness", "standalone_query", "clarify_question"):
+        value = _normalize_spaces(str(summary.get(key, "")))
+        if value:
+            normalized[key] = value
+    selected = [str(item).strip() for item in list(summary.get("selected_tools_or_skills") or []) if str(item).strip()]
+    if selected:
+        normalized["selected_tools_or_skills"] = selected
+    return normalized or None
 
 
 def clear_session(
@@ -650,6 +667,7 @@ def append_turn_record(
     topic_anchors: list[str] | None = None,
     transient_constraints: list[str] | None = None,
     clarify_count_for_topic: int | None = None,
+    planner_summary: dict[str, Any] | None = None,
     session_reset_applied: bool = False,
     store_path: str | Path = "data/session_store.json",
     backend: str | None = None,
@@ -700,12 +718,17 @@ def append_turn_record(
             max(0, int(clarify_count_for_topic)) if clarify_count_for_topic is not None else int(state.get("clarify_count_for_topic", 0))
         ),
     }
+    normalized_planner_summary = _normalize_planner_summary(planner_summary)
+    if normalized_planner_summary is not None:
+        turn_record["planner_summary"] = normalized_planner_summary
     turns.append(turn_record)
     session["turns"] = turns
     state["topic_anchors"] = merged_anchors
     state["transient_constraints"] = merged_constraints
     state["summary_memory"] = _assemble_summary_memory(turns)
     state["semantic_recall_memory"] = _assemble_semantic_memory(turns)
+    if normalized_planner_summary is not None:
+        state["last_planner_summary"] = normalized_planner_summary
     dialog_state = str(state.get("dialog_state", "normal")).strip().lower()
     if dialog_state not in ALLOWED_DIALOG_STATES:
         dialog_state = "normal"
@@ -797,4 +820,49 @@ def load_pending_clarify(
     return {
         "original_question": original_question,
         "clarify_question": clarify_question,
+    }
+
+
+def load_planner_conversation_state(
+    session_id: str,
+    *,
+    store_path: str | Path = "data/session_store.json",
+    backend: str | None = None,
+    redis_url: str | None = None,
+    redis_key_prefix: str = "rag",
+    redis_fallback_to_file: bool = True,
+) -> dict[str, Any]:
+    session, _ = _read_session_record(
+        session_id,
+        store_path=store_path,
+        backend=backend,
+        redis_url=redis_url,
+        redis_key_prefix=redis_key_prefix,
+        redis_fallback_to_file=redis_fallback_to_file,
+    )
+    state = session.get("state", {})
+    turns = [t for t in session.get("turns", []) if isinstance(t, dict)]
+    recent_topic_anchors = [str(item).strip() for item in list(state.get("topic_anchors") or []) if str(item).strip()]
+    pending_clarify = load_pending_clarify(
+        session_id,
+        store_path=store_path,
+        backend=backend,
+        redis_url=redis_url,
+        redis_key_prefix=redis_key_prefix,
+        redis_fallback_to_file=redis_fallback_to_file,
+    )
+    previous_planner = _normalize_planner_summary(state.get("last_planner_summary"))
+    if previous_planner is None and turns:
+        previous_planner = _normalize_planner_summary(turns[-1].get("planner_summary"))
+    if previous_planner is None and turns:
+        previous_planner = _normalize_planner_summary(
+            {
+                "decision_result": turns[-1].get("decision"),
+                "standalone_query": turns[-1].get("standalone_query"),
+            }
+        )
+    return {
+        "recent_topic_anchors": recent_topic_anchors[:8],
+        "pending_clarify": pending_clarify,
+        "previous_planner": previous_planner,
     }

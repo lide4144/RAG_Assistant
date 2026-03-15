@@ -27,8 +27,11 @@ class CapabilityPlannerTests(unittest.TestCase):
         )
         self.assertEqual(result.primary_capability, "cross_doc_summary")
         self.assertEqual(result.strictness, "summary")
+        self.assertEqual(result.decision_result, "local_execute")
+        self.assertEqual(result.knowledge_route, "local")
         self.assertEqual([step["action"] for step in result.action_plan], ["catalog_lookup", "cross_doc_summary"])
         self.assertEqual(result.action_plan[1]["params"].get("format"), "table")
+        self.assertEqual(result.selected_tools_or_skills, ["catalog_lookup", "cross_doc_summary"])
 
     def test_rule_planner_upgrades_strict_fact_escape(self) -> None:
         result = build_rule_based_plan(
@@ -42,9 +45,26 @@ class CapabilityPlannerTests(unittest.TestCase):
         )
         self.assertEqual(result.primary_capability, "fact_qa")
         self.assertEqual(result.strictness, "strict_fact")
+        self.assertEqual(result.decision_result, "local_execute")
         self.assertEqual(result.action_plan[-1]["action"], "fact_qa")
 
     def test_rule_planner_emits_paper_assistant_tool_for_research_guidance(self) -> None:
+        result = build_rule_based_plan(
+            user_input="帮我分析 Transformer 压缩方向的论文并给出下一步研究建议",
+            standalone_query="帮我分析 Transformer 压缩方向的论文并给出下一步研究建议",
+            dialog_state="normal",
+            history_topic_anchors=[],
+            pending_clarify=None,
+            max_steps=3,
+            catalog_limit=20,
+        )
+        self.assertEqual(result.primary_capability, "paper_assistant")
+        self.assertEqual(result.strictness, "summary")
+        self.assertEqual(result.decision_result, "delegate_research_assistant")
+        self.assertEqual(result.research_mode, "paper_assistant")
+        self.assertEqual(result.action_plan[-1]["action"], "paper_assistant")
+
+    def test_rule_planner_clarifies_paper_assistant_without_scope(self) -> None:
         result = build_rule_based_plan(
             user_input="帮我比较这些论文并给出下一步研究建议",
             standalone_query="帮我比较这些论文并给出下一步研究建议",
@@ -54,9 +74,37 @@ class CapabilityPlannerTests(unittest.TestCase):
             max_steps=3,
             catalog_limit=20,
         )
-        self.assertEqual(result.primary_capability, "paper_assistant")
-        self.assertEqual(result.strictness, "summary")
-        self.assertEqual(result.action_plan[-1]["action"], "paper_assistant")
+        self.assertEqual(result.decision_result, "clarify")
+        self.assertTrue(result.requires_clarification)
+        self.assertEqual(result.research_mode, "none")
+        self.assertEqual(result.action_plan, [])
+        self.assertEqual(result.selected_tools_or_skills, [])
+        self.assertIn("请先说明", result.clarify_question or "")
+
+    def test_rule_planner_delegates_web_when_policy_allows(self) -> None:
+        result = build_rule_based_plan(
+            user_input="请联网查看最近的 RAG 综述",
+            standalone_query="请联网查看最近的 RAG 综述",
+            dialog_state="normal",
+            history_topic_anchors=[],
+            pending_clarify=None,
+            capability_registry=[
+                {"name": "fact_qa"},
+                {"name": "catalog_lookup"},
+                {"name": "cross_doc_summary"},
+                {"name": "control"},
+                {"name": "paper_assistant"},
+                {"name": "web_research"},
+            ],
+            policy_flags={"allow_web_delegation": True, "allow_research_assistant": True},
+            max_steps=3,
+            catalog_limit=20,
+        )
+        self.assertEqual(result.decision_result, "delegate_web")
+        self.assertEqual(result.knowledge_route, "web")
+        self.assertEqual(result.primary_capability, "web_research")
+        self.assertEqual(result.action_plan, [])
+        self.assertEqual(result.selected_tools_or_skills, ["web_research"])
 
     def test_catalog_lookup_truncates_and_reports_counts(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

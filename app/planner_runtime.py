@@ -3,7 +3,14 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass
 from typing import Any, Callable, Literal, Protocol, TypedDict
 
-from app.capability_planner import PlannerResult, build_planner_fallback, build_rule_based_plan
+from app.capability_planner import (
+    PlannerResult,
+    build_planner_fallback,
+    build_rule_based_plan,
+    normalize_planner_source,
+    paper_assistant_clarification,
+)
+from app.session_state import load_planner_conversation_state
 
 try:  # pragma: no cover - exercised indirectly when langgraph is installed
     from langgraph.graph import END, StateGraph
@@ -15,7 +22,16 @@ except Exception:  # pragma: no cover - fallback path used in tests when depende
     HAS_LANGGRAPH = False
 
 
-PlannerRuntimeRoute = Literal["fact_qa", "catalog", "summary", "control", "clarify", "legacy_fallback"]
+PlannerRuntimeRoute = Literal[
+    "fact_qa",
+    "catalog",
+    "summary",
+    "control",
+    "research_assistant",
+    "web_delegate",
+    "clarify",
+    "legacy_fallback",
+]
 
 RUNTIME_CONTRACT_VERSION = "agent-first-v1"
 RUNTIME_STABLE_FIELDS = (
@@ -66,18 +82,67 @@ class PlannerRuntimeState(TypedDict, total=False):
 @dataclass(frozen=True)
 class RuntimeToolSpec:
     name: str
+    kind: Literal["tool", "skill"]
     route: PlannerRuntimeRoute
     passthrough: bool
+    capability_tags: tuple[str, ...] = ()
+    knowledge_scope: Literal["local", "web", "hybrid"] = "local"
+    supports_research_mode: bool = False
+    prerequisites: tuple[str, ...] = ()
     produces: tuple[str, ...] = ()
 
 
 RUNTIME_TOOL_REGISTRY: dict[str, RuntimeToolSpec] = {
-    "fact_qa": RuntimeToolSpec(name="fact_qa", route="fact_qa", passthrough=False),
-    "catalog_lookup": RuntimeToolSpec(name="catalog_lookup", route="catalog", passthrough=True, produces=("paper_set",)),
-    "cross_doc_summary": RuntimeToolSpec(name="cross_doc_summary", route="summary", passthrough=True),
-    "control": RuntimeToolSpec(name="control", route="control", passthrough=True),
-    "paper_assistant": RuntimeToolSpec(name="paper_assistant", route="summary", passthrough=True),
+    "fact_qa": RuntimeToolSpec(
+        name="fact_qa",
+        kind="tool",
+        route="fact_qa",
+        passthrough=False,
+        capability_tags=("fact_qa", "strict_fact"),
+    ),
+    "catalog_lookup": RuntimeToolSpec(
+        name="catalog_lookup",
+        kind="tool",
+        route="catalog",
+        passthrough=True,
+        capability_tags=("catalog", "local_retrieval"),
+        produces=("paper_set",),
+    ),
+    "cross_doc_summary": RuntimeToolSpec(
+        name="cross_doc_summary",
+        kind="tool",
+        route="summary",
+        passthrough=True,
+        capability_tags=("summary", "comparison"),
+        prerequisites=("paper_set_optional",),
+    ),
+    "control": RuntimeToolSpec(
+        name="control",
+        kind="tool",
+        route="control",
+        passthrough=True,
+        capability_tags=("control", "formatting"),
+    ),
+    "paper_assistant": RuntimeToolSpec(
+        name="paper_assistant",
+        kind="skill",
+        route="research_assistant",
+        passthrough=True,
+        capability_tags=("research_assistant", "summary", "guidance"),
+        supports_research_mode=True,
+        prerequisites=("research_topic_or_paper_scope",),
+    ),
 }
+RUNTIME_DELEGATE_CAPABILITIES: tuple[dict[str, Any], ...] = (
+    {
+        "name": "web_research",
+        "kind": "skill",
+        "capability_tags": ["web", "external_research"],
+        "knowledge_scope": "web",
+        "supports_research_mode": False,
+        "prerequisites": ["network_allowed"],
+    },
+)
 
 
 class RuntimeExecutor(Protocol):
@@ -101,8 +166,10 @@ class PlannerRuntimeRunResult(TypedDict):
 
 def _serialize_planner_result(result: PlannerResult) -> dict[str, Any]:
     return {
+        "decision_version": result.decision_version,
+        "user_goal": result.user_goal,
         "planner_used": result.planner_used,
-        "planner_source": result.planner_source,
+        "planner_source": normalize_planner_source(result.planner_source),
         "planner_fallback": result.planner_fallback,
         "planner_fallback_reason": result.planner_fallback_reason,
         "planner_confidence": result.planner_confidence,
@@ -112,6 +179,13 @@ def _serialize_planner_result(result: PlannerResult) -> dict[str, Any]:
         "standalone_query": result.standalone_query,
         "primary_capability": result.primary_capability,
         "strictness": result.strictness,
+        "decision_result": result.decision_result,
+        "knowledge_route": result.knowledge_route,
+        "research_mode": result.research_mode,
+        "requires_clarification": result.requires_clarification,
+        "selected_tools_or_skills": list(result.selected_tools_or_skills or []),
+        "fallback": dict(result.fallback or {}),
+        "clarify_question": result.clarify_question,
         "action_plan": list(result.action_plan or []),
     }
 
@@ -122,6 +196,60 @@ def _default_runtime_contract() -> dict[str, Any]:
         "stable_fields": list(RUNTIME_STABLE_FIELDS),
         "envelope_fields": list(RUNTIME_ENVELOPE_FIELDS),
         "tool_registry": sorted(RUNTIME_TOOL_REGISTRY),
+        "capability_registry": _serialize_capability_registry(),
+        "planner_input_segments": ["request", "conversation_context", "capability_registry", "policy_flags"],
+    }
+
+
+def _serialize_capability_registry() -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    for spec in RUNTIME_TOOL_REGISTRY.values():
+        rows.append(
+            {
+                "name": spec.name,
+                "kind": spec.kind,
+                "capability_tags": list(spec.capability_tags),
+                "knowledge_scope": spec.knowledge_scope,
+                "supports_research_mode": spec.supports_research_mode,
+                "prerequisites": list(spec.prerequisites),
+            }
+        )
+    rows.extend(dict(item) for item in RUNTIME_DELEGATE_CAPABILITIES)
+    rows.sort(key=lambda row: str(row.get("name") or ""))
+    return rows
+
+
+def _planner_policy_flags() -> dict[str, Any]:
+    return {
+        "allow_web_delegation": True,
+        "allow_research_assistant": True,
+        "force_local_first": False,
+        "max_steps": MAX_RUNTIME_TOOL_STEPS,
+    }
+
+
+def _build_planner_input_context(request: dict[str, Any]) -> dict[str, Any]:
+    history = list(request.get("history") or [])
+    session_context = load_planner_conversation_state(str(request.get("sessionId") or ""))
+    return {
+        "request": {
+            "query": str(request.get("query") or ""),
+            "mode": str(request.get("mode") or "local"),
+            "trace_id": request.get("traceId"),
+        },
+        "conversation_context": {
+            "history_size": len(history),
+            "last_user_turn": (
+                str(history[-1].get("content") or "")
+                if history and isinstance(history[-1], dict) and str(history[-1].get("role") or "") == "user"
+                else None
+            ),
+            "recent_topic_anchors": list(session_context.get("recent_topic_anchors") or []),
+            "pending_clarify": session_context.get("pending_clarify"),
+            "previous_planner": session_context.get("previous_planner"),
+        },
+        "capability_registry": _serialize_capability_registry(),
+        "policy_flags": _planner_policy_flags(),
     }
 
 
@@ -175,51 +303,10 @@ def _build_runtime_clarify_response(payload: Any, question: str) -> Any:
 def _paper_assistant_missing_prerequisites(tool_call: dict[str, Any]) -> tuple[list[str], str | None]:
     if str(tool_call.get("tool_name") or "") != "paper_assistant":
         return [], None
-
-    depends_on = [str(item).strip() for item in list(tool_call.get("depends_on") or []) if str(item).strip()]
-    if "paper_set" in depends_on:
-        return [], None
-
-    query = str(tool_call.get("query") or "").strip()
-    deictic_scope_terms = (
-        "这些论文",
-        "这几篇论文",
-        "上述论文",
-        "上面这些论文",
-        "这些文章",
-        "这些研究",
-        "these papers",
-        "those papers",
-        "them",
+    return paper_assistant_clarification(
+        str(tool_call.get("query") or "").strip(),
+        depends_on=[str(item).strip() for item in list(tool_call.get("depends_on") or []) if str(item).strip()],
     )
-    topic_terms = (
-        "transformer",
-        "rag",
-        "检索增强",
-        "多模态",
-        "蒸馏",
-        "压缩",
-        "鲁棒性",
-        "对齐",
-        "推理",
-        "生成",
-        "llm",
-        "benchmark",
-        "agent",
-        "医学",
-        "教育",
-        "推荐",
-    )
-
-    missing: list[str] = []
-    clarify_question: str | None = None
-    if _contains_any(query, deictic_scope_terms):
-        missing.append("paper_scope")
-        clarify_question = "请先说明你要比较的是哪些论文，或给出论文标题、作者、年份。"
-    elif not _contains_any(query, topic_terms):
-        missing.append("research_topic")
-        clarify_question = "请先说明研究主题或你最关心的方向，例如方法、实验结果或应用场景。"
-    return missing, clarify_question
 
 
 def _load_request_context(state: PlannerRuntimeState) -> PlannerRuntimeState:
@@ -240,12 +327,18 @@ def _plan_chat_request(state: PlannerRuntimeState) -> PlannerRuntimeState:
     next_state = dict(state)
     request = dict(next_state.get("request") or {})
     query = str(request.get("query") or "").strip()
+    planner_input_context = _build_planner_input_context(request)
+    runtime = dict(next_state.get("runtime") or {})
+    runtime["planner_input_context"] = planner_input_context
+    next_state["runtime"] = runtime
     planner_result = build_rule_based_plan(
         user_input=query,
         standalone_query=query,
         dialog_state="answering",
-        history_topic_anchors=[],
-        pending_clarify=None,
+        history_topic_anchors=list(planner_input_context.get("conversation_context", {}).get("recent_topic_anchors") or []),
+        pending_clarify=planner_input_context.get("conversation_context", {}).get("pending_clarify"),
+        capability_registry=list(planner_input_context.get("capability_registry") or []),
+        policy_flags=dict(planner_input_context.get("policy_flags") or {}),
     )
     next_state["planner"] = _serialize_planner_result(planner_result)
     return next_state
@@ -298,7 +391,19 @@ def _normalize_tool_call(raw: dict[str, Any], *, index: int) -> dict[str, Any] |
 def _prepare_tool_calls(state: PlannerRuntimeState) -> PlannerRuntimeState:
     next_state = dict(state)
     planner = dict(next_state.get("planner") or {})
+    decision_result = str(planner.get("decision_result") or "legacy_fallback")
+    if decision_result not in {
+        "clarify",
+        "local_execute",
+        "delegate_web",
+        "delegate_research_assistant",
+        "legacy_fallback",
+    }:
+        return _set_fallback(next_state, fallback_type="planner", reason=f"unsupported_decision_result:{decision_result}")
     raw_plan = list(planner.get("action_plan") or [])
+    if decision_result in {"clarify", "delegate_web", "legacy_fallback"} and not raw_plan:
+        next_state["tool_calls"] = []
+        return next_state
     if not raw_plan:
         return _set_fallback(next_state, fallback_type="planner", reason="empty_action_plan")
     if len(raw_plan) > MAX_RUNTIME_TOOL_STEPS:
@@ -390,8 +495,11 @@ def _build_route_state(state: PlannerRuntimeState, route: PlannerRuntimeRoute, *
             "step": "planner_runtime_route",
             "state": "selected",
             "selected_path": next_state["selected_path"],
+            "decision_result": planner.get("decision_result"),
             "primary_capability": planner.get("primary_capability"),
             "strictness": planner.get("strictness"),
+            "knowledge_route": planner.get("knowledge_route"),
+            "research_mode": planner.get("research_mode"),
             "tool_name": selected_tool,
             "passthrough": passthrough,
         }
@@ -400,6 +508,8 @@ def _build_route_state(state: PlannerRuntimeState, route: PlannerRuntimeRoute, *
 
 
 def _route_capability(state: PlannerRuntimeState) -> PlannerRuntimeState:
+    planner = dict(state.get("planner") or {})
+    decision_result = str(planner.get("decision_result") or "legacy_fallback")
     tool_calls = list(state.get("tool_calls") or [])
     fallback = dict(state.get("fallback") or {})
     if fallback.get("type") == "planner":
@@ -409,16 +519,24 @@ def _route_capability(state: PlannerRuntimeState) -> PlannerRuntimeState:
     if fallback.get("type") == "tool":
         fallback_state = dict(state)
         return _build_route_state(fallback_state, "legacy_fallback", passthrough=True)
+    if decision_result == "legacy_fallback":
+        return _build_route_state(dict(state), "legacy_fallback", passthrough=True)
+    if decision_result == "delegate_web":
+        return _build_route_state(dict(state), "web_delegate", passthrough=True)
+    if decision_result == "clarify":
+        clarify_state = dict(state)
+        clarify_state["clarify_question"] = str(planner.get("clarify_question") or "请先说明你希望我聚焦的论文或研究主题。").strip()
+        return _build_route_state(clarify_state, "clarify", passthrough=False)
     if not tool_calls:
         fallback_state = _set_fallback(dict(state), fallback_type="planner", reason="missing_tool_calls")
         return _build_route_state(fallback_state, "legacy_fallback", passthrough=True)
-    first_tool = tool_calls[0]
-    missing_prerequisites, clarify_question = _paper_assistant_missing_prerequisites(first_tool)
+    paper_assistant_tool = next((tool for tool in tool_calls if str(tool.get("tool_name") or "") == "paper_assistant"), tool_calls[0])
+    missing_prerequisites, clarify_question = _paper_assistant_missing_prerequisites(paper_assistant_tool)
     if missing_prerequisites and clarify_question:
         clarify_state = dict(state)
         clarify_state["tool_results"] = list(clarify_state.get("tool_results") or []) + [
             build_tool_result_envelope(
-                first_tool,
+                paper_assistant_tool,
                 status="clarify_required",
                 result={"clarify_questions": [clarify_question]},
                 metadata={"missing_prerequisites": missing_prerequisites},
@@ -427,27 +545,32 @@ def _route_capability(state: PlannerRuntimeState) -> PlannerRuntimeState:
         clarify_state["short_circuit"] = {
             "triggered": True,
             "reason": "paper_assistant_missing_prerequisites",
-            "step": first_tool["tool_name"],
+            "step": paper_assistant_tool["tool_name"],
         }
         clarify_state["execution_trace"] = list(clarify_state.get("execution_trace") or [])
         clarify_state["execution_trace"].append(
             {
                 "step": "planner_runtime_precondition_check",
                 "state": "short_circuit",
-                "action": first_tool["tool_name"],
+                "action": paper_assistant_tool["tool_name"],
                 "short_circuit_reason": "paper_assistant_missing_prerequisites",
                 "missing_prerequisites": missing_prerequisites,
             }
         )
         clarify_state["clarify_question"] = clarify_question
         return _build_route_state(clarify_state, "clarify", passthrough=False)
+    if decision_result == "delegate_research_assistant":
+        return _build_route_state(dict(state), "research_assistant", passthrough=True)
+    first_tool = tool_calls[0]
     return _build_route_state(dict(state), first_tool["route"], passthrough=bool(first_tool["passthrough"]))
 
 
 def _hydrate_planner_result(planner_data: dict[str, Any], request: dict[str, Any]) -> PlannerResult:
     return PlannerResult(
+        decision_version=str(planner_data.get("decision_version") or "planner-policy-v1"),
+        user_goal=str(planner_data.get("user_goal") or request.get("query") or ""),
         planner_used=bool(planner_data.get("planner_used", False)),
-        planner_source=str(planner_data.get("planner_source") or "fallback"),
+        planner_source=normalize_planner_source(str(planner_data.get("planner_source") or "fallback")),
         planner_fallback=bool(planner_data.get("planner_fallback", False)),
         planner_fallback_reason=planner_data.get("planner_fallback_reason"),
         planner_confidence=float(planner_data.get("planner_confidence", 0.0)),
@@ -457,6 +580,17 @@ def _hydrate_planner_result(planner_data: dict[str, Any], request: dict[str, Any
         standalone_query=str(planner_data.get("standalone_query") or request.get("query") or ""),
         primary_capability=str(planner_data.get("primary_capability") or "fact_qa"),
         strictness=str(planner_data.get("strictness") or "strict_fact"),
+        decision_result=str(planner_data.get("decision_result") or "legacy_fallback"),
+        knowledge_route=str(planner_data.get("knowledge_route") or "local"),
+        research_mode=str(planner_data.get("research_mode") or "none"),
+        requires_clarification=bool(planner_data.get("requires_clarification", False)),
+        selected_tools_or_skills=[str(item).strip() for item in list(planner_data.get("selected_tools_or_skills") or []) if str(item).strip()],
+        fallback=dict(planner_data.get("fallback") or {}),
+        clarify_question=(
+            str(planner_data.get("clarify_question")).strip()
+            if planner_data.get("clarify_question") is not None
+            else None
+        ),
         action_plan=list(planner_data.get("action_plan") or []),
     )
 
@@ -506,8 +640,10 @@ def _route_next(state: PlannerRuntimeState) -> str:
         return "run_runtime_clarify"
     if route == "fact_qa":
         return "run_fact_qa_path"
-    if route in {"catalog", "summary", "control"}:
+    if route in {"catalog", "summary", "control", "research_assistant"}:
         return "run_compat_path"
+    if route == "web_delegate":
+        return "run_web_delegate_path"
     return "fallback_to_legacy_qa"
 
 
@@ -523,6 +659,9 @@ def _build_graph(
 
     def _run_compat(state: PlannerRuntimeState) -> PlannerRuntimeState:
         return _run_route(state, executor=compat_executor, on_stream_delta=on_stream_delta)
+
+    def _run_web_delegate(state: PlannerRuntimeState) -> PlannerRuntimeState:
+        return _run_route(state, executor=legacy_executor, on_stream_delta=on_stream_delta)
 
     def _run_legacy(state: PlannerRuntimeState) -> PlannerRuntimeState:
         fallback_state = dict(state)
@@ -550,6 +689,7 @@ def _build_graph(
             "route_capability": _route_capability,
             "run_fact_qa_path": _run_fact_qa,
             "run_compat_path": _run_compat,
+            "run_web_delegate_path": _run_web_delegate,
             "run_runtime_clarify": _run_runtime_clarify,
             "fallback_to_legacy_qa": _run_legacy,
         }
@@ -561,6 +701,7 @@ def _build_graph(
     graph.add_node("route_capability", _route_capability)
     graph.add_node("run_fact_qa_path", _run_fact_qa)
     graph.add_node("run_compat_path", _run_compat)
+    graph.add_node("run_web_delegate_path", _run_web_delegate)
     graph.add_node("run_runtime_clarify", _run_runtime_clarify)
     graph.add_node("fallback_to_legacy_qa", _run_legacy)
     graph.set_entry_point("load_request_context")
@@ -573,12 +714,14 @@ def _build_graph(
         {
             "run_fact_qa_path": "run_fact_qa_path",
             "run_compat_path": "run_compat_path",
+            "run_web_delegate_path": "run_web_delegate_path",
             "run_runtime_clarify": "run_runtime_clarify",
             "fallback_to_legacy_qa": "fallback_to_legacy_qa",
         },
     )
     graph.add_edge("run_fact_qa_path", END)
     graph.add_edge("run_compat_path", END)
+    graph.add_edge("run_web_delegate_path", END)
     graph.add_edge("run_runtime_clarify", END)
     graph.add_edge("fallback_to_legacy_qa", END)
     return graph.compile(), None
@@ -704,6 +847,8 @@ def run_planner_runtime(
         "runtime_contract_version": final_state.get("runtime", {}).get("version", RUNTIME_CONTRACT_VERSION),
         "runtime_stable_fields": list(final_state.get("runtime", {}).get("stable_fields", list(RUNTIME_STABLE_FIELDS))),
         "runtime_envelope_fields": list(final_state.get("runtime", {}).get("envelope_fields", list(RUNTIME_ENVELOPE_FIELDS))),
+        "planner_input_context": dict(final_state.get("runtime", {}).get("planner_input_context", {})),
+        "capability_registry": list(final_state.get("runtime", {}).get("capability_registry", [])),
         "tool_calls": [dict(item) for item in list(final_state.get("tool_calls") or [])],
         "tool_results": [dict(item) for item in list(final_state.get("tool_results") or [])],
         "tool_fallback": bool(fallback.get("type") == "tool"),

@@ -275,6 +275,7 @@ def validate_trace_schema(trace: dict[str, Any]) -> tuple[bool, list[str]]:
         "planner_used",
         "planner_fallback",
         "truncated",
+        "requires_clarification",
         "planner_runtime_used",
         "planner_runtime_fallback",
         "planner_runtime_passthrough",
@@ -285,10 +286,15 @@ def validate_trace_schema(trace: dict[str, Any]) -> tuple[bool, list[str]]:
             errors.append(f"{key} must be bool or null")
     for key in (
         "relation_to_previous",
+        "planner_decision_version",
+        "user_goal",
         "planner_source",
         "planner_fallback_reason",
         "primary_capability",
         "strictness",
+        "decision_result",
+        "knowledge_route",
+        "research_mode",
         "planner_runtime_backend",
         "planner_runtime_fallback_reason",
         "runtime_contract_version",
@@ -310,7 +316,14 @@ def validate_trace_schema(trace: dict[str, Any]) -> tuple[bool, list[str]]:
     short_circuit = trace.get("short_circuit")
     if short_circuit is not None and not isinstance(short_circuit, dict):
         errors.append("short_circuit must be object or null")
-    for key in ("runtime_stable_fields", "runtime_envelope_fields", "tool_calls", "tool_results"):
+    for key in (
+        "runtime_stable_fields",
+        "runtime_envelope_fields",
+        "capability_registry",
+        "tool_calls",
+        "tool_results",
+        "selected_tools_or_skills",
+    ):
         value = trace.get(key)
         if value is not None and not isinstance(value, list):
             errors.append(f"{key} must be list or null")
