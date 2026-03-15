@@ -30,14 +30,49 @@
 每个 planner runtime tool call 至少包含：
 
 - `id`
+- `call_id`
 - `tool_name`
 - `query`
+- `arguments`
+- `depends_on_artifacts`
 - `depends_on`
+- `trace_context`
+- `execution_mode`
+- `streaming_mode`
+- `evidence_policy`
+- `capability_family`
 - `produces`
 - `params`
 - `route`
 - `passthrough`
 - `status`
+- `tool_status`
+
+每个 tool registry entry 还至少声明：
+
+- `tool_name`
+- `capability_family`
+- `version`
+- `planner_visible`
+- `input_schema`
+- `result_schema`
+- `failure_types`
+- `streaming_mode`
+- `evidence_policy`
+- `produces`
+- `depends_on`
+
+每个 tool result envelope 至少包含：
+
+- `call_id`
+- `tool_name`
+- `status`
+- `output`
+- `artifacts`
+- `sources`
+- `warnings`
+- `observability`
+- `failure`
 
 当前注册的 runtime tools：
 
@@ -46,6 +81,15 @@
 - `cross_doc_summary`
 - `control`
 - `paper_assistant`
+- `title_term_localization`（预注册，默认不对 planner 可见）
+
+`sources` 需要显式标记 provenance 类型：
+
+- `citation`
+- `metadata`
+- `explanatory`
+
+只有 `citation` 类型来源参与正文引用编号；`metadata` 与 `explanatory` 不参与正文 citation 编号。
 
 ## Fallback 分类
 
