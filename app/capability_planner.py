@@ -73,7 +73,32 @@ STRICT_FACT_TERMS = (
     "实验设置",
     "实验条件",
 )
+WEB_DELEGATION_TERMS = (
+    "联网",
+    "上网",
+    "互联网",
+    "网上",
+    "web",
+    "internet",
+    "最新",
+    "最近",
+    "today",
+    "current",
+    "news",
+)
 READY_STATUSES = {"ready", "completed", "active"}
+DEFAULT_PLANNER_DECISION_VERSION = "planner-policy-v1"
+DEFAULT_LOCAL_CAPABILITIES = {"fact_qa", "catalog_lookup", "cross_doc_summary", "control", "paper_assistant"}
+DEFAULT_WEB_CAPABILITIES = {"web_research"}
+PLANNER_SOURCE_RULE = "rule"
+PLANNER_SOURCE_FALLBACK = "fallback"
+PLANNER_DECISION_RESULTS = {
+    "clarify",
+    "local_execute",
+    "delegate_web",
+    "delegate_research_assistant",
+    "legacy_fallback",
+}
 
 
 @dataclass
@@ -87,6 +112,8 @@ class PlannerStep:
 
 @dataclass
 class PlannerResult:
+    decision_version: str
+    user_goal: str
     planner_used: bool
     planner_source: str
     planner_fallback: bool
@@ -98,6 +125,13 @@ class PlannerResult:
     standalone_query: str
     primary_capability: str
     strictness: str
+    decision_result: str
+    knowledge_route: str
+    research_mode: str
+    requires_clarification: bool
+    selected_tools_or_skills: list[str]
+    fallback: dict[str, Any]
+    clarify_question: str | None
     action_plan: list[dict[str, Any]]
 
 
@@ -164,6 +198,78 @@ def _strict_fact_signal(text: str) -> bool:
     return _contains_any(text, STRICT_FACT_TERMS)
 
 
+def _registered_capabilities(capability_registry: list[dict[str, Any]] | None) -> set[str]:
+    if not capability_registry:
+        return set(DEFAULT_LOCAL_CAPABILITIES) | set(DEFAULT_WEB_CAPABILITIES)
+    names: set[str] = set()
+    for row in capability_registry:
+        if not isinstance(row, dict):
+            continue
+        name = str(row.get("name") or "").strip()
+        if name:
+            names.add(name)
+    return names or (set(DEFAULT_LOCAL_CAPABILITIES) | set(DEFAULT_WEB_CAPABILITIES))
+
+
+def _wants_web_delegation(text: str, *, allow_web_delegation: bool) -> bool:
+    if not allow_web_delegation:
+        return False
+    lowered = (text or "").lower()
+    explicit_web = any(term.lower() in lowered for term in WEB_DELEGATION_TERMS[:6])
+    recency_signal = any(term.lower() in lowered for term in WEB_DELEGATION_TERMS[6:])
+    local_scope_signal = _contains_any(text, CATALOG_TERMS) or "知识库" in text or "库中" in text
+    return explicit_web or (recency_signal and not local_scope_signal)
+
+
+def normalize_planner_source(value: str | None) -> str:
+    normalized = _normalize_spaces(str(value or "")).lower()
+    if normalized in {"rule_based", PLANNER_SOURCE_RULE}:
+        return PLANNER_SOURCE_RULE
+    return PLANNER_SOURCE_FALLBACK
+
+
+def paper_assistant_clarification(query: str, *, depends_on: list[str] | None = None) -> tuple[list[str], str | None]:
+    normalized_query = _normalize_spaces(query)
+    normalized_deps = [str(item).strip() for item in list(depends_on or []) if str(item).strip()]
+    if "paper_set" in normalized_deps:
+        return [], None
+
+    deictic_scope_terms = (
+        "这些论文",
+        "这几篇论文",
+        "上述论文",
+        "上面这些论文",
+        "这些文章",
+        "这些研究",
+        "these papers",
+        "those papers",
+        "them",
+    )
+    topic_terms = (
+        "transformer",
+        "rag",
+        "检索增强",
+        "多模态",
+        "蒸馏",
+        "压缩",
+        "鲁棒性",
+        "对齐",
+        "推理",
+        "生成",
+        "llm",
+        "benchmark",
+        "agent",
+        "医学",
+        "教育",
+        "推荐",
+    )
+    if _contains_any(normalized_query, deictic_scope_terms):
+        return ["paper_scope"], "请先说明你要比较的是哪些论文，或给出论文标题、作者、年份。"
+    if not _contains_any(normalized_query, topic_terms):
+        return ["research_topic"], "请先说明研究主题或你最关心的方向，例如方法、实验结果或应用场景。"
+    return [], None
+
+
 def build_rule_based_plan(
     *,
     user_input: str,
@@ -173,6 +279,8 @@ def build_rule_based_plan(
     pending_clarify: dict[str, Any] | None,
     max_steps: int = 3,
     catalog_limit: int = 20,
+    capability_registry: list[dict[str, Any]] | None = None,
+    policy_flags: dict[str, Any] | None = None,
 ) -> PlannerResult:
     is_new_topic, should_clear, relation = detect_new_topic(
         user_input=user_input,
@@ -181,16 +289,42 @@ def build_rule_based_plan(
         pending_clarify=pending_clarify,
     )
     normalized_query = _normalize_spaces(standalone_query or user_input)
+    available_capabilities = _registered_capabilities(capability_registry)
+    flags = dict(policy_flags or {})
+    allow_web_delegation = bool(flags.get("allow_web_delegation", False))
+    allow_research_assistant = bool(flags.get("allow_research_assistant", True))
     wants_catalog = _contains_any(normalized_query, CATALOG_TERMS)
     wants_summary = _contains_any(normalized_query, SUMMARY_TERMS)
     wants_paper_assistant = _contains_any(normalized_query, PAPER_ASSISTANT_TERMS)
     strict_fact = _strict_fact_signal(normalized_query)
+    wants_web = _wants_web_delegation(normalized_query, allow_web_delegation=allow_web_delegation)
     limit = _extract_limit(normalized_query, catalog_limit)
     steps: list[PlannerStep] = []
     primary_capability = "fact_qa"
     strictness = "strict_fact"
     confidence = 0.7
-    if wants_catalog:
+    decision_result = "local_execute"
+    knowledge_route = "local"
+    research_mode = "none"
+    requires_clarification = False
+    selected_tools_or_skills: list[str] = []
+    clarify_question: str | None = None
+    fallback = {"type": None, "reason": None}
+
+    if wants_web and "web_research" in available_capabilities:
+        decision_result = "delegate_web"
+        knowledge_route = "web"
+        primary_capability = "web_research"
+        strictness = "strict_fact" if strict_fact else ("summary" if wants_summary else "strict_fact")
+        selected_tools_or_skills = ["web_research"]
+        confidence = 0.76
+    elif wants_web:
+        return build_planner_fallback(
+            user_input=user_input,
+            standalone_query=normalized_query,
+            reason="capability_unavailable:web_research",
+        )
+    elif wants_catalog:
         catalog_step = PlannerStep(
             action="catalog_lookup",
             query=normalized_query,
@@ -199,9 +333,11 @@ def build_rule_based_plan(
         )
         steps.append(catalog_step)
         confidence = 0.82
-        if wants_paper_assistant and not strict_fact:
+        if wants_paper_assistant and not strict_fact and allow_research_assistant:
             primary_capability = "paper_assistant"
             strictness = "summary"
+            decision_result = "delegate_research_assistant"
+            research_mode = "paper_assistant"
             steps.append(
                 PlannerStep(
                     action="paper_assistant",
@@ -211,6 +347,12 @@ def build_rule_based_plan(
                 )
             )
             confidence = 0.91
+        elif wants_paper_assistant and not strict_fact:
+            return build_planner_fallback(
+                user_input=user_input,
+                standalone_query=normalized_query,
+                reason="capability_unavailable:paper_assistant",
+            )
         elif wants_summary and not strict_fact:
             primary_capability = "cross_doc_summary"
             strictness = "summary"
@@ -231,17 +373,31 @@ def build_rule_based_plan(
         else:
             primary_capability = "catalog_lookup"
             strictness = "catalog"
-    elif wants_paper_assistant and not strict_fact:
+    elif wants_paper_assistant and not strict_fact and allow_research_assistant:
         primary_capability = "paper_assistant"
         strictness = "summary"
-        steps.append(
-            PlannerStep(
-                action="paper_assistant",
-                query=normalized_query,
-                params={"style": "research_assistant"},
+        missing_prerequisites, clarify_question = paper_assistant_clarification(normalized_query)
+        if missing_prerequisites and clarify_question:
+            decision_result = "clarify"
+            requires_clarification = True
+            confidence = 0.83
+        else:
+            decision_result = "delegate_research_assistant"
+            research_mode = "paper_assistant"
+            steps.append(
+                PlannerStep(
+                    action="paper_assistant",
+                    query=normalized_query,
+                    params={"style": "research_assistant"},
+                )
             )
+            confidence = 0.8
+    elif wants_paper_assistant and not strict_fact:
+        return build_planner_fallback(
+            user_input=user_input,
+            standalone_query=normalized_query,
+            reason="capability_unavailable:paper_assistant",
         )
-        confidence = 0.8
     elif wants_summary and not strict_fact:
         primary_capability = "cross_doc_summary"
         strictness = "summary"
@@ -261,10 +417,27 @@ def build_rule_based_plan(
         strictness = "strict_fact"
         confidence = max(confidence, 0.88)
 
+    for step in steps:
+        if step.action not in available_capabilities:
+            return build_planner_fallback(
+                user_input=user_input,
+                standalone_query=normalized_query,
+                reason=f"capability_unavailable:{step.action}",
+            )
+
     limited_steps = steps[: max(1, int(max_steps))]
+    if not selected_tools_or_skills:
+        ordered_names: list[str] = []
+        for step in limited_steps:
+            if step.action not in ordered_names:
+                ordered_names.append(step.action)
+        selected_tools_or_skills = ordered_names
+
     return PlannerResult(
+        decision_version=DEFAULT_PLANNER_DECISION_VERSION,
+        user_goal=normalized_query,
         planner_used=True,
-        planner_source="rule",
+        planner_source=PLANNER_SOURCE_RULE,
         planner_fallback=False,
         planner_fallback_reason=None,
         planner_confidence=round(confidence, 4),
@@ -274,6 +447,13 @@ def build_rule_based_plan(
         standalone_query=normalized_query,
         primary_capability=primary_capability,
         strictness=strictness,
+        decision_result=decision_result,
+        knowledge_route=knowledge_route,
+        research_mode=research_mode,
+        requires_clarification=requires_clarification,
+        selected_tools_or_skills=selected_tools_or_skills,
+        fallback=fallback,
+        clarify_question=clarify_question,
         action_plan=[asdict(step) for step in limited_steps],
     )
 
@@ -281,8 +461,10 @@ def build_rule_based_plan(
 def build_planner_fallback(*, user_input: str, standalone_query: str, reason: str) -> PlannerResult:
     query = _normalize_spaces(standalone_query or user_input)
     return PlannerResult(
+        decision_version=DEFAULT_PLANNER_DECISION_VERSION,
+        user_goal=query,
         planner_used=False,
-        planner_source="fallback",
+        planner_source=PLANNER_SOURCE_FALLBACK,
         planner_fallback=True,
         planner_fallback_reason=reason,
         planner_confidence=0.0,
@@ -292,6 +474,13 @@ def build_planner_fallback(*, user_input: str, standalone_query: str, reason: st
         standalone_query=query,
         primary_capability="fact_qa",
         strictness="strict_fact",
+        decision_result="legacy_fallback",
+        knowledge_route="local",
+        research_mode="none",
+        requires_clarification=False,
+        selected_tools_or_skills=["fact_qa"],
+        fallback={"type": "planner", "reason": reason},
+        clarify_question=None,
         action_plan=[asdict(PlannerStep(action="fact_qa", query=query))],
     )
 

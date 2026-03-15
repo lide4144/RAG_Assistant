@@ -464,6 +464,7 @@ def _merge_planner_runtime_observation(run_id: str, observation: dict[str, Any])
         "runtime_contract_version": observation.get("runtime_contract_version"),
         "runtime_stable_fields": observation.get("runtime_stable_fields"),
         "runtime_envelope_fields": observation.get("runtime_envelope_fields"),
+        "capability_registry": observation.get("capability_registry"),
         "tool_calls": observation.get("tool_calls"),
         "tool_results": observation.get("tool_results"),
         "tool_fallback": bool(observation.get("tool_fallback", False)),
@@ -476,12 +477,19 @@ def _merge_planner_runtime_observation(run_id: str, observation: dict[str, Any])
     }
     if planner:
         extra.setdefault("planner_used", planner.get("planner_used"))
+        extra.setdefault("planner_decision_version", planner.get("decision_version"))
+        extra.setdefault("user_goal", planner.get("user_goal"))
         extra.setdefault("planner_source", planner.get("planner_source"))
         extra.setdefault("planner_fallback", planner.get("planner_fallback"))
         extra.setdefault("planner_fallback_reason", planner.get("planner_fallback_reason"))
         extra.setdefault("planner_confidence", planner.get("planner_confidence"))
         extra.setdefault("primary_capability", planner.get("primary_capability"))
         extra.setdefault("strictness", planner.get("strictness"))
+        extra.setdefault("decision_result", planner.get("decision_result"))
+        extra.setdefault("knowledge_route", planner.get("knowledge_route"))
+        extra.setdefault("research_mode", planner.get("research_mode"))
+        extra.setdefault("requires_clarification", planner.get("requires_clarification"))
+        extra.setdefault("selected_tools_or_skills", planner.get("selected_tools_or_skills"))
         extra.setdefault("action_plan", planner.get("action_plan"))
 
     for filename in ("run_trace.json", "qa_report.json"):
@@ -631,10 +639,13 @@ def _planner_runtime_route_executor(
         "planner_runtime_fallback_reason": runtime_fallback_reason,
         "planner_runtime_passthrough": selected_path.endswith("_passthrough") or selected_path == "legacy_fallback",
         "runtime_contract_version": "agent-first-v1",
+        "capability_registry": None,
         "tool_calls": list(tool_calls or []),
         "tool_results": [],
         "selected_path": selected_path,
         "planner": {
+            "decision_version": getattr(planner_result, "decision_version", None),
+            "user_goal": getattr(planner_result, "user_goal", None),
             "planner_used": getattr(planner_result, "planner_used", None),
             "planner_source": getattr(planner_result, "planner_source", None),
             "planner_fallback": getattr(planner_result, "planner_fallback", None),
@@ -642,6 +653,11 @@ def _planner_runtime_route_executor(
             "planner_confidence": getattr(planner_result, "planner_confidence", None),
             "primary_capability": getattr(planner_result, "primary_capability", None),
             "strictness": getattr(planner_result, "strictness", None),
+            "decision_result": getattr(planner_result, "decision_result", None),
+            "knowledge_route": getattr(planner_result, "knowledge_route", None),
+            "research_mode": getattr(planner_result, "research_mode", None),
+            "requires_clarification": getattr(planner_result, "requires_clarification", None),
+            "selected_tools_or_skills": getattr(planner_result, "selected_tools_or_skills", None),
             "action_plan": getattr(planner_result, "action_plan", None),
         },
     }
@@ -653,6 +669,7 @@ def _planner_runtime_route_executor(
         observation["execution_trace"] = trace.get("execution_trace", [])
         observation["short_circuit"] = trace.get("short_circuit", {"triggered": False, "reason": None, "step": None})
         observation["truncated"] = bool(trace.get("truncated", False))
+        observation["capability_registry"] = trace.get("capability_registry")
         tool_fallback, tool_fallback_reason, failed_tool = _derive_runtime_tool_fallback(trace, observation)
         observation["tool_fallback"] = tool_fallback
         observation["tool_fallback_reason"] = tool_fallback_reason

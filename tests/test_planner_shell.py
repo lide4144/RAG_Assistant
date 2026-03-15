@@ -26,6 +26,33 @@ def _response(trace_id: str = "trace-shell") -> KernelChatResponse:
 
 
 class PlannerShellTests(unittest.TestCase):
+    def _planner_result(self, **overrides) -> PlannerResult:
+        payload = {
+            "decision_version": "planner-policy-v1",
+            "user_goal": "q",
+            "planner_used": True,
+            "planner_source": "rule",
+            "planner_fallback": False,
+            "planner_fallback_reason": None,
+            "planner_confidence": 0.8,
+            "is_new_topic": False,
+            "should_clear_pending_clarify": False,
+            "relation_to_previous": "same_topic_or_no_pending",
+            "standalone_query": "q",
+            "primary_capability": "fact_qa",
+            "strictness": "strict_fact",
+            "decision_result": "local_execute",
+            "knowledge_route": "local",
+            "research_mode": "none",
+            "requires_clarification": False,
+            "selected_tools_or_skills": ["fact_qa"],
+            "fallback": {"type": None, "reason": None},
+            "clarify_question": None,
+            "action_plan": [{"action": "fact_qa", "query": "q"}],
+        }
+        payload.update(overrides)
+        return PlannerResult(**payload)
+
     def test_fact_qa_query_uses_primary_route_without_passthrough(self) -> None:
         calls: list[tuple[str, bool, str | None]] = []
 
@@ -46,6 +73,7 @@ class PlannerShellTests(unittest.TestCase):
         self.assertEqual(result["observation"]["selected_path"], "fact_qa")
         self.assertFalse(result["observation"]["planner_shell_passthrough"])
         self.assertEqual(result["observation"]["runtime_contract_version"], "agent-first-v1")
+        self.assertEqual(result["observation"]["planner"]["decision_result"], "local_execute")
         self.assertEqual([row["tool_name"] for row in result["observation"]["tool_calls"]], ["fact_qa"])
         self.assertEqual(result["observation"]["tool_results"][0]["status"], "succeeded")
         self.assertEqual(result["observation"]["tool_results"][0]["metadata"]["trace_id"], "trace-shell")
@@ -69,6 +97,7 @@ class PlannerShellTests(unittest.TestCase):
         self.assertEqual(result["response"].traceId, "compat")
         self.assertTrue(result["observation"]["planner_shell_passthrough"])
         self.assertEqual(result["observation"]["selected_path"], "summary_passthrough")
+        self.assertEqual(result["observation"]["planner"]["decision_result"], "local_execute")
         self.assertEqual([row["tool_name"] for row in result["observation"]["tool_calls"]], ["cross_doc_summary"])
 
     def test_paper_assistant_query_maps_to_runtime_tool_contract(self) -> None:
@@ -92,11 +121,13 @@ class PlannerShellTests(unittest.TestCase):
             legacy_executor=lambda payload, **kwargs: _response("legacy"),
         )
 
-        self.assertEqual(calls, ["summary_passthrough"])
+        self.assertEqual(calls, ["research_assistant_passthrough"])
         self.assertEqual(result["response"].traceId, "assistant")
+        self.assertEqual(result["observation"]["planner"]["decision_result"], "delegate_research_assistant")
+        self.assertEqual(result["observation"]["selected_path"], "research_assistant_passthrough")
         self.assertEqual([row["tool_name"] for row in result["observation"]["tool_calls"]], ["paper_assistant"])
 
-    def test_runtime_clarifies_research_assistant_when_scope_is_missing(self) -> None:
+    def test_planner_clarify_route_sets_clarification_decision(self) -> None:
         result = run_planner_shell(
             KernelChatRequest(sessionId="s1", mode="local", query="帮我比较这些论文并给出下一步研究建议", history=[], traceId="trace-clarify"),
             fact_qa_executor=lambda payload, **kwargs: _response(),
@@ -105,24 +136,84 @@ class PlannerShellTests(unittest.TestCase):
         )
 
         self.assertEqual(result["observation"]["selected_path"], "planner_runtime_clarify")
+        self.assertEqual(result["observation"]["planner"]["decision_result"], "clarify")
+        self.assertTrue(result["observation"]["planner"]["requires_clarification"])
+        self.assertFalse(result["observation"]["short_circuit"]["triggered"])
+        self.assertIn("请先说明", result["response"].answer)
+        self.assertEqual(result["response"].answer.count("\n1."), 1)
+
+    def test_runtime_still_short_circuits_invalid_research_assistant_plan(self) -> None:
+        planner_result = self._planner_result(
+            user_goal="帮我比较这些论文并给出下一步研究建议",
+            standalone_query="帮我比较这些论文并给出下一步研究建议",
+            primary_capability="paper_assistant",
+            strictness="summary",
+            decision_result="delegate_research_assistant",
+            research_mode="paper_assistant",
+            selected_tools_or_skills=["paper_assistant"],
+            action_plan=[
+                {
+                    "action": "paper_assistant",
+                    "query": "帮我比较这些论文并给出下一步研究建议",
+                    "params": {"style": "research_assistant"},
+                }
+            ],
+        )
+
+        with patch("app.planner_runtime.build_rule_based_plan", return_value=planner_result):
+            result = run_planner_shell(
+                KernelChatRequest(sessionId="s1", mode="local", query="帮我比较这些论文并给出下一步研究建议", history=[], traceId="trace-clarify-runtime"),
+                fact_qa_executor=lambda payload, **kwargs: _response(),
+                compat_executor=lambda payload, **kwargs: _response("compat"),
+                legacy_executor=lambda payload, **kwargs: _response("legacy"),
+            )
+
+        self.assertEqual(result["observation"]["selected_path"], "planner_runtime_clarify")
         self.assertTrue(result["observation"]["short_circuit"]["triggered"])
         self.assertEqual(result["observation"]["short_circuit"]["reason"], "paper_assistant_missing_prerequisites")
-        self.assertIn("请先说明", result["response"].answer)
         self.assertEqual(result["observation"]["tool_results"][0]["status"], "clarify_required")
 
+    def test_planner_input_context_includes_session_conversation_state(self) -> None:
+        planner_result = self._planner_result()
+
+        with (
+            patch(
+                "app.planner_runtime.load_planner_conversation_state",
+                return_value={
+                    "recent_topic_anchors": ["Transformer", "压缩"],
+                    "pending_clarify": {
+                        "original_question": "这篇论文准确率是多少",
+                        "clarify_question": "请补充具体论文。",
+                    },
+                    "previous_planner": {
+                        "decision_result": "local_execute",
+                        "primary_capability": "fact_qa",
+                        "strictness": "strict_fact",
+                        "selected_tools_or_skills": ["fact_qa"],
+                    },
+                },
+            ),
+            patch("app.planner_runtime.build_rule_based_plan", return_value=planner_result) as mocked_planner,
+        ):
+            result = run_planner_shell(
+                KernelChatRequest(sessionId="s1", mode="local", query="这篇论文作者是谁", history=[], traceId="trace-context"),
+                fact_qa_executor=lambda payload, **kwargs: _response(),
+                compat_executor=lambda payload, **kwargs: _response("compat"),
+                legacy_executor=lambda payload, **kwargs: _response("legacy"),
+            )
+
+        planner_kwargs = mocked_planner.call_args.kwargs
+        self.assertEqual(planner_kwargs["history_topic_anchors"], ["Transformer", "压缩"])
+        self.assertEqual(planner_kwargs["pending_clarify"]["clarify_question"], "请补充具体论文。")
+        conversation_context = result["observation"]["planner_input_context"]["conversation_context"]
+        self.assertEqual(conversation_context["recent_topic_anchors"], ["Transformer", "压缩"])
+        self.assertEqual(conversation_context["previous_planner"]["primary_capability"], "fact_qa")
+
     def test_unsupported_tool_sets_planner_fallback_observation(self) -> None:
-        planner_result = PlannerResult(
-            planner_used=True,
-            planner_source="rule_based",
-            planner_fallback=False,
-            planner_fallback_reason=None,
-            planner_confidence=0.8,
-            is_new_topic=False,
-            should_clear_pending_clarify=False,
-            relation_to_previous="same_topic_or_no_pending",
-            standalone_query="q",
+        planner_result = self._planner_result(
             primary_capability="unknown_tool",
             strictness="summary",
+            selected_tools_or_skills=["unknown_tool"],
             action_plan=[{"action": "unknown_tool", "query": "q"}],
         )
 
@@ -140,18 +231,10 @@ class PlannerShellTests(unittest.TestCase):
         self.assertEqual(result["observation"]["tool_results"][0]["error"]["code"], "unsupported_tool")
 
     def test_missing_dependencies_sets_tool_fallback_observation(self) -> None:
-        planner_result = PlannerResult(
-            planner_used=True,
-            planner_source="rule_based",
-            planner_fallback=False,
-            planner_fallback_reason=None,
-            planner_confidence=0.8,
-            is_new_topic=False,
-            should_clear_pending_clarify=False,
-            relation_to_previous="same_topic_or_no_pending",
-            standalone_query="q",
+        planner_result = self._planner_result(
             primary_capability="cross_doc_summary",
             strictness="summary",
+            selected_tools_or_skills=["cross_doc_summary"],
             action_plan=[{"action": "cross_doc_summary", "query": "q", "depends_on": ["paper_set"]}],
         )
 
@@ -169,18 +252,10 @@ class PlannerShellTests(unittest.TestCase):
         self.assertEqual(result["observation"]["tool_results"][0]["error"]["code"], "missing_dependencies")
 
     def test_action_plan_step_limit_exceeded_sets_planner_fallback_observation(self) -> None:
-        planner_result = PlannerResult(
-            planner_used=True,
-            planner_source="rule_based",
-            planner_fallback=False,
-            planner_fallback_reason=None,
-            planner_confidence=0.8,
-            is_new_topic=False,
-            should_clear_pending_clarify=False,
-            relation_to_previous="same_topic_or_no_pending",
-            standalone_query="q",
+        planner_result = self._planner_result(
             primary_capability="cross_doc_summary",
             strictness="summary",
+            selected_tools_or_skills=["catalog_lookup", "cross_doc_summary", "control", "fact_qa"],
             action_plan=[
                 {"action": "catalog_lookup", "query": "q", "produces": "paper_set"},
                 {"action": "cross_doc_summary", "query": "q", "depends_on": ["paper_set"]},
@@ -224,6 +299,36 @@ class PlannerShellTests(unittest.TestCase):
         self.assertEqual(result["response"].traceId, "legacy")
         self.assertEqual(result["observation"]["selected_path"], "legacy_fallback")
         self.assertTrue(result["observation"]["planner_shell_fallback"])
+
+    def test_delegate_web_route_uses_web_delegate_selected_path(self) -> None:
+        planner_result = self._planner_result(
+            user_goal="请联网查看最近的 RAG 综述",
+            standalone_query="请联网查看最近的 RAG 综述",
+            primary_capability="web_research",
+            strictness="summary",
+            decision_result="delegate_web",
+            knowledge_route="web",
+            selected_tools_or_skills=["web_research"],
+            action_plan=[],
+        )
+        calls: list[str] = []
+
+        def legacy_executor(payload, **kwargs):
+            _ = payload
+            calls.append(kwargs["selected_path"])
+            return _response("legacy-web")
+
+        with patch("app.planner_runtime.build_rule_based_plan", return_value=planner_result):
+            result = run_planner_shell(
+                KernelChatRequest(sessionId="s1", mode="local", query="请联网查看最近的 RAG 综述", history=[], traceId="trace-web"),
+                fact_qa_executor=lambda payload, **kwargs: _response(),
+                compat_executor=lambda payload, **kwargs: _response("compat"),
+                legacy_executor=legacy_executor,
+            )
+
+        self.assertEqual(calls, ["web_delegate_passthrough"])
+        self.assertEqual(result["observation"]["selected_path"], "web_delegate_passthrough")
+        self.assertEqual(result["observation"]["planner"]["decision_result"], "delegate_web")
 
 
 if __name__ == "__main__":
