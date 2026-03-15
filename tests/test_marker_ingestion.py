@@ -47,6 +47,32 @@ class MarkerIngestionTests(unittest.TestCase):
         self.assertEqual(decision.title, "Attention Is All You Need")
         self.assertEqual(decision.source, "fallback_first_line")
 
+    def test_structured_title_prefers_h1_over_h2(self) -> None:
+        decision = choose_best_title(
+            metadata_title="",
+            pages=[PageText(page_num=1, text="Paper Title\nAbstract\n1 Introduction")],
+            title_candidates=[
+                {"text": "1 Introduction", "source": "marker_h2", "priority": 2, "page": 1, "heading_level": 2},
+                {"text": "Paper Title", "source": "marker_h1", "priority": 1, "page": 1, "heading_level": 1},
+            ],
+            confidence_threshold=0.6,
+        )
+        self.assertEqual(decision.title, "Paper Title")
+        self.assertEqual(decision.source, "marker_h1")
+
+    def test_structured_title_falls_back_to_h2_when_h1_rejected(self) -> None:
+        decision = choose_best_title(
+            metadata_title="Metadata Title",
+            pages=[PageText(page_num=1, text="Metadata Title\nBody")],
+            title_candidates=[
+                {"text": "Abstract", "source": "marker_h1", "priority": 1, "page": 1, "heading_level": 1},
+                {"text": "Useful Paper Title", "source": "marker_h2", "priority": 2, "page": 1, "heading_level": 2},
+            ],
+            confidence_threshold=0.6,
+        )
+        self.assertEqual(decision.title, "Useful Paper Title")
+        self.assertEqual(decision.source, "marker_h2")
+
     def test_marker_failure_fallback_keeps_ingest_running(self) -> None:
         from app.ingest import run_ingest
 
@@ -127,6 +153,8 @@ class MarkerIngestionTests(unittest.TestCase):
                 pages=[PageText(page_num=1, text="Marker Title\nBody")],
                 blocks=[StructuredBlock(page_num=1, text="Marker Title", heading_level=1)],
                 title_candidates=["Marker Title"],
+                structured_title_candidates=[{"text": "Marker Title", "source": "marker_h1", "priority": 1, "page": 1, "heading_level": 1}],
+                diagnostics={"markdown": {"available": True, "consumption_status": "partial"}},
             )
 
             with (
@@ -140,14 +168,17 @@ class MarkerIngestionTests(unittest.TestCase):
             papers = json.loads((out_dir / "papers.json").read_text(encoding="utf-8"))
             self.assertEqual(len(papers), 1)
             self.assertEqual(papers[0].get("parser_engine"), "marker")
-            self.assertEqual(papers[0].get("title_source"), "marker")
+            self.assertEqual(papers[0].get("title_source"), "marker_h1")
             self.assertIsInstance(papers[0].get("title_confidence"), float)
+            self.assertEqual(papers[0].get("ingest_metadata", {}).get("title_layer"), "marker_h1")
 
             report = json.loads((run_dir / "ingest_report.json").read_text(encoding="utf-8"))
             rows = report.get("parser_observability", [])
             self.assertEqual(len(rows), 1)
             self.assertEqual(rows[0].get("parser_engine"), "marker")
             self.assertFalse(rows[0].get("parser_fallback"))
+            self.assertEqual(rows[0].get("title_layer"), "marker_h1")
+            self.assertTrue(rows[0].get("markdown_available"))
             self.assertIn("marker_tuning", report)
             self.assertIn("effective_source", report.get("marker_tuning", {}))
             self.assertIn("marker_tuning", rows[0])
@@ -172,8 +203,8 @@ class MarkerIngestionTests(unittest.TestCase):
             marker_result = MarkerParseResult(
                 pages=[PageText(page_num=1, text="Equation and Table")],
                 blocks=[
-                    StructuredBlock(page_num=1, text="E = mc^2", heading_level=None),
-                    StructuredBlock(page_num=1, text="Table 1 Accuracy 0.95", heading_level=None),
+                    StructuredBlock(page_num=1, text="E = mc^2", heading_level=None, block_type="Formula"),
+                    StructuredBlock(page_num=1, text="Table 1 Accuracy 0.95", heading_level=None, block_type="Table"),
                 ],
                 title_candidates=["Equation and Table"],
             )
@@ -187,14 +218,18 @@ class MarkerIngestionTests(unittest.TestCase):
 
             self.assertEqual(code, 0)
             chunk_lines = (out_dir / "chunks.jsonl").read_text(encoding="utf-8").splitlines()
-            chunk_texts = [json.loads(line).get("text", "") for line in chunk_lines if line.strip()]
+            chunk_rows = [json.loads(line) for line in chunk_lines if line.strip()]
+            chunk_texts = [row.get("text", "") for row in chunk_rows]
             self.assertTrue(any("E = mc^2" in text for text in chunk_texts))
             self.assertTrue(any("Table 1 Accuracy 0.95" in text for text in chunk_texts))
+            self.assertIn("formula_block", {row.get("content_type") for row in chunk_rows})
+            self.assertIn("structure_provenance", chunk_rows[0])
 
             report = json.loads((run_dir / "ingest_report.json").read_text(encoding="utf-8"))
             rows = report.get("parser_observability", [])
             self.assertEqual(len(rows), 1)
             self.assertEqual(rows[0].get("parser_engine"), "marker")
+            self.assertTrue(rows[0].get("block_semantics_preserved"))
 
     def test_marker_without_blocks_reports_structured_segments_missing(self) -> None:
         from app.ingest import run_ingest
@@ -229,6 +264,7 @@ class MarkerIngestionTests(unittest.TestCase):
             self.assertTrue(rows[0].get("structured_segments_missing"))
             self.assertEqual(rows[0].get("structured_segments_missing_reason"), "marker_blocks_empty")
             self.assertEqual(len(report.get("structured_segments_missing", [])), 1)
+            self.assertEqual(rows[0].get("markdown_consumption_status"), "missing")
 
             trace = json.loads((run_dir / "run_trace.json").read_text(encoding="utf-8"))
             self.assertEqual(trace.get("structured_segments_missing_count"), 1)

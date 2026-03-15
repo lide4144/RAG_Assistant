@@ -25,6 +25,9 @@ class VecDoc:
     text: str
     clean_text: str
     content_type: str
+    block_type: str | None = None
+    markdown_source: str | None = None
+    structure_provenance: dict | None = None
 
 
 @dataclass

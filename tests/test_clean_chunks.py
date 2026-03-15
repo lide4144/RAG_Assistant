@@ -77,6 +77,22 @@ class CleanRulesTests(unittest.TestCase):
             "dialogue_script",
         )
 
+    def test_existing_structured_content_type_is_preserved(self) -> None:
+        cleaned = clean_chunk_record(
+            {
+                "chunk_id": "p:5",
+                "paper_id": "p",
+                "page_start": 1,
+                "text": "E = mc^2",
+                "content_type": "formula_block",
+                "block_type": "Formula",
+                "structure_provenance": {"source": "marker", "block_type": "Formula"},
+            }
+        )
+        self.assertEqual(cleaned.content_type, "formula_block")
+        self.assertEqual(cleaned.block_type, "Formula")
+        self.assertEqual(cleaned.structure_provenance, {"source": "marker", "block_type": "Formula"})
+
     def test_merge_short_fragments_same_page(self) -> None:
         records = []
         for i in range(1, 7):
@@ -198,6 +214,19 @@ class RetrievalWeightingTests(unittest.TestCase):
         self.assertEqual(len(weighted), 2)
         self.assertAlmostEqual(weighted[0].score, 0.5)
         self.assertAlmostEqual(weighted[1].score, 1.0)
+
+    def test_formula_and_table_blocks_are_query_aware(self) -> None:
+        candidates = [
+            RetrievalCandidate(chunk_id="f", score=1.0, content_type="formula_block"),
+            RetrievalCandidate(chunk_id="t", score=1.0, content_type="table_block"),
+        ]
+        weighted = apply_content_type_weights(
+            candidates,
+            query="请给我表格和公式证据",
+            table_list_downweight=0.5,
+        )
+        self.assertGreater(weighted[0].score, 1.0)
+        self.assertGreater(weighted[1].score, 1.0)
 
 
 if __name__ == "__main__":

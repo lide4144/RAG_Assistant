@@ -81,6 +81,8 @@ class MarkerParserCompatibilityTests(unittest.TestCase):
         self.assertTrue(parsed.pages)
         self.assertIn("Attention Is All You Need", parsed.pages[0].text)
         self.assertTrue(parsed.title_candidates)
+        self.assertEqual(parsed.structured_title_candidates[0]["source"], "marker_h1")
+        self.assertTrue(parsed.diagnostics.get("markdown", {}).get("available"))
 
     def test_parse_pdf_with_marker_falls_back_when_signature_probe_fails(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -130,6 +132,7 @@ class MarkerParserCompatibilityTests(unittest.TestCase):
         self.assertTrue(parsed.pages)
         self.assertIn("Attention Is All You Need", parsed.pages[0].text)
         self.assertTrue(parsed.title_candidates)
+        self.assertEqual(parsed.structured_title_candidates[0]["source"], "marker_h1")
 
 
 if __name__ == "__main__":

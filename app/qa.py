@@ -732,6 +732,9 @@ def _candidate_from_section_match(
         section=base.section or str(match.section_title),
         text=base.text,
         clean_text=base.clean_text,
+        block_type=base.block_type,
+        markdown_source=base.markdown_source,
+        structure_provenance=dict(base.structure_provenance or {}) or None,
     )
 
 
@@ -803,6 +806,9 @@ def _candidate_to_evidence_item(candidate: RetrievalCandidate) -> dict[str, Any]
         "score_retrieval": float(payload.get("score_retrieval", candidate.score)),
         "score_rerank": float(payload.get("score_rerank", candidate.score)),
         "structure_coverage": str(payload.get("structure_coverage", "")),
+        "block_type": str(candidate.block_type or ""),
+        "markdown_source": str(candidate.markdown_source or ""),
+        "structure_provenance": dict(candidate.structure_provenance or {}) or None,
     }
 
 
@@ -902,6 +908,8 @@ def _build_answer_citations(evidence_grouped: list[dict[str, Any]]) -> list[dict
                     "chunk_id": item.get("chunk_id", ""),
                     "paper_id": pid,
                     "section_page": item.get("section_page", ""),
+                    "block_type": item.get("block_type", ""),
+                    "structure_provenance": item.get("structure_provenance"),
                 }
             )
     return [c for c in citations if c["chunk_id"]]
@@ -1210,6 +1218,14 @@ def _normalize_citations(
         paper_id = str(citation.get("paper_id", "")).strip() or str(evidence_item.get("paper_id", "unknown-paper"))
         section_page = str(citation.get("section_page", "")).strip() or str(evidence_item.get("section_page", ""))
         row = {"chunk_id": chunk_id, "paper_id": paper_id, "section_page": section_page}
+        block_type = str(citation.get("block_type", "")).strip() or str(evidence_item.get("block_type", "")).strip()
+        if block_type:
+            row["block_type"] = block_type
+        structure_provenance = citation.get("structure_provenance")
+        if not isinstance(structure_provenance, dict):
+            structure_provenance = evidence_item.get("structure_provenance")
+        if isinstance(structure_provenance, dict) and structure_provenance:
+            row["structure_provenance"] = structure_provenance
         key = (row["chunk_id"], row["paper_id"], row["section_page"])
         if key in seen:
             continue
@@ -1503,6 +1519,8 @@ def _build_assistant_summary_answer(
                     "chunk_id": chunk_id,
                     "paper_id": paper_id,
                     "section_page": section_page,
+                    "block_type": str(item.get("block_type", "")),
+                    "structure_provenance": item.get("structure_provenance"),
                 }
             )
             paper_title = str(group.get("paper_title") or paper_id or "unknown")

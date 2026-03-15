@@ -19,6 +19,19 @@ class Segment:
     section: str | None = None
     section_id: str | None = None
     heading_path: list[str] | None = None
+    block_type: str | None = None
+    content_type: str = "body"
+    markdown_source: str | None = None
+    structure_provenance: dict[str, Any] | None = None
+
+
+def _block_type_to_content_type(block_type: str | None) -> str:
+    normalized = str(block_type or "").strip().lower()
+    if normalized in {"table", "tablegroup", "tablecell", "tablerow", "table_row", "tablecolumn"}:
+        return "table_block"
+    if normalized in {"equation", "math", "formula", "formulablock"}:
+        return "formula_block"
+    return "body"
 
 
 def estimate_tokens(text: str) -> int:
@@ -89,6 +102,13 @@ def split_structured_segments(blocks: list[dict[str, Any]] | None) -> list[Segme
                     section=active_section,
                     section_id=active_section_id,
                     heading_path=list(active_heading_path or []) or None,
+                    block_type="SectionHeader",
+                    markdown_source="marker_markdown",
+                    structure_provenance={
+                        "source": "marker",
+                        "block_type": "SectionHeader",
+                        "heading_path": list(active_heading_path or []) or None,
+                    },
                 )
             )
         active_lines = []
@@ -112,6 +132,8 @@ def split_structured_segments(blocks: list[dict[str, Any]] | None) -> list[Segme
         page_num = max(1, page_num)
         heading_level_raw = block.get("heading_level")
         heading_level = heading_level_raw if isinstance(heading_level_raw, int) and heading_level_raw > 0 else None
+        block_type = str(block.get("block_type", "")).strip() or None
+        markdown_source = str(block.get("markdown_source", "")).strip() or None
 
         # Prefer heading levels as section boundaries when present.
         if heading_level is not None:
@@ -141,6 +163,15 @@ def split_structured_segments(blocks: list[dict[str, Any]] | None) -> list[Segme
                 section=active_section,
                 section_id=active_section_id,
                 heading_path=list(active_heading_path or []) or None,
+                block_type=block_type,
+                content_type=_block_type_to_content_type(block_type),
+                markdown_source=markdown_source,
+                structure_provenance={
+                    "source": "marker",
+                    "block_type": block_type or "Text",
+                    "markdown_source": markdown_source,
+                    "heading_path": list(active_heading_path or []) or None,
+                },
             )
         )
 
@@ -173,6 +204,10 @@ def sliding_window_chunk(
                     section=segment.section,
                     section_id=segment.section_id,
                     heading_path=list(segment.heading_path or []) or None,
+                    block_type=segment.block_type,
+                    content_type=segment.content_type,
+                    markdown_source=segment.markdown_source,
+                    structure_provenance=dict(segment.structure_provenance or {}) or None,
                 )
             )
             continue
@@ -192,6 +227,10 @@ def sliding_window_chunk(
                         section=segment.section,
                         section_id=segment.section_id,
                         heading_path=list(segment.heading_path or []) or None,
+                        block_type=segment.block_type,
+                        content_type=segment.content_type,
+                        markdown_source=segment.markdown_source,
+                        structure_provenance=dict(segment.structure_provenance or {}) or None,
                     )
                 )
             if end >= len(words):

@@ -39,6 +39,9 @@ class CleanChunkRecord:
     section_id: str | None = None
     heading_path: list[str] | None = None
     merged_from: list[str] | None = None
+    block_type: str | None = None
+    markdown_source: str | None = None
+    structure_provenance: dict[str, Any] | None = None
 
     def to_dict(self) -> dict[str, Any]:
         data = asdict(self)
@@ -50,6 +53,12 @@ class CleanChunkRecord:
             data.pop("section_id", None)
         if self.heading_path is None:
             data.pop("heading_path", None)
+        if self.block_type is None:
+            data.pop("block_type", None)
+        if self.markdown_source is None:
+            data.pop("markdown_source", None)
+        if self.structure_provenance is None:
+            data.pop("structure_provenance", None)
         return data
 
 
@@ -155,7 +164,7 @@ def clean_chunk_record(record: dict[str, Any]) -> CleanChunkRecord:
     if weird_char_ratio(clean_text) > 0.35:
         flags.append("garbled")
 
-    content_type = classify_content_type(text, clean_text)
+    content_type = str(record.get("content_type", "")).strip() or classify_content_type(text, clean_text)
     return CleanChunkRecord(
         chunk_id=chunk_id,
         paper_id=paper_id,
@@ -167,6 +176,9 @@ def clean_chunk_record(record: dict[str, Any]) -> CleanChunkRecord:
         section=(str(record.get("section", "")).strip() or None),
         section_id=(str(record.get("section_id", "")).strip() or None),
         heading_path=[str(x).strip() for x in record.get("heading_path", []) if str(x).strip()] or None,
+        block_type=(str(record.get("block_type", "")).strip() or None),
+        markdown_source=(str(record.get("markdown_source", "")).strip() or None),
+        structure_provenance=(record.get("structure_provenance") if isinstance(record.get("structure_provenance"), dict) else None),
     )
 
 
@@ -210,6 +222,9 @@ def merge_short_fragments(records: list[CleanChunkRecord]) -> list[CleanChunkRec
                         section_id=chunk_block[0].section_id,
                         heading_path=list(chunk_block[0].heading_path or []) or None,
                         merged_from=[item.chunk_id for item in chunk_block],
+                        block_type=chunk_block[0].block_type,
+                        markdown_source=chunk_block[0].markdown_source,
+                        structure_provenance=chunk_block[0].structure_provenance,
                     )
                 )
             else:

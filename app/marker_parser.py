@@ -35,6 +35,18 @@ class StructuredBlock:
     page_num: int
     text: str
     heading_level: int | None = None
+    block_type: str | None = None
+    markdown_source: str | None = None
+
+
+@dataclass
+class StructuredTitleCandidate:
+    text: str
+    source: str
+    priority: int
+    page_num: int = 1
+    heading_level: int | None = None
+    from_markdown: bool = False
 
 
 @dataclass
@@ -42,6 +54,8 @@ class MarkerParseResult:
     pages: list[PageText]
     blocks: list[StructuredBlock]
     title_candidates: list[str]
+    structured_title_candidates: list[dict[str, Any]] = field(default_factory=list)
+    diagnostics: dict[str, Any] = field(default_factory=dict)
     stage_timings: dict[str, float] = field(default_factory=dict)
 
 
@@ -149,7 +163,16 @@ def _normalize_blocks(raw_blocks: list[dict[str, Any]]) -> list[StructuredBlock]
         heading_level: int | None = None
         if isinstance(heading_level_raw, int) and heading_level_raw > 0:
             heading_level = heading_level_raw
-        blocks.append(StructuredBlock(page_num=max(1, page_num), text=text, heading_level=heading_level))
+        block_type = _safe_text(row.get("block_type")) or None
+        blocks.append(
+            StructuredBlock(
+                page_num=max(1, page_num),
+                text=text,
+                heading_level=heading_level,
+                block_type=block_type,
+                markdown_source="marker_markdown",
+            )
+        )
     return blocks
 
 
@@ -259,15 +282,42 @@ def _marker_to_intermediate(markdown: str, raw_blocks: list[dict[str, Any]]) -> 
         if "\n\n".join(rows).strip()
     ]
 
-    title_candidates: list[str] = []
+    structured_candidates: list[StructuredTitleCandidate] = []
     for block in blocks[:20]:
-        if block.heading_level in {1, 2}:
-            title_candidates.append(block.text)
+        if block.heading_level == 1:
+            structured_candidates.append(
+                StructuredTitleCandidate(
+                    text=block.text,
+                    source="marker_h1",
+                    priority=1,
+                    page_num=block.page_num,
+                    heading_level=1,
+                )
+            )
+        elif block.heading_level == 2:
+            structured_candidates.append(
+                StructuredTitleCandidate(
+                    text=block.text,
+                    source="marker_h2",
+                    priority=2,
+                    page_num=block.page_num,
+                    heading_level=2,
+                )
+            )
     if markdown:
         first_line = _safe_text(markdown.splitlines()[0] if markdown.splitlines() else "")
         if first_line:
-            title_candidates.append(first_line)
+            structured_candidates.append(
+                StructuredTitleCandidate(
+                    text=first_line,
+                    source="marker_markdown_first_line",
+                    priority=3,
+                    page_num=1,
+                    from_markdown=True,
+                )
+            )
 
+    title_candidates = [row.text for row in structured_candidates]
     dedup: list[str] = []
     seen: set[str] = set()
     for candidate in title_candidates:
@@ -277,7 +327,40 @@ def _marker_to_intermediate(markdown: str, raw_blocks: list[dict[str, Any]]) -> 
         seen.add(key)
         dedup.append(candidate[:300])
 
-    return MarkerParseResult(pages=pages, blocks=blocks, title_candidates=dedup)
+    diagnostics = {
+        "markdown": {
+            "available": bool(markdown),
+            "consumption_status": "partial" if markdown else "missing",
+            "line_count": len([line for line in markdown.splitlines() if _safe_text(line)]),
+        },
+        "structured_title_candidate_counts": {
+            "marker_h1": sum(1 for row in structured_candidates if row.source == "marker_h1"),
+            "marker_h2": sum(1 for row in structured_candidates if row.source == "marker_h2"),
+            "marker_markdown_first_line": sum(1 for row in structured_candidates if row.source == "marker_markdown_first_line"),
+        },
+        "block_semantics": {
+            "available": bool(blocks),
+            "preserved": bool(blocks),
+            "block_types": sorted({str(block.block_type) for block in blocks if str(block.block_type or "").strip()}),
+        },
+    }
+    return MarkerParseResult(
+        pages=pages,
+        blocks=blocks,
+        title_candidates=dedup,
+        structured_title_candidates=[
+            {
+                "text": row.text[:300],
+                "source": row.source,
+                "priority": row.priority,
+                "page": row.page_num,
+                "heading_level": row.heading_level,
+                "from_markdown": row.from_markdown,
+            }
+            for row in structured_candidates
+        ],
+        diagnostics=diagnostics,
+    )
 
 
 def parse_pdf_with_marker(pdf_path: str | Path, timeout_sec: float = 30.0) -> MarkerParseResult:
@@ -330,5 +413,7 @@ def parse_pdf_with_marker(pdf_path: str | Path, timeout_sec: float = 30.0) -> Ma
         pages=result.pages,
         blocks=result.blocks,
         title_candidates=result.title_candidates,
+        structured_title_candidates=result.structured_title_candidates,
+        diagnostics=result.diagnostics,
         stage_timings=stage_timings,
     )
