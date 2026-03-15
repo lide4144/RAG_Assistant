@@ -107,6 +107,9 @@ class RetrievalCandidate:
     section: str | None = None
     text: str = ""
     clean_text: str = ""
+    block_type: str | None = None
+    markdown_source: str | None = None
+    structure_provenance: dict[str, Any] | None = None
 
 
 def _from_bm25(doc: BM25Doc, score: float) -> RetrievalCandidate:
@@ -120,6 +123,9 @@ def _from_bm25(doc: BM25Doc, score: float) -> RetrievalCandidate:
         section=doc.section,
         text=doc.text,
         clean_text=doc.clean_text,
+        block_type=getattr(doc, "block_type", None),
+        markdown_source=getattr(doc, "markdown_source", None),
+        structure_provenance=getattr(doc, "structure_provenance", None),
     )
 
 
@@ -134,6 +140,9 @@ def _from_vec(doc: VecDoc, score: float) -> RetrievalCandidate:
         section=doc.section,
         text=doc.text,
         clean_text=doc.clean_text,
+        block_type=getattr(doc, "block_type", None),
+        markdown_source=getattr(doc, "markdown_source", None),
+        structure_provenance=getattr(doc, "structure_provenance", None),
     )
 
 
@@ -208,6 +217,8 @@ def apply_content_type_weights(
     q_lower = query.lower()
     allow_front_matter = any(k in q_lower for k in AUTHOR_INTENT_KEYWORDS)
     allow_reference = any(k in q_lower for k in REFERENCE_INTENT_KEYWORDS)
+    allow_table = any(k in q_lower for k in ("table", "tables", "表", "表格"))
+    allow_formula = any(k in q_lower for k in ("formula", "equation", "eq.", "公式", "方程"))
 
     weighted: list[RetrievalCandidate] = []
     for item in candidates:
@@ -217,6 +228,12 @@ def apply_content_type_weights(
         if content_type == "table_list":
             score *= table_list_downweight
             weight_reason = "table_list_downweight"
+        elif content_type == "table_block":
+            score *= 1.12 if allow_table else 0.92
+            weight_reason = "table_block_boost" if allow_table else "table_block_downweight"
+        elif content_type == "formula_block":
+            score *= 1.12 if allow_formula else 0.9
+            weight_reason = "formula_block_boost" if allow_formula else "formula_block_downweight"
         elif content_type == "front_matter" and not allow_front_matter:
             score *= front_matter_downweight
             weight_reason = "front_matter_downweight"
@@ -228,6 +245,8 @@ def apply_content_type_weights(
         payload["weight_reason"] = weight_reason
         payload["allow_front_matter"] = allow_front_matter
         payload["allow_reference"] = allow_reference
+        payload["allow_table"] = allow_table
+        payload["allow_formula"] = allow_formula
 
         weighted.append(
             RetrievalCandidate(
@@ -240,6 +259,9 @@ def apply_content_type_weights(
                 section=item.section,
                 text=item.text,
                 clean_text=item.clean_text,
+                block_type=item.block_type,
+                markdown_source=item.markdown_source,
+                structure_provenance=dict(item.structure_provenance or {}) or None,
             )
         )
     return weighted
@@ -290,6 +312,9 @@ def _merge_hybrid(
                 section=base.section,
                 text=base.text,
                 clean_text=base.clean_text,
+                block_type=base.block_type,
+                markdown_source=base.markdown_source,
+                structure_provenance=dict(base.structure_provenance or {}) or None,
             )
         )
 
@@ -428,6 +453,9 @@ def retrieve_candidates(
                 section=item.section,
                 text=item.text,
                 clean_text=item.clean_text,
+                block_type=item.block_type,
+                markdown_source=item.markdown_source,
+                structure_provenance=dict(item.structure_provenance or {}) or None,
             )
         )
     enriched.sort(key=lambda x: x.score, reverse=True)
@@ -493,6 +521,9 @@ def expand_candidates_with_graph(
                 section=item.section,
                 text=item.text,
                 clean_text=item.clean_text,
+                block_type=item.block_type,
+                markdown_source=item.markdown_source,
+                structure_provenance=dict(item.structure_provenance or {}) or None,
             )
         )
 
@@ -586,6 +617,9 @@ def expand_candidates_with_graph(
                         paper_id=node.paper_id,
                         page_start=node.page_start,
                         section=node.section,
+                        block_type=None,
+                        markdown_source=None,
+                        structure_provenance=None,
                     )
                 seed_payload = dict(seed.payload or {})
                 payload = dict(base.payload or {})
@@ -625,6 +659,9 @@ def expand_candidates_with_graph(
                         section=base.section,
                         text=base.text,
                         clean_text=base.clean_text,
+                        block_type=base.block_type,
+                        markdown_source=base.markdown_source,
+                        structure_provenance=dict(base.structure_provenance or {}) or None,
                     )
                 )
                 seen_ids.add(neighbor_id)

@@ -17,6 +17,9 @@ class ChunkDoc:
     text: str
     clean_text: str
     content_type: str
+    block_type: str | None = None
+    markdown_source: str | None = None
+    structure_provenance: dict | None = None
 
 
 def tokenize(text: str) -> list[str]:
@@ -55,6 +58,9 @@ def load_chunks_clean(
                     text=str(row.get("text", "")),
                     clean_text=str(row.get("clean_text", "")),
                     content_type=content_type,
+                    block_type=(str(row.get("block_type", "")).strip() or None),
+                    markdown_source=(str(row.get("markdown_source", "")).strip() or None),
+                    structure_provenance=(row.get("structure_provenance") if isinstance(row.get("structure_provenance"), dict) else None),
                 )
             )
     return docs

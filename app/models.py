@@ -41,6 +41,10 @@ class ChunkRecord:
     section: str | None = None
     section_id: str | None = None
     heading_path: list[str] | None = None
+    block_type: str | None = None
+    content_type: str | None = None
+    markdown_source: str | None = None
+    structure_provenance: dict[str, Any] | None = None
 
     def to_dict(self) -> dict[str, Any]:
         payload = asdict(self)
@@ -50,4 +54,12 @@ class ChunkRecord:
             payload.pop("section_id", None)
         if payload.get("heading_path") is None:
             payload.pop("heading_path", None)
+        if payload.get("block_type") is None:
+            payload.pop("block_type", None)
+        if payload.get("content_type") is None:
+            payload.pop("content_type", None)
+        if payload.get("markdown_source") is None:
+            payload.pop("markdown_source", None)
+        if payload.get("structure_provenance") is None:
+            payload.pop("structure_provenance", None)
         return payload

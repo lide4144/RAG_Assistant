@@ -55,6 +55,43 @@ class TitleDecision:
     title: str
     source: str
     confidence: float
+    adopted_layer: str = ""
+    decision_trace: list[dict[str, str]] | None = None
+
+
+def _normalize_structured_title_candidates(
+    title_candidates: list[str] | list[dict[str, object]] | None,
+) -> list[dict[str, object]]:
+    normalized: list[dict[str, object]] = []
+    for row in title_candidates or []:
+        if isinstance(row, dict):
+            text = _normalize_title_spaces(str(row.get("text", "")))
+            if not text:
+                continue
+            normalized.append(
+                {
+                    "text": text[:300],
+                    "source": str(row.get("source", "marker")).strip() or "marker",
+                    "priority": int(row.get("priority", 99) or 99),
+                    "page": int(row.get("page", 1) or 1),
+                    "heading_level": row.get("heading_level"),
+                    "from_markdown": bool(row.get("from_markdown")),
+                }
+            )
+            continue
+        text = _normalize_title_spaces(str(row or ""))
+        if text:
+            normalized.append(
+                {
+                    "text": text[:300],
+                    "source": "marker",
+                    "priority": 99,
+                    "page": 1,
+                    "heading_level": None,
+                    "from_markdown": False,
+                }
+            )
+    return normalized
 
 
 def compile_title_blacklist_patterns(patterns: list[str] | None = None) -> list[re.Pattern[str]]:
@@ -177,48 +214,86 @@ def choose_best_title(
     *,
     metadata_title: str | None,
     pages: list[PageText],
-    title_candidates: list[str] | None = None,
+    title_candidates: list[str] | list[dict[str, object]] | None = None,
     confidence_threshold: float = 0.6,
     blacklist_patterns: list[str] | None = None,
 ) -> TitleDecision:
     compiled_blacklist = compile_title_blacklist_patterns(blacklist_patterns)
-    candidates: list[tuple[str, str]] = []
-    if metadata_title and str(metadata_title).strip():
-        candidates.append((str(metadata_title).strip(), "metadata"))
-    if title_candidates:
-        for row in title_candidates:
-            candidate = str(row or "").strip()
-            if candidate:
-                candidates.append((candidate, "marker"))
+    structured_candidates = _normalize_structured_title_candidates(title_candidates)
+    fallback_first_line = ""
     if pages:
         first_page = pages[0].text
         for line in first_page.splitlines():
             candidate = line.strip()
             if len(candidate) >= 8:
-                candidates.append((candidate[:300], "fallback_first_line"))
+                fallback_first_line = candidate[:300]
                 break
 
-    best_title = "Untitled Paper"
-    best_source = "fallback_untitled"
-    best_score = 0.0
-    for candidate, source in candidates:
-        for expanded_candidate in _expand_title_candidate_variants(candidate):
-            score = score_title_candidate(expanded_candidate, blacklist_patterns=compiled_blacklist)
-            if score <= 0.0:
-                continue
-            if score > best_score:
-                best_title = expanded_candidate[:300]
-                best_source = source
-                best_score = score
+    layers: list[tuple[str, list[dict[str, object]]]] = [
+        ("marker_h1", [row for row in structured_candidates if str(row.get("source")) == "marker_h1"]),
+        ("marker_h2", [row for row in structured_candidates if str(row.get("source")) == "marker_h2"]),
+        (
+            "marker_markdown_first_line",
+            [row for row in structured_candidates if str(row.get("source")) == "marker_markdown_first_line"],
+        ),
+        ("marker", [row for row in structured_candidates if str(row.get("source")) == "marker"]),
+        (
+            "metadata",
+            [{"text": str(metadata_title).strip(), "source": "metadata", "priority": 4}] if metadata_title and str(metadata_title).strip() else [],
+        ),
+        (
+            "fallback_first_line",
+            [{"text": fallback_first_line, "source": "fallback_first_line", "priority": 5}] if fallback_first_line else [],
+        ),
+    ]
 
-    if best_score < float(confidence_threshold):
+    trace: list[dict[str, str]] = []
+    for layer_name, candidates in layers:
+        if not candidates:
+            trace.append({"layer": layer_name, "status": "missing", "reason": "no_candidates"})
+            continue
+        best_title = ""
+        best_score = 0.0
+        rejected_reasons: list[str] = []
+        for candidate_row in candidates:
+            candidate = str(candidate_row.get("text", "")).strip()
+            for expanded_candidate in _expand_title_candidate_variants(candidate):
+                score = score_title_candidate(expanded_candidate, blacklist_patterns=compiled_blacklist)
+                if score <= 0.0:
+                    rejected_reasons.append("quality_gate_rejected")
+                    continue
+                if score > best_score:
+                    best_title = expanded_candidate[:300]
+                    best_score = score
+        if not best_title:
+            trace.append({"layer": layer_name, "status": "rejected", "reason": rejected_reasons[-1] if rejected_reasons else "quality_gate_rejected"})
+            continue
+        if best_score < float(confidence_threshold):
+            trace.append({"layer": layer_name, "status": "rejected", "reason": "below_confidence_threshold"})
+            continue
+        trace.append({"layer": layer_name, "status": "accepted", "reason": "selected"})
+        return TitleDecision(
+            title=best_title,
+            source=layer_name,
+            confidence=best_score,
+            adopted_layer=layer_name,
+            decision_trace=trace,
+        )
+
         return TitleDecision(
             title="Untitled Paper",
             source="fallback_untitled",
-            confidence=best_score,
+            confidence=0.0,
+            adopted_layer="fallback_untitled",
+            decision_trace=trace,
         )
-
-    return TitleDecision(title=best_title, source=best_source, confidence=best_score)
+    return TitleDecision(
+        title="Untitled Paper",
+        source="fallback_untitled",
+        confidence=0.0,
+        adopted_layer="fallback_untitled",
+        decision_trace=trace,
+    )
 
 
 def extract_title(metadata_title: str | None, pages: list[PageText]) -> str:

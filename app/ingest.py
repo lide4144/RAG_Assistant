@@ -86,11 +86,13 @@ class ParsedPdf:
     page_errors: list[str]
     metadata_title: str | None
     title_candidates: list[str]
+    structured_title_candidates: list[dict[str, Any]]
     parser_engine: str
     parser_fallback: bool
     parser_fallback_stage: str
     parser_fallback_reason: str
     structured_segments: list[dict[str, Any]]
+    diagnostics: dict[str, Any] | None = None
     structure_parse_status: str = STRUCTURE_UNAVAILABLE
     structure_parse_reason: str = ""
     marker_attempt_duration_sec: float = 0.0
@@ -458,11 +460,13 @@ def _parse_pdf_with_fallback(
             page_errors=page_errors,
             metadata_title=metadata_title,
             title_candidates=[],
+            structured_title_candidates=[],
             parser_engine="legacy",
             parser_fallback=True,
             parser_fallback_stage=marker_preflight_stage or "preflight",
             parser_fallback_reason=marker_preflight_reason or "marker preflight failed",
             structured_segments=[],
+            diagnostics={},
             structure_parse_status=STRUCTURE_UNAVAILABLE,
             structure_parse_reason=marker_preflight_reason or "marker_preflight_failed",
             marker_attempt_duration_sec=0.0,
@@ -473,7 +477,13 @@ def _parse_pdf_with_fallback(
         try:
             marker_result = parse_pdf_with_marker(pdf_path, timeout_sec=marker_timeout)
             structured_segments = [
-                {"page": block.page_num, "text": block.text, "heading_level": block.heading_level}
+                {
+                    "page": block.page_num,
+                    "text": block.text,
+                    "heading_level": block.heading_level,
+                    "block_type": block.block_type,
+                    "markdown_source": block.markdown_source,
+                }
                 for block in marker_result.blocks
             ]
             return ParsedPdf(
@@ -481,11 +491,13 @@ def _parse_pdf_with_fallback(
                 page_errors=[],
                 metadata_title=None,
                 title_candidates=marker_result.title_candidates,
+                structured_title_candidates=marker_result.structured_title_candidates,
                 parser_engine="marker",
                 parser_fallback=False,
                 parser_fallback_stage="",
                 parser_fallback_reason="",
                 structured_segments=structured_segments,
+                diagnostics=marker_result.diagnostics,
                 structure_parse_status=STRUCTURE_READY if structured_segments else STRUCTURE_UNAVAILABLE,
                 structure_parse_reason="" if structured_segments else "marker_blocks_empty",
                 marker_attempt_duration_sec=round(time.perf_counter() - marker_started, 3),
@@ -499,11 +511,13 @@ def _parse_pdf_with_fallback(
                 page_errors=page_errors,
                 metadata_title=metadata_title,
                 title_candidates=[],
+                structured_title_candidates=[],
                 parser_engine="legacy",
                 parser_fallback=True,
                 parser_fallback_stage=stage,
                 parser_fallback_reason=str(exc),
                 structured_segments=[],
+                diagnostics={},
                 structure_parse_status=STRUCTURE_UNAVAILABLE,
                 structure_parse_reason=stage,
                 marker_attempt_duration_sec=round(time.perf_counter() - marker_started, 3),
@@ -515,11 +529,13 @@ def _parse_pdf_with_fallback(
         page_errors=page_errors,
         metadata_title=metadata_title,
         title_candidates=[],
+        structured_title_candidates=[],
         parser_engine="legacy",
         parser_fallback=False,
         parser_fallback_stage="",
         parser_fallback_reason="",
         structured_segments=[],
+        diagnostics={},
         structure_parse_status=STRUCTURE_UNAVAILABLE,
         structure_parse_reason="marker_disabled_or_legacy_parser",
         marker_attempt_duration_sec=0.0,
@@ -757,7 +773,7 @@ def run_ingest(args: argparse.Namespace) -> int:
         title_decision = choose_best_title(
             metadata_title=parsed_pdf.metadata_title,
             pages=parsed_pdf.pages,
-            title_candidates=parsed_pdf.title_candidates,
+            title_candidates=parsed_pdf.structured_title_candidates or parsed_pdf.title_candidates,
             confidence_threshold=config.title_confidence_threshold,
             blacklist_patterns=config.title_blacklist_patterns,
         )
@@ -786,6 +802,28 @@ def run_ingest(args: argparse.Namespace) -> int:
         )
 
         source_uri = f"pdf://sha1/{fingerprint}"
+        block_types = sorted(
+            {
+                str(block.get("block_type", "")).strip()
+                for block in parsed_pdf.structured_segments
+                if str(block.get("block_type", "")).strip()
+            }
+        )
+        markdown_diagnostics = (
+            parsed_pdf.diagnostics.get("markdown", {})
+            if isinstance(parsed_pdf.diagnostics, dict)
+            else {}
+        )
+        block_semantics = (
+            parsed_pdf.diagnostics.get("block_semantics", {})
+            if isinstance(parsed_pdf.diagnostics, dict)
+            else {}
+        )
+        if not block_semantics:
+            block_semantics = {
+                "available": bool(block_types),
+                "preserved": bool(block_types),
+            }
         parser_observability.append(
             {
                 "paper_id": stable_paper_id,
@@ -817,7 +855,20 @@ def run_ingest(args: argparse.Namespace) -> int:
                 "section_count": int(structure_entry.get("section_count", 0) or 0),
                 "indexed_section_count": int(structure_entry.get("indexed_section_count", 0) or 0),
                 "title_source": title_decision.source,
+                "title_layer": title_decision.adopted_layer,
                 "title_confidence": round(float(title_decision.confidence), 4),
+                "title_decision_trace": list(title_decision.decision_trace or []),
+                "structured_title_candidates": parsed_pdf.structured_title_candidates,
+                "structured_title_candidate_counts": (
+                    parsed_pdf.diagnostics.get("structured_title_candidate_counts", {})
+                    if isinstance(parsed_pdf.diagnostics, dict)
+                    else {}
+                ),
+                "markdown_available": bool(markdown_diagnostics.get("available")),
+                "markdown_consumption_status": str(markdown_diagnostics.get("consumption_status", "missing")),
+                "block_semantics_available": bool(block_semantics.get("available")),
+                "block_semantics_preserved": bool(block_semantics.get("preserved")),
+                "block_types": block_types,
             }
         )
         structure_entries.append(structure_entry)
@@ -848,6 +899,19 @@ def run_ingest(args: argparse.Namespace) -> int:
                         "structure_parse_reason": structure_entry.get("structure_parse_reason", ""),
                         "section_count": int(structure_entry.get("section_count", 0) or 0),
                         "indexed_section_count": int(structure_entry.get("indexed_section_count", 0) or 0),
+                        "title_layer": title_decision.adopted_layer,
+                        "title_decision_trace": list(title_decision.decision_trace or []),
+                        "structured_title_candidates": parsed_pdf.structured_title_candidates,
+                        "structured_title_candidate_counts": (
+                            parsed_pdf.diagnostics.get("structured_title_candidate_counts", {})
+                            if isinstance(parsed_pdf.diagnostics, dict)
+                            else {}
+                        ),
+                        "markdown_available": bool(markdown_diagnostics.get("available")),
+                        "markdown_consumption_status": str(markdown_diagnostics.get("consumption_status", "missing")),
+                        "block_semantics_available": bool(block_semantics.get("available")),
+                        "block_semantics_preserved": bool(block_semantics.get("preserved")),
+                        "block_types": block_types,
                     },
                 ),
                 chunks=chunks,

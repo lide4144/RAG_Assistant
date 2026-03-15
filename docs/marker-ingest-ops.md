@@ -97,8 +97,20 @@ marker_enabled: false
 `papers.json`（PDF）新增字段：
 
 - `parser_engine` (`marker` / `legacy`)
-- `title_source` (`marker` / `metadata` / `fallback_*`)
+- `title_source` (`marker_h1` / `marker_h2` / `marker_markdown_first_line` / `marker` / `metadata` / `fallback_*`)
 - `title_confidence` (0-1)
+- `ingest_metadata.title_layer`：最终采用的标题层级
+- `ingest_metadata.title_decision_trace[]`：每层候选是 `accepted`、`rejected` 还是 `missing`
+- `ingest_metadata.structured_title_candidates[]`：结构化标题候选快照，供历史修复脚本复用
+- `ingest_metadata.markdown_consumption_status`：`partial` / `missing`
+- `ingest_metadata.block_semantics_preserved`、`ingest_metadata.block_types[]`
+
+`chunks.jsonl` / `chunks_clean.jsonl`（Marker 成功时）会额外保留：
+
+- `content_type`：`table_block`、`formula_block` 或 `body`
+- `block_type`
+- `markdown_source`
+- `structure_provenance`
 
 `runs/*/ingest_report.json` 新增：
 
@@ -109,7 +121,13 @@ marker_enabled: false
   - `structured_segments_missing`
   - `structured_segments_missing_reason`
   - `title_source`
+  - `title_layer`
   - `title_confidence`
+  - `title_decision_trace`
+  - `structured_title_candidate_counts`
+  - `markdown_consumption_status`
+  - `block_semantics_preserved`
+  - `block_types`
 - `structured_segments_missing[]`：结构化块缺失文档列表（用于快速排查静默回退）
 - `marker_tuning`
   - 当前生效参数值
@@ -128,10 +146,12 @@ marker_enabled: false
 
 1. `marker unavailable`：Marker 依赖未安装，执行 `pip install marker-pdf`。
 2. `marker parse timeout`：增大 `marker_timeout_sec` 或临时回滚 `marker_enabled=false`。
-3. 标题被降级为 `Untitled Paper`：说明候选命中黑名单或低于门禁阈值，检查 `title_source/title_confidence`。
-4. OOM 或吞吐骤降：优先将 `recognition/detector/layout` 调回 `2`，`ocr_error/table_rec` 调回 `1`，`model_dtype=float16`。
-5. `effective_source` 长期为 `default`：说明 runtime 配置或环境变量存在缺失/非法值，检查 `/api/admin/runtime-overview` 的 `status.reasons`。
-6. 保存 Marker LLM service 时提示 provider 字段缺失：检查 `/api/admin/pipeline-config` 返回的 `field_errors`，例如 Vertex 需要 `vertex_project_id`，OpenAI 需要 `openai_api_key` + `openai_model`。
+3. 标题被降级为 `Untitled Paper`：说明候选命中黑名单或低于门禁阈值，优先检查 `title_layer`、`title_decision_trace` 与 `structured_title_candidates`。
+4. Marker 明明识别了表格/公式但检索里没有体现：检查 `chunks*.jsonl` 的 `content_type/block_type/structure_provenance`，以及 ingest report 中的 `block_semantics_preserved`。
+5. markdown 只有标题首行被使用：这是当前预期，`markdown_consumption_status=partial` 用于明确区分“存在但未完全消费”和“本身不存在”。
+6. OOM 或吞吐骤降：优先将 `recognition/detector/layout` 调回 `2`，`ocr_error/table_rec` 调回 `1`，`model_dtype=float16`。
+7. `effective_source` 长期为 `default`：说明 runtime 配置或环境变量存在缺失/非法值，检查 `/api/admin/runtime-overview` 的 `status.reasons`。
+8. 保存 Marker LLM service 时提示 provider 字段缺失：检查 `/api/admin/pipeline-config` 返回的 `field_errors`，例如 Vertex 需要 `vertex_project_id`，OpenAI 需要 `openai_api_key` + `openai_model`。
 
 ## 4.2 前端排查接口
 
@@ -165,8 +185,15 @@ venv/bin/python scripts/validate_marker_gray_release.py --config configs/default
 venv/bin/python scripts/rebuild_paper_metadata.py \
   --papers data/processed/papers.json \
   --chunks data/processed/chunks.jsonl \
-  --paper-id pdf_xxx --paper-id pdf_yyy
+  --paper-id pdf_xxx --paper-id pdf_yyy \
+  --rerun-marker-if-missing
 ```
+
+说明：
+
+- 脚本会优先复用 `papers.json.ingest_metadata.structured_title_candidates`
+- 如果缺失且传入 `--rerun-marker-if-missing`，会尝试对原 PDF 安全重跑 Marker
+- 如果结构化候选仍不可用，会显式写入 `repair_status=skipped_missing_structured_candidates`
 
 - 前后质量对比（标题修复率 + 检索/回答回归摘要）：
 
