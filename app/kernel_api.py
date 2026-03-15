@@ -848,6 +848,182 @@ def _run_planner_shell_once(
     return _run_planner_runtime_once(payload, on_stream_delta)
 
 
+def _agent_event_timestamp() -> str:
+    return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+def _build_agent_execution_stream_events(
+    trace_id: str,
+    mode: str,
+    observation: dict[str, Any] | None,
+) -> list[dict[str, Any]]:
+    if not isinstance(observation, dict):
+        return []
+
+    planner = dict(observation.get("planner") or {})
+    selected_tools = [
+        str(item).strip()
+        for item in list(planner.get("selected_tools_or_skills") or [])
+        if str(item).strip()
+    ]
+    events: list[dict[str, Any]] = [
+        {
+            "event": "planning",
+            "data": {
+                "type": "planning",
+                "traceId": trace_id,
+                "mode": mode,
+                "timestamp": _agent_event_timestamp(),
+                "phase": "planning",
+                "decisionResult": str(planner.get("decision_result") or "legacy_fallback"),
+                "selectedPath": str(observation.get("selected_path") or "legacy_fallback"),
+                "selectedToolsOrSkills": selected_tools,
+            },
+        }
+    ]
+
+    tool_results_by_call: dict[str, dict[str, Any]] = {}
+    for result in list(observation.get("tool_results") or []):
+        if isinstance(result, dict):
+            call_id = str(result.get("call_id") or result.get("tool_call_id") or "").strip()
+            if call_id:
+                tool_results_by_call[call_id] = result
+
+    for tool_call in list(observation.get("tool_calls") or []):
+        if not isinstance(tool_call, dict):
+            continue
+        call_id = str(tool_call.get("call_id") or tool_call.get("id") or "").strip()
+        tool_name = str(tool_call.get("tool_name") or "").strip()
+        if not call_id or not tool_name:
+            continue
+
+        events.append(
+            {
+                "event": "toolSelection",
+                "data": {
+                    "type": "toolSelection",
+                    "traceId": trace_id,
+                    "mode": mode,
+                    "timestamp": _agent_event_timestamp(),
+                    "toolName": tool_name,
+                    "callId": call_id,
+                    "status": "selected",
+                },
+            }
+        )
+
+        result = tool_results_by_call.get(call_id)
+        if not isinstance(result, dict):
+            continue
+
+        failure = dict(result.get("failure") or {})
+        failure_type = str(failure.get("failure_type") or "").strip()
+        result_status = str(result.get("status") or result.get("tool_status") or "failed").strip() or "failed"
+        should_emit_running = not (
+            result_status in {"failed", "blocked", "skipped"}
+            and failure_type in {"missing_dependencies", "unsupported_tool"}
+        )
+
+        if should_emit_running:
+            events.append(
+                {
+                    "event": "toolRunning",
+                    "data": {
+                        "type": "toolRunning",
+                        "traceId": trace_id,
+                        "mode": mode,
+                        "timestamp": _agent_event_timestamp(),
+                        "toolName": tool_name,
+                        "callId": call_id,
+                        "status": "running",
+                    },
+                }
+            )
+
+        result_kind = "intermediate"
+        if result_status == "succeeded":
+            result_kind = "final"
+        elif result_status == "clarify_required":
+            result_kind = "clarify_required"
+        elif failure_type == "empty_result":
+            result_kind = "empty"
+        elif result_status in {"failed", "blocked", "skipped"}:
+            result_kind = "failed"
+
+        warnings = result.get("warnings")
+        warning_message = warnings[0] if isinstance(warnings, list) and warnings else None
+        message = str(
+            failure.get("user_safe_message")
+            or failure.get("message")
+            or warning_message
+            or ""
+        ).strip()
+        events.append(
+            {
+                "event": "toolResult",
+                "data": {
+                    "type": "toolResult",
+                    "traceId": trace_id,
+                    "mode": mode,
+                    "timestamp": _agent_event_timestamp(),
+                    "toolName": tool_name,
+                    "callId": call_id,
+                    "status": result_status,
+                    "resultKind": result_kind,
+                    "message": message or None,
+                },
+            }
+        )
+
+    fallback_scope: str | None = None
+    fallback_reason: str | None = None
+    failed_tool = observation.get("failed_tool")
+    if bool(observation.get("planner_runtime_fallback", False)):
+        fallback_scope = "planner"
+        fallback_reason = str(
+            observation.get("planner_runtime_fallback_reason")
+            or planner.get("planner_fallback_reason")
+            or "planner_fallback"
+        ).strip()
+    elif bool(observation.get("tool_fallback", False)):
+        fallback_scope = "tool"
+        fallback_reason = str(observation.get("tool_fallback_reason") or "tool_fallback").strip()
+    elif str(planner.get("decision_result") or "").strip() == "legacy_fallback":
+        fallback_scope = "legacy"
+        fallback_reason = str(
+            planner.get("planner_fallback_reason")
+            or planner.get("decision_result")
+            or "legacy_fallback"
+        ).strip()
+
+    if fallback_scope and fallback_reason:
+        fallback_message = ""
+        if fallback_scope == "tool":
+            for result in tool_results_by_call.values():
+                if str(result.get("tool_name") or "").strip() == str(failed_tool or "").strip():
+                    failure = dict(result.get("failure") or {})
+                    fallback_message = str(failure.get("user_safe_message") or failure.get("message") or "").strip()
+                    break
+        events.append(
+            {
+                "event": "fallback",
+                "data": {
+                    "type": "fallback",
+                    "traceId": trace_id,
+                    "mode": mode,
+                    "timestamp": _agent_event_timestamp(),
+                    "fallbackScope": fallback_scope,
+                    "reasonCode": fallback_reason,
+                    "failedTool": str(failed_tool).strip() if failed_tool else None,
+                    "continues": True,
+                    "message": fallback_message or None,
+                },
+            }
+        )
+
+    return events
+
+
 def _build_streaming_chat_response(
     payload: KernelChatRequest,
     runner: Callable[[KernelChatRequest, Callable[[str], None] | None], KernelChatResponse],
@@ -894,6 +1070,110 @@ def _build_streaming_chat_response(
                         "data": {
                             "type": "messageEnd",
                             "traceId": trace_id,
+                            "mode": payload.mode,
+                        },
+                    }
+                )
+            except FileNotFoundError as exc:
+                queue.put(
+                    {
+                        "event": "error",
+                        "data": {
+                            "type": "error",
+                            "traceId": trace_id,
+                            "code": "KERNEL_BAD_RESPONSE",
+                            "message": str(exc),
+                        },
+                    }
+                )
+            except Exception as exc:
+                queue.put(
+                    {
+                        "event": "error",
+                        "data": {
+                            "type": "error",
+                            "traceId": trace_id,
+                            "code": "KERNEL_UNKNOWN",
+                            "message": str(exc),
+                        },
+                    }
+                )
+            finally:
+                queue.put({"event": "done", "data": {}})
+
+        thread = threading.Thread(target=worker, daemon=True)
+        thread.start()
+
+        stream_completed = False
+        while not stream_completed:
+            try:
+                event = queue.get(timeout=15)
+            except Empty:
+                yield ": keep-alive\n\n"
+                continue
+
+            name = str(event.get("event"))
+            data = event.get("data", {})
+            if name == "done":
+                stream_completed = True
+                continue
+            if name == "error":
+                stream_completed = True
+            yield send_sse(name, data if isinstance(data, dict) else {})
+
+    return StreamingResponse(event_stream(), media_type="text/event-stream")
+
+
+def _build_planner_streaming_chat_response(payload: KernelChatRequest) -> StreamingResponse:
+    trace_id = payload.traceId or f"trace_{uuid4().hex}"
+
+    def event_stream() -> Iterator[str]:
+        queue: Queue[dict[str, Any]] = Queue()
+
+        def send_sse(event_name: str, data: dict[str, Any]) -> str:
+            return f"event: {event_name}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
+
+        def worker() -> None:
+            try:
+                result = run_planner_runtime(
+                    payload,
+                    fact_qa_executor=_planner_runtime_route_executor,
+                    compat_executor=_planner_runtime_route_executor,
+                    legacy_executor=_planner_runtime_route_executor,
+                )
+                response = result["response"]
+                observation = result.get("observation")
+                response_trace_id = getattr(response, "traceId", None) or trace_id
+                for agent_event in _build_agent_execution_stream_events(response_trace_id, payload.mode, observation):
+                    queue.put(agent_event)
+                queue.put(
+                    {
+                        "event": "sources",
+                        "data": {
+                            "type": "sources",
+                            "traceId": response_trace_id,
+                            "mode": payload.mode,
+                            "sources": [_serialize_source_item(item) for item in response.sources],
+                        },
+                    }
+                )
+                queue.put(
+                    {
+                        "event": "message",
+                        "data": {
+                            "type": "message",
+                            "traceId": response_trace_id,
+                            "mode": payload.mode,
+                            "content": response.answer,
+                        },
+                    }
+                )
+                queue.put(
+                    {
+                        "event": "messageEnd",
+                        "data": {
+                            "type": "messageEnd",
+                            "traceId": response_trace_id,
                             "mode": payload.mode,
                         },
                     }
@@ -2822,4 +3102,4 @@ def planner_qa(payload: KernelChatRequest) -> KernelChatResponse:
 
 @app.post("/planner/qa/stream")
 def planner_qa_stream(payload: KernelChatRequest) -> StreamingResponse:
-    return _build_streaming_chat_response(payload, _run_planner_shell_once)
+    return _build_planner_streaming_chat_response(payload)

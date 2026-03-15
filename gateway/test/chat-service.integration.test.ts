@@ -80,6 +80,162 @@ test('local mode emits sources -> message stream -> messageEnd closure', async (
   assert.equal(emitted.at(-1)?.type, 'messageEnd');
 });
 
+test('local mode forwards agent execution events before standard chat closure', async () => {
+  const emitted: OutboundEvent[] = [];
+  const service = createChatService({
+    now: () => 100,
+    randomUUID: () => 'trace-agent',
+    sleep: async () => undefined,
+    searchWeb: async () => ({
+      sources: [],
+      providerUsed: 'mock',
+      isMockFallback: false
+    }),
+    requestKernelAnswer: async () => {
+      throw new Error('should not fallback when stream closes');
+    },
+    streamKernelAnswer: async (_payload, onEvent) => {
+      onEvent({
+        type: 'planning',
+        traceId: 'trace-agent',
+        mode: 'local',
+        timestamp: '2026-03-16T10:00:00Z',
+        phase: 'planning',
+        decisionResult: 'local_execute',
+        selectedPath: 'fact_qa'
+      });
+      onEvent({
+        type: 'toolSelection',
+        traceId: 'trace-agent',
+        mode: 'local',
+        timestamp: '2026-03-16T10:00:01Z',
+        toolName: 'fact_qa',
+        callId: 'tool-1',
+        status: 'selected'
+      });
+      onEvent({
+        type: 'toolRunning',
+        traceId: 'trace-agent',
+        mode: 'local',
+        timestamp: '2026-03-16T10:00:02Z',
+        toolName: 'fact_qa',
+        callId: 'tool-1',
+        status: 'running'
+      });
+      onEvent({
+        type: 'toolResult',
+        traceId: 'trace-agent',
+        mode: 'local',
+        timestamp: '2026-03-16T10:00:03Z',
+        toolName: 'fact_qa',
+        callId: 'tool-1',
+        status: 'succeeded',
+        resultKind: 'final',
+        message: 'completed'
+      });
+      onEvent({
+        type: 'sources',
+        traceId: 'trace-agent',
+        mode: 'local',
+        sources: [
+          {
+            source_type: 'local',
+            source_id: 's-local-1',
+            title: 'local source',
+            snippet: 'local evidence',
+            locator: 'kb://1',
+            score: 0.9
+          }
+        ]
+      });
+      onEvent({
+        type: 'message',
+        traceId: 'trace-agent',
+        mode: 'local',
+        content: 'Answer with citation [1].'
+      });
+      onEvent({
+        type: 'messageEnd',
+        traceId: 'trace-agent',
+        mode: 'local',
+        usage: { latencyMs: 1 }
+      });
+    }
+  });
+
+  await service(eventPayload('local'), (event) => emitted.push(event));
+
+  assert.deepEqual(emitted.map((event) => event.type), [
+    'planning',
+    'toolSelection',
+    'toolRunning',
+    'toolResult',
+    'sources',
+    'message',
+    'messageEnd'
+  ]);
+});
+
+test('local mode preserves fallback events and still closes with standard message events', async () => {
+  const emitted: OutboundEvent[] = [];
+  const service = createChatService({
+    now: () => 100,
+    randomUUID: () => 'trace-fallback',
+    sleep: async () => undefined,
+    searchWeb: async () => ({
+      sources: [],
+      providerUsed: 'mock',
+      isMockFallback: false
+    }),
+    requestKernelAnswer: async () => {
+      throw new Error('should not fallback when stream closes');
+    },
+    streamKernelAnswer: async (_payload, onEvent) => {
+      onEvent({
+        type: 'planning',
+        traceId: 'trace-fallback',
+        mode: 'local',
+        timestamp: '2026-03-16T10:00:00Z',
+        phase: 'planning',
+        decisionResult: 'legacy_fallback',
+        selectedPath: 'legacy_fallback'
+      });
+      onEvent({
+        type: 'fallback',
+        traceId: 'trace-fallback',
+        mode: 'local',
+        timestamp: '2026-03-16T10:00:01Z',
+        fallbackScope: 'legacy',
+        reasonCode: 'legacy_fallback',
+        continues: true,
+        message: 'compatibility fallback'
+      });
+      onEvent({
+        type: 'sources',
+        traceId: 'trace-fallback',
+        mode: 'local',
+        sources: []
+      });
+      onEvent({
+        type: 'message',
+        traceId: 'trace-fallback',
+        mode: 'local',
+        content: 'Fallback answer'
+      });
+      onEvent({
+        type: 'messageEnd',
+        traceId: 'trace-fallback',
+        mode: 'local',
+        usage: { latencyMs: 1 }
+      });
+    }
+  });
+
+  await service(eventPayload('local'), (event) => emitted.push(event));
+
+  assert.deepEqual(emitted.map((event) => event.type), ['planning', 'fallback', 'sources', 'message', 'messageEnd']);
+});
+
 test('web mode includes provider metadata and citation closure', async () => {
   const emitted: OutboundEvent[] = [];
   const service = createChatService({
@@ -336,7 +492,7 @@ test('failed graph task emits taskError before taskResult', async () => {
   assert.ok(taskErrorIndex < taskResultIndex);
 });
 
-test('task events and chat events can be consumed in parallel without cross-domain pollution', async () => {
+test('task events and agent events can coexist in parallel without cross-domain pollution', async () => {
   const emitted: OutboundEvent[] = [];
   let taskPoll = 0;
   const service = createChatService({
@@ -358,6 +514,44 @@ test('task events and chat events can be consumed in parallel without cross-doma
       ]
     }),
     streamKernelAnswer: async (_payload, onEvent) => {
+      onEvent({
+        type: 'planning',
+        traceId: 'trace-chat-1',
+        mode: 'local',
+        timestamp: '2026-03-16T10:00:00Z',
+        phase: 'planning',
+        decisionResult: 'local_execute',
+        selectedToolsOrSkills: ['fact_qa']
+      });
+      onEvent({
+        type: 'toolSelection',
+        traceId: 'trace-chat-1',
+        mode: 'local',
+        timestamp: '2026-03-16T10:00:01Z',
+        toolName: 'fact_qa',
+        callId: 'tool-1',
+        status: 'selected'
+      });
+      onEvent({
+        type: 'toolRunning',
+        traceId: 'trace-chat-1',
+        mode: 'local',
+        timestamp: '2026-03-16T10:00:02Z',
+        toolName: 'fact_qa',
+        callId: 'tool-1',
+        status: 'running'
+      });
+      onEvent({
+        type: 'toolResult',
+        traceId: 'trace-chat-1',
+        mode: 'local',
+        timestamp: '2026-03-16T10:00:03Z',
+        toolName: 'fact_qa',
+        callId: 'tool-1',
+        status: 'succeeded',
+        resultKind: 'final',
+        message: 'completed'
+      });
       onEvent({
         type: 'sources',
         traceId: 'trace-chat-1',
@@ -454,8 +648,16 @@ test('task events and chat events can be consumed in parallel without cross-doma
     service(eventPayload('local', 'parallel'), (event) => emitted.push(event))
   ]);
 
-  const chatEvents = emitted.filter(
-    (event) => event.type === 'message' || event.type === 'sources' || event.type === 'messageEnd' || event.type === 'error'
+  const traceScopedEvents = emitted.filter(
+    (event) =>
+      event.type === 'planning' ||
+      event.type === 'toolSelection' ||
+      event.type === 'toolRunning' ||
+      event.type === 'toolResult' ||
+      event.type === 'message' ||
+      event.type === 'sources' ||
+      event.type === 'messageEnd' ||
+      event.type === 'error'
   );
   const taskEvents = emitted.filter(
     (event) =>
@@ -465,13 +667,19 @@ test('task events and chat events can be consumed in parallel without cross-doma
       event.type === 'taskError'
   );
 
-  assert.ok(chatEvents.length > 0);
+  assert.deepEqual(
+    traceScopedEvents.map((event) => event.type).filter((type) => type !== 'sources' && type !== 'message' && type !== 'messageEnd'),
+    ['planning', 'toolSelection', 'toolRunning', 'toolResult']
+  );
+  assert.ok(traceScopedEvents.some((event) => event.type === 'sources'));
+  assert.ok(traceScopedEvents.some((event) => event.type === 'message'));
+  assert.ok(traceScopedEvents.some((event) => event.type === 'messageEnd'));
   assert.ok(taskEvents.length > 0);
   for (const event of taskEvents) {
     assert.ok('taskId' in event);
     assert.equal('traceId' in event, false);
   }
-  for (const event of chatEvents) {
+  for (const event of traceScopedEvents) {
     assert.ok('traceId' in event);
     assert.equal('taskId' in event, false);
   }

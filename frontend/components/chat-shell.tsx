@@ -26,6 +26,56 @@ import { mapConnectionStatus, mapRuntimeLevel } from '../lib/status-mapper';
 import { GraphSubgraphPanel } from './graph-subgraph';
 
 type WsPayload =
+  | {
+      type: 'planning';
+      traceId: string;
+      mode: ChatMode;
+      timestamp: string;
+      phase: 'planning';
+      decisionResult?: string;
+      selectedPath?: string;
+      selectedToolsOrSkills?: string[];
+    }
+  | {
+      type: 'toolSelection';
+      traceId: string;
+      mode: ChatMode;
+      timestamp: string;
+      toolName: string;
+      callId: string;
+      status: 'selected';
+    }
+  | {
+      type: 'toolRunning';
+      traceId: string;
+      mode: ChatMode;
+      timestamp: string;
+      toolName: string;
+      callId: string;
+      status: 'running';
+    }
+  | {
+      type: 'toolResult';
+      traceId: string;
+      mode: ChatMode;
+      timestamp: string;
+      toolName: string;
+      callId: string;
+      status: 'succeeded' | 'failed' | 'clarify_required' | 'blocked' | 'skipped';
+      resultKind?: 'final' | 'intermediate' | 'empty' | 'failed' | 'clarify_required';
+      message?: string;
+    }
+  | {
+      type: 'fallback';
+      traceId: string;
+      mode: ChatMode;
+      timestamp: string;
+      fallbackScope: 'planner' | 'tool' | 'legacy';
+      reasonCode: string;
+      failedTool?: string;
+      continues: boolean;
+      message?: string;
+    }
   | { type: 'message'; traceId: string; mode: ChatMode; content: string }
   | { type: 'sources'; traceId: string; mode: ChatMode; sources: SourceItem[] }
   | { type: 'messageEnd'; traceId: string; mode: ChatMode; usage?: { latencyMs: number } }
