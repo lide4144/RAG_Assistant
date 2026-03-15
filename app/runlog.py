@@ -269,11 +269,32 @@ def validate_trace_schema(trace: dict[str, Any]) -> tuple[bool, list[str]]:
     standalone_query = trace.get("standalone_query")
     if standalone_query is not None and not isinstance(standalone_query, str):
         errors.append("standalone_query must be string or null")
-    for key in ("is_new_topic", "should_clear_pending_clarify", "planner_used", "planner_fallback", "truncated"):
+    for key in (
+        "is_new_topic",
+        "should_clear_pending_clarify",
+        "planner_used",
+        "planner_fallback",
+        "truncated",
+        "planner_runtime_used",
+        "planner_runtime_fallback",
+        "planner_runtime_passthrough",
+        "tool_fallback",
+    ):
         value = trace.get(key)
         if value is not None and not isinstance(value, bool):
             errors.append(f"{key} must be bool or null")
-    for key in ("relation_to_previous", "planner_source", "planner_fallback_reason", "primary_capability", "strictness"):
+    for key in (
+        "relation_to_previous",
+        "planner_source",
+        "planner_fallback_reason",
+        "primary_capability",
+        "strictness",
+        "planner_runtime_backend",
+        "planner_runtime_fallback_reason",
+        "runtime_contract_version",
+        "tool_fallback_reason",
+        "failed_tool",
+    ):
         value = trace.get(key)
         if value is not None and not isinstance(value, str):
             errors.append(f"{key} must be string or null")
@@ -289,6 +310,27 @@ def validate_trace_schema(trace: dict[str, Any]) -> tuple[bool, list[str]]:
     short_circuit = trace.get("short_circuit")
     if short_circuit is not None and not isinstance(short_circuit, dict):
         errors.append("short_circuit must be object or null")
+    for key in ("runtime_stable_fields", "runtime_envelope_fields", "tool_calls", "tool_results"):
+        value = trace.get(key)
+        if value is not None and not isinstance(value, list):
+            errors.append(f"{key} must be list or null")
+    tool_results = trace.get("tool_results")
+    if isinstance(tool_results, list):
+        for i, row in enumerate(tool_results):
+            if not isinstance(row, dict):
+                errors.append(f"tool_results[{i}] must be object")
+                continue
+            for key in ("tool_call_id", "tool_name", "status"):
+                value = row.get(key)
+                if value is not None and not isinstance(value, str):
+                    errors.append(f"tool_results[{i}].{key} must be string or null")
+            for key in ("result", "error", "metadata"):
+                value = row.get(key)
+                if value is not None and not isinstance(value, dict):
+                    errors.append(f"tool_results[{i}].{key} must be object or null")
+            produces = row.get("produces")
+            if produces is not None and not isinstance(produces, list):
+                errors.append(f"tool_results[{i}].produces must be list or null")
     intent_type = trace.get("intent_type")
     if intent_type is not None and not isinstance(intent_type, str):
         errors.append("intent_type must be string or null")

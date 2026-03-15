@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 import unittest
 from unittest.mock import patch
@@ -23,6 +24,8 @@ from app.kernel_api import (
     TaskStatusResponse,
     get_latest_import_result,
     _build_sources_from_qa_report,
+    _derive_runtime_tool_fallback,
+    _planner_runtime_route_executor,
     get_task_status,
     _run_qa_once,
     _run_planner_shell_once,
@@ -184,6 +187,56 @@ class KernelApiContractTests(unittest.TestCase):
 
         self.assertTrue((response.media_type or "").startswith("text/event-stream"))
         self.assertIsNotNone(response.body_iterator)
+
+    def test_runtime_tool_fallback_derives_from_short_circuit_trace(self) -> None:
+        tool_fallback, reason, failed_tool = _derive_runtime_tool_fallback(
+            {
+                "short_circuit": {
+                    "triggered": True,
+                    "reason": "catalog_lookup_empty",
+                    "step": "catalog_lookup",
+                }
+            },
+            {},
+        )
+
+        self.assertTrue(tool_fallback)
+        self.assertEqual(reason, "catalog_lookup_empty")
+        self.assertEqual(failed_tool, "catalog_lookup")
+
+    def test_runtime_observation_merges_into_run_artifacts(self) -> None:
+        run_id = "kernel_api_runtime_merge"
+        response = KernelChatResponse(traceId="trace-merge", answer="merged [1]", sources=[])
+        tool_calls = [{"id": "tool-1", "tool_name": "fact_qa", "produces": [], "status": "dispatched"}]
+
+        with tempfile.TemporaryDirectory() as tmp:
+            run_dir = Path(tmp) / run_id
+            run_dir.mkdir(parents=True, exist_ok=True)
+            for filename in ("run_trace.json", "qa_report.json"):
+                (run_dir / filename).write_text(json.dumps({"answer": "ok"}, ensure_ascii=False), encoding="utf-8")
+
+            with (
+                patch("app.kernel_api.RUNS_DIR", Path(tmp)),
+                patch("app.kernel_api._run_qa_pipeline", return_value=(response, run_id)),
+            ):
+                _ = _planner_runtime_route_executor(
+                    KernelChatRequest(sessionId="s1", mode="local", query="q", history=[], traceId="trace-merge"),
+                    selected_path="fact_qa",
+                    runtime_fallback=False,
+                    runtime_fallback_reason=None,
+                    planner_result=None,
+                    tool_calls=tool_calls,
+                )
+
+            trace = json.loads((run_dir / "run_trace.json").read_text(encoding="utf-8"))
+            report = json.loads((run_dir / "qa_report.json").read_text(encoding="utf-8"))
+
+        for payload in (trace, report):
+            self.assertEqual(payload["runtime_contract_version"], "agent-first-v1")
+            self.assertEqual(payload["tool_calls"][0]["tool_name"], "fact_qa")
+            self.assertFalse(payload["tool_fallback"])
+            self.assertEqual(payload["tool_results"][0]["status"], "succeeded")
+            self.assertEqual(payload["tool_results"][0]["metadata"]["trace_id"], "trace-merge")
 
     def test_graph_build_task_start_and_status_contract(self) -> None:
         def _fake_run_graph_build(

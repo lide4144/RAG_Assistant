@@ -106,6 +106,46 @@ test('requestKernelAnswer keeps hybrid mode on legacy /qa during phase one', asy
   assert.deepEqual(seen, ['/qa']);
 });
 
+test('requestKernelAnswer keeps planner runtime errors inside the runtime unless compatibility fallback is allowed', async () => {
+  const seen: string[] = [];
+
+  axios.Axios.prototype.request = async function request(config) {
+    const normalized = typeof config === 'string' ? { url: config } : config;
+    const url = String(normalized.url ?? '');
+    seen.push(url);
+    if (url === '/planner/qa') {
+      throw new AxiosError(
+        'runtime boom',
+        undefined,
+        normalized,
+        undefined,
+        {
+          status: 500,
+          statusText: 'Internal Server Error',
+          headers: {},
+          config: normalized,
+          data: { detail: 'runtime boom' },
+        } as never
+      );
+    }
+    throw new Error(`unexpected url: ${url}`);
+  };
+
+  await assert.rejects(
+    () =>
+      requestKernelAnswer({
+        sessionId: 's1',
+        mode: 'local',
+        query: 'q1',
+        history: [],
+        traceId: 'trace-1',
+      }),
+    /Kernel returned 500/
+  );
+
+  assert.deepEqual(seen, ['/planner/qa']);
+});
+
 test('streamKernelAnswer falls back to legacy /qa/stream and preserves event contract', async () => {
   const seen: string[] = [];
   const events: Array<{ type: string }> = [];

@@ -44,6 +44,20 @@ class CapabilityPlannerTests(unittest.TestCase):
         self.assertEqual(result.strictness, "strict_fact")
         self.assertEqual(result.action_plan[-1]["action"], "fact_qa")
 
+    def test_rule_planner_emits_paper_assistant_tool_for_research_guidance(self) -> None:
+        result = build_rule_based_plan(
+            user_input="帮我比较这些论文并给出下一步研究建议",
+            standalone_query="帮我比较这些论文并给出下一步研究建议",
+            dialog_state="normal",
+            history_topic_anchors=[],
+            pending_clarify=None,
+            max_steps=3,
+            catalog_limit=20,
+        )
+        self.assertEqual(result.primary_capability, "paper_assistant")
+        self.assertEqual(result.strictness, "summary")
+        self.assertEqual(result.action_plan[-1]["action"], "paper_assistant")
+
     def test_catalog_lookup_truncates_and_reports_counts(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             papers_path = Path(tmp) / "papers.json"
