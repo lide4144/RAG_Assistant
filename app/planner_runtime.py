@@ -1,12 +1,23 @@
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass
+from dataclasses import asdict
 from typing import Any, Callable, Literal, Protocol, TypedDict
 
+from app.agent_tools import (
+    ToolRegistryEntry,
+    build_tool_call_envelope,
+    build_tool_failure,
+    build_tool_result_envelope,
+    serialize_tool_registry_entry,
+    validate_tool_call_envelope,
+    validate_tool_registry_entry,
+)
 from app.capability_planner import (
     PlannerResult,
     build_planner_fallback,
     build_rule_based_plan,
+    compose_catalog_answer,
+    execute_catalog_lookup,
     normalize_planner_source,
     paper_assistant_clarification,
 )
@@ -78,59 +89,100 @@ class PlannerRuntimeState(TypedDict, total=False):
     planner_runtime_backend: str
     planner_runtime_passthrough: bool
 
-
-@dataclass(frozen=True)
-class RuntimeToolSpec:
-    name: str
-    kind: Literal["tool", "skill"]
-    route: PlannerRuntimeRoute
-    passthrough: bool
-    capability_tags: tuple[str, ...] = ()
-    knowledge_scope: Literal["local", "web", "hybrid"] = "local"
-    supports_research_mode: bool = False
-    prerequisites: tuple[str, ...] = ()
-    produces: tuple[str, ...] = ()
-
-
-RUNTIME_TOOL_REGISTRY: dict[str, RuntimeToolSpec] = {
-    "fact_qa": RuntimeToolSpec(
-        name="fact_qa",
+RUNTIME_TOOL_REGISTRY: dict[str, ToolRegistryEntry] = {
+    "fact_qa": ToolRegistryEntry(
+        tool_name="fact_qa",
+        capability_family="qa",
+        version="v1",
+        planner_visible=True,
         kind="tool",
         route="fact_qa",
         passthrough=False,
+        streaming_mode="text_stream",
+        evidence_policy="citation_required",
+        input_schema={"query": "string"},
+        result_schema={"answer": "string", "sources": "citation[]"},
+        failure_types=("invalid_input", "insufficient_evidence", "timeout", "execution_error"),
         capability_tags=("fact_qa", "strict_fact"),
     ),
-    "catalog_lookup": RuntimeToolSpec(
-        name="catalog_lookup",
+    "catalog_lookup": ToolRegistryEntry(
+        tool_name="catalog_lookup",
+        capability_family="retrieval_meta",
+        version="v1",
+        planner_visible=True,
         kind="tool",
         route="catalog",
         passthrough=True,
+        streaming_mode="final_only",
+        evidence_policy="citation_forbidden",
+        input_schema={"query": "string", "limit": "integer"},
+        result_schema={"paper_set": "artifact", "sources": "metadata[]"},
+        failure_types=("invalid_input", "empty_result", "execution_error"),
         capability_tags=("catalog", "local_retrieval"),
         produces=("paper_set",),
     ),
-    "cross_doc_summary": RuntimeToolSpec(
-        name="cross_doc_summary",
+    "cross_doc_summary": ToolRegistryEntry(
+        tool_name="cross_doc_summary",
+        capability_family="summary",
+        version="v1",
+        planner_visible=True,
         kind="tool",
         route="summary",
         passthrough=True,
+        streaming_mode="text_stream",
+        evidence_policy="citation_optional",
+        input_schema={"query": "string", "paper_set": "artifact?"},
+        result_schema={"answer": "string", "sources": "citation[]"},
+        failure_types=("invalid_input", "missing_dependencies", "timeout", "execution_error"),
         capability_tags=("summary", "comparison"),
         prerequisites=("paper_set_optional",),
     ),
-    "control": RuntimeToolSpec(
-        name="control",
+    "control": ToolRegistryEntry(
+        tool_name="control",
+        capability_family="control",
+        version="v1",
+        planner_visible=True,
         kind="tool",
         route="control",
         passthrough=True,
+        streaming_mode="final_only",
+        evidence_policy="citation_forbidden",
+        input_schema={"query": "string"},
+        result_schema={"instruction": "string", "sources": "metadata[]"},
+        failure_types=("invalid_input", "execution_error"),
         capability_tags=("control", "formatting"),
     ),
-    "paper_assistant": RuntimeToolSpec(
-        name="paper_assistant",
+    "paper_assistant": ToolRegistryEntry(
+        tool_name="paper_assistant",
+        capability_family="research_assistant",
+        version="v1",
+        planner_visible=True,
         kind="skill",
         route="research_assistant",
         passthrough=True,
+        streaming_mode="text_stream",
+        evidence_policy="citation_optional",
+        input_schema={"query": "string", "paper_set": "artifact?"},
+        result_schema={"answer": "string", "sources": "citation|explanatory[]"},
+        failure_types=("precondition_failed", "missing_dependencies", "timeout", "execution_error"),
         capability_tags=("research_assistant", "summary", "guidance"),
         supports_research_mode=True,
         prerequisites=("research_topic_or_paper_scope",),
+    ),
+    "title_term_localization": ToolRegistryEntry(
+        tool_name="title_term_localization",
+        capability_family="localization",
+        version="v1",
+        planner_visible=False,
+        kind="tool",
+        route="control",
+        passthrough=True,
+        streaming_mode="final_only",
+        evidence_policy="citation_forbidden",
+        input_schema={"text": "string"},
+        result_schema={"localized_text": "string", "sources": "explanatory[]"},
+        failure_types=("invalid_input", "execution_error"),
+        capability_tags=("localization", "title_translation"),
     ),
 }
 RUNTIME_DELEGATE_CAPABILITIES: tuple[dict[str, Any], ...] = (
@@ -191,12 +243,17 @@ def _serialize_planner_result(result: PlannerResult) -> dict[str, Any]:
 
 
 def _default_runtime_contract() -> dict[str, Any]:
+    registry_errors: list[str] = []
+    for entry in RUNTIME_TOOL_REGISTRY.values():
+        registry_errors.extend(validate_tool_registry_entry(entry))
     return {
         "version": RUNTIME_CONTRACT_VERSION,
         "stable_fields": list(RUNTIME_STABLE_FIELDS),
         "envelope_fields": list(RUNTIME_ENVELOPE_FIELDS),
         "tool_registry": sorted(RUNTIME_TOOL_REGISTRY),
         "capability_registry": _serialize_capability_registry(),
+        "tool_registry_entries": [serialize_tool_registry_entry(entry) for entry in sorted(RUNTIME_TOOL_REGISTRY.values(), key=lambda row: row.tool_name)],
+        "registry_validation_errors": registry_errors,
         "planner_input_segments": ["request", "conversation_context", "capability_registry", "policy_flags"],
     }
 
@@ -204,16 +261,7 @@ def _default_runtime_contract() -> dict[str, Any]:
 def _serialize_capability_registry() -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
     for spec in RUNTIME_TOOL_REGISTRY.values():
-        rows.append(
-            {
-                "name": spec.name,
-                "kind": spec.kind,
-                "capability_tags": list(spec.capability_tags),
-                "knowledge_scope": spec.knowledge_scope,
-                "supports_research_mode": spec.supports_research_mode,
-                "prerequisites": list(spec.prerequisites),
-            }
-        )
+        rows.append(serialize_tool_registry_entry(spec))
     rows.extend(dict(item) for item in RUNTIME_DELEGATE_CAPABILITIES)
     rows.sort(key=lambda row: str(row.get("name") or ""))
     return rows
@@ -253,38 +301,155 @@ def _build_planner_input_context(request: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _tool_error(code: str, message: str, *, details: dict[str, Any] | None = None) -> dict[str, Any]:
-    error = {"code": code, "message": message}
-    if details:
-        error["details"] = dict(details)
-    return error
-
-
-def build_tool_result_envelope(
-    tool_call: dict[str, Any],
-    *,
-    status: str,
-    result: dict[str, Any] | None = None,
-    error: dict[str, Any] | None = None,
-    metadata: dict[str, Any] | None = None,
-) -> dict[str, Any]:
-    return {
-        "tool_call_id": tool_call.get("id"),
-        "tool_name": tool_call.get("tool_name"),
-        "status": status,
-        "result": dict(result or {}),
-        "error": dict(error or {}),
-        "metadata": dict(metadata or {}),
-        "produces": list(tool_call.get("produces") or []),
-    }
-
-
 def _response_metadata(response: Any) -> dict[str, Any]:
     sources = getattr(response, "sources", None)
     return {
         "trace_id": getattr(response, "traceId", None),
         "source_count": len(sources) if isinstance(sources, list) else None,
     }
+
+
+def _serialize_response_sources(response: Any) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    for item in list(getattr(response, "sources", None) or []):
+        rows.append(
+            {
+                "source_type": getattr(item, "source_type", "local"),
+                "source_id": getattr(item, "source_id", ""),
+                "title": getattr(item, "title", ""),
+                "snippet": getattr(item, "snippet", ""),
+                "locator": getattr(item, "locator", ""),
+                "score": float(getattr(item, "score", 0.0) or 0.0),
+                "provenance_type": getattr(item, "provenance_type", "citation"),
+                "citation_indexable": bool(getattr(item, "provenance_type", "citation") == "citation"),
+            }
+        )
+    return rows
+
+
+def _tool_specific_sources(tool_name: str, response: Any) -> list[dict[str, Any]]:
+    if tool_name == "paper_assistant":
+        return [
+            {
+                "source_type": "local",
+                "source_id": "paper_assistant_guidance",
+                "title": "Research Assistant Guidance",
+                "snippet": str(getattr(response, "answer", "") or "")[:120].strip(),
+                "locator": "assistant",
+                "score": 1.0,
+                "provenance_type": "explanatory",
+                "citation_indexable": False,
+            }
+        ]
+    if tool_name == "catalog_lookup":
+        return [
+            {
+                "source_type": "local",
+                "source_id": "catalog_lookup",
+                "title": "Paper Catalog",
+                "snippet": "catalog metadata result",
+                "locator": "catalog",
+                "score": 1.0,
+                "provenance_type": "metadata",
+                "citation_indexable": False,
+            }
+        ]
+    if tool_name == "control":
+        return [
+            {
+                "source_type": "local",
+                "source_id": "control_intent",
+                "title": "Control Intent",
+                "snippet": "structured control result",
+                "locator": "runtime",
+                "score": 1.0,
+                "provenance_type": "metadata",
+                "citation_indexable": False,
+            }
+        ]
+    return []
+
+
+def _selected_path_for_tool(tool_call: dict[str, Any]) -> str:
+    route = str(tool_call.get("route") or "legacy_fallback")
+    return route if not bool(tool_call.get("passthrough")) else f"{route}_passthrough"
+
+
+def _catalog_lookup_response(tool_call: dict[str, Any], catalog_result: dict[str, Any]) -> Any:
+    from app.kernel_api import KernelChatResponse
+
+    call_id = str(tool_call.get("call_id") or tool_call.get("id") or "tool")
+    answer = compose_catalog_answer(catalog_result)
+    return KernelChatResponse(traceId=f"trace_{call_id}", answer=answer, sources=[])
+
+
+def _catalog_lookup_result(tool_call: dict[str, Any]) -> tuple[dict[str, Any], Any, dict[str, Any], dict[str, Any]]:
+    params = dict(((tool_call.get("arguments") or {}).get("params")) or {})
+    limit_raw = params.get("limit")
+    try:
+        limit = max(1, int(limit_raw))
+    except (TypeError, ValueError):
+        limit = 20
+    catalog_result = execute_catalog_lookup(
+        query=str(tool_call.get("query") or ""),
+        max_papers=limit,
+    )
+    response = _catalog_lookup_response(tool_call, catalog_result)
+    selected_path = _selected_path_for_tool(tool_call)
+    observability = {
+        "selected_path": selected_path,
+        "matched_count": int(catalog_result.get("matched_count", 0) or 0),
+        "selected_count": int(catalog_result.get("selected_count", 0) or 0),
+        "truncated": bool(catalog_result.get("truncated", False)),
+    }
+    sources = _tool_specific_sources("catalog_lookup", response)
+    if bool(catalog_result.get("short_circuit")):
+        result = build_tool_result_envelope(
+            tool_call,
+            status="failed",
+            output={
+                "matched_count": int(catalog_result.get("matched_count", 0) or 0),
+                "selected_count": int(catalog_result.get("selected_count", 0) or 0),
+            },
+            artifacts=[{"artifact_name": "paper_set", "available": False}],
+            sources=sources,
+            observability=observability,
+            failure=build_tool_failure(
+                "empty_result",
+                message="catalog lookup returned no papers",
+                user_safe_message="未找到符合条件的论文，因此未继续执行后续步骤。",
+                stop_plan=True,
+            ),
+        )
+    else:
+        result = build_tool_result_envelope(
+            tool_call,
+            status="succeeded",
+            output={
+                "selected_path": selected_path,
+                "matched_count": int(catalog_result.get("matched_count", 0) or 0),
+                "selected_count": int(catalog_result.get("selected_count", 0) or 0),
+            },
+            artifacts=[{"artifact_name": "paper_set", "available": True}],
+            sources=sources,
+            observability=observability,
+        )
+    trace_row = {
+        "step": "planner_runtime_tool_execution",
+        "action": "catalog_lookup",
+        "call_id": tool_call.get("call_id") or tool_call.get("id"),
+        "state": str(catalog_result.get("state", "ready")),
+        "matched_count": int(catalog_result.get("matched_count", 0) or 0),
+        "selected_count": int(catalog_result.get("selected_count", 0) or 0),
+        "truncated": bool(catalog_result.get("truncated", False)),
+        "tool_status": result["status"],
+        "failure_type": result["failure"].get("failure_type"),
+        "streaming_mode": tool_call.get("streaming_mode"),
+        "evidence_policy": tool_call.get("evidence_policy"),
+        "produced_artifacts": ["paper_set"] if not bool(catalog_result.get("short_circuit")) else [],
+        "short_circuit_reason": catalog_result.get("short_circuit_reason"),
+    }
+    return result, response, {"paper_set": list(catalog_result.get("paper_set") or [])}, trace_row
 
 
 def _contains_any(text: str, terms: tuple[str, ...]) -> bool:
@@ -366,26 +531,31 @@ def _normalize_tool_call(raw: dict[str, Any], *, index: int) -> dict[str, Any] |
     spec = RUNTIME_TOOL_REGISTRY.get(action)
     if spec is None:
         return None
-    produces_raw = raw.get("produces")
-    produces: list[str]
-    if isinstance(produces_raw, list):
-        produces = [str(item).strip() for item in produces_raw if str(item).strip()]
-    elif produces_raw is None:
-        produces = list(spec.produces)
-    else:
-        produces = [str(produces_raw).strip()] if str(produces_raw).strip() else list(spec.produces)
     depends_on = [str(item).strip() for item in list(raw.get("depends_on") or []) if str(item).strip()]
-    return {
-        "id": f"tool-{index}",
-        "tool_name": spec.name,
-        "query": str(raw.get("query") or "").strip(),
-        "depends_on": depends_on,
-        "produces": produces,
-        "params": dict(raw.get("params") or {}),
-        "route": spec.route,
-        "passthrough": spec.passthrough,
-        "status": "planned",
-    }
+    params = dict(raw.get("params") or {})
+    if "produces" in raw:
+        params["produces_override"] = raw.get("produces")
+    tool_call = build_tool_call_envelope(
+        spec,
+        call_id=f"tool-{index}",
+        query=str(raw.get("query") or "").strip(),
+        arguments={"query": str(raw.get("query") or "").strip(), "params": params},
+        depends_on_artifacts=depends_on,
+        trace_context={"planner_step": index},
+        execution_mode=spec.streaming_mode,
+    )
+    produces_raw = raw.get("produces")
+    if isinstance(produces_raw, list):
+        tool_call["produces"] = [str(item).strip() for item in produces_raw if str(item).strip()]
+    elif produces_raw is not None:
+        produce = str(produces_raw).strip()
+        tool_call["produces"] = [produce] if produce else list(spec.produces)
+    validation_errors = validate_tool_call_envelope(tool_call, RUNTIME_TOOL_REGISTRY)
+    if validation_errors:
+        tool_call["status"] = "failed"
+        tool_call["tool_status"] = "failed"
+        tool_call["validation_errors"] = validation_errors
+    return tool_call
 
 
 def _prepare_tool_calls(state: PlannerRuntimeState) -> PlannerRuntimeState:
@@ -430,11 +600,12 @@ def _prepare_tool_calls(state: PlannerRuntimeState) -> PlannerRuntimeState:
                 build_tool_result_envelope(
                     fallback_tool,
                     status="failed",
-                    error=_tool_error(
+                    failure=build_tool_failure(
                         "unsupported_tool",
-                        f"unsupported planner action: {fallback_tool['tool_name']}",
+                        message=f"unsupported planner action: {fallback_tool['tool_name']}",
+                        stop_plan=True,
                     ),
-                    metadata={"fallback_type": "planner"},
+                    observability={"fallback_type": "planner"},
                 )
             ]
             return _set_fallback(
@@ -449,12 +620,14 @@ def _prepare_tool_calls(state: PlannerRuntimeState) -> PlannerRuntimeState:
                 build_tool_result_envelope(
                     normalized,
                     status="failed",
-                    error=_tool_error(
+                    failure=build_tool_failure(
                         "missing_dependencies",
-                        f"missing tool dependencies: {','.join(missing_dep)}",
+                        message=f"missing tool dependencies: {','.join(missing_dep)}",
+                        failed_dependency=",".join(missing_dep),
+                        stop_plan=True,
                         details={"missing_dependencies": missing_dep},
                     ),
-                    metadata={"fallback_type": "tool"},
+                    observability={"fallback_type": "tool"},
                 )
             ]
             return _set_fallback(
@@ -475,6 +648,7 @@ def _prepare_tool_calls(state: PlannerRuntimeState) -> PlannerRuntimeState:
             "tool_names": [item["tool_name"] for item in normalized_calls],
             "tool_count": len(normalized_calls),
             "contract_version": RUNTIME_CONTRACT_VERSION,
+            "call_ids": [item["call_id"] for item in normalized_calls],
         }
     )
     return next_state
@@ -484,7 +658,7 @@ def _build_route_state(state: PlannerRuntimeState, route: PlannerRuntimeRoute, *
     next_state = dict(state)
     planner = dict(next_state.get("planner") or {})
     tool_calls = list(next_state.get("tool_calls") or [])
-    selected_tool = tool_calls[0]["tool_name"] if tool_calls else None
+    selected_tool = tool_calls[-1]["tool_name"] if tool_calls else None
     next_state["route"] = route
     next_state["selected_path"] = route if not passthrough else f"{route}_passthrough"
     next_state["planner_runtime_passthrough"] = passthrough
@@ -538,8 +712,16 @@ def _route_capability(state: PlannerRuntimeState) -> PlannerRuntimeState:
             build_tool_result_envelope(
                 paper_assistant_tool,
                 status="clarify_required",
-                result={"clarify_questions": [clarify_question]},
-                metadata={"missing_prerequisites": missing_prerequisites},
+                output={"clarify_questions": [clarify_question]},
+                warnings=["paper_assistant_missing_prerequisites"],
+                observability={"missing_prerequisites": missing_prerequisites},
+                failure=build_tool_failure(
+                    "precondition_failed",
+                    message="paper assistant missing prerequisites",
+                    user_safe_message=clarify_question,
+                    stop_plan=True,
+                    details={"missing_prerequisites": missing_prerequisites},
+                ),
             )
         ]
         clarify_state["short_circuit"] = {
@@ -609,28 +791,109 @@ def _run_route(
     planner_data = dict(next_state.get("planner") or {})
     fallback = dict(next_state.get("fallback") or {})
     tool_calls = [dict(item) for item in list(next_state.get("tool_calls") or [])]
-    if tool_calls:
-        tool_calls[0]["status"] = "dispatched"
     planner_result = _hydrate_planner_result(planner_data, dict(request))
-    next_state["tool_calls"] = tool_calls
-    next_state["response"] = executor(
-        payload,
-        selected_path=str(next_state.get("selected_path") or "legacy_fallback"),
-        on_stream_delta=on_stream_delta,
-        runtime_fallback=bool(fallback.get("type")),
-        runtime_fallback_reason=(str(fallback.get("reason")) if fallback.get("reason") is not None else None),
-        planner_result=planner_result,
-        tool_calls=tool_calls,
-    )
-    if tool_calls and not next_state.get("tool_results"):
-        next_state["tool_results"] = [
-            build_tool_result_envelope(
-                tool_calls[0],
-                status="succeeded",
-                result={"selected_path": str(next_state.get("selected_path") or "legacy_fallback")},
-                metadata=_response_metadata(next_state["response"]),
-            )
+    accumulated_results = [dict(item) for item in list(next_state.get("tool_results") or [])]
+    executed_calls: list[dict[str, Any]] = []
+    produced_artifacts: dict[str, Any] = {}
+    latest_response = next_state.get("response")
+    next_state["execution_trace"] = list(next_state.get("execution_trace") or [])
+    if not tool_calls:
+        next_state["tool_calls"] = []
+        next_state["response"] = executor(
+            payload,
+            selected_path=str(next_state.get("selected_path") or "legacy_fallback"),
+            on_stream_delta=on_stream_delta,
+            runtime_fallback=bool(fallback.get("type")),
+            runtime_fallback_reason=(str(fallback.get("reason")) if fallback.get("reason") is not None else None),
+            planner_result=planner_result,
+            tool_calls=[],
+            prior_tool_results=[],
+            available_artifacts={},
+            record_runtime_observation=True,
+        )
+        return next_state
+    for index, tool_call in enumerate(tool_calls):
+        current_call = dict(tool_call)
+        current_call["status"] = "dispatched"
+        current_call["tool_status"] = "dispatched"
+        depends_on = [str(item).strip() for item in list(current_call.get("depends_on_artifacts") or []) if str(item).strip()]
+        current_call["resolved_artifacts"] = {name: produced_artifacts.get(name) for name in depends_on if name in produced_artifacts}
+        executed_calls.append(current_call)
+        if current_call["tool_name"] == "catalog_lookup":
+            tool_result, latest_response, new_artifacts, trace_row = _catalog_lookup_result(current_call)
+            accumulated_results.append(tool_result)
+            current_call["status"] = tool_result["status"]
+            current_call["tool_status"] = tool_result["status"]
+            produced_artifacts.update(new_artifacts)
+            next_state["execution_trace"].append(trace_row)
+            if tool_result["status"] != "succeeded":
+                next_state["tool_calls"] = executed_calls + [dict(item) for item in tool_calls[index + 1 :]]
+                next_state["tool_results"] = accumulated_results
+                next_state["response"] = latest_response
+                next_state["short_circuit"] = {
+                    "triggered": True,
+                    "reason": tool_result["failure"].get("failure_type") or "catalog_lookup_empty",
+                    "step": current_call["tool_name"],
+                }
+                next_state["fallback"] = {
+                    "type": "tool",
+                    "reason": str(tool_result["failure"].get("failure_type") or "empty_result"),
+                    "failed_tool": current_call["tool_name"],
+                }
+                return next_state
+            continue
+        current_selected_path = _selected_path_for_tool(current_call)
+        latest_response = executor(
+            payload,
+            selected_path=current_selected_path,
+            on_stream_delta=on_stream_delta if index == len(tool_calls) - 1 else None,
+            runtime_fallback=bool(fallback.get("type")),
+            runtime_fallback_reason=(str(fallback.get("reason")) if fallback.get("reason") is not None else None),
+            planner_result=planner_result,
+            tool_calls=[dict(item) for item in executed_calls],
+            active_tool_call=current_call,
+            prior_tool_results=[dict(item) for item in accumulated_results],
+            available_artifacts=dict(produced_artifacts),
+            record_runtime_observation=index == len(tool_calls) - 1,
+        )
+        response_sources = _serialize_response_sources(latest_response)
+        response_sources.extend(_tool_specific_sources(current_call["tool_name"], latest_response))
+        artifacts_payload = [
+            {"artifact_name": artifact_name, "available": True}
+            for artifact_name in list(current_call.get("produces") or [])
         ]
+        tool_result = build_tool_result_envelope(
+            current_call,
+            status="succeeded",
+            output={"selected_path": current_selected_path},
+            artifacts=artifacts_payload,
+            sources=response_sources,
+            observability=_response_metadata(latest_response),
+        )
+        accumulated_results.append(tool_result)
+        current_call["status"] = "succeeded"
+        current_call["tool_status"] = "succeeded"
+        for artifact_name in list(current_call.get("produces") or []):
+            produced_artifacts[artifact_name] = True
+        next_state["execution_trace"].append(
+            {
+                "step": "planner_runtime_tool_execution",
+                "action": current_call["tool_name"],
+                "call_id": current_call.get("call_id") or current_call.get("id"),
+                "state": "completed",
+                "tool_status": "succeeded",
+                "failure_type": None,
+                "streaming_mode": current_call.get("streaming_mode"),
+                "evidence_policy": current_call.get("evidence_policy"),
+                "produced_artifacts": list(current_call.get("produces") or []),
+                "depends_on_artifacts": depends_on,
+            }
+        )
+    next_state["tool_calls"] = executed_calls
+    next_state["tool_results"] = accumulated_results
+    next_state["response"] = latest_response
+    if tool_calls:
+        next_state["selected_path"] = _selected_path_for_tool(executed_calls[-1])
     return next_state
 
 
@@ -816,8 +1079,12 @@ def run_planner_runtime(
                 build_tool_result_envelope(
                     tool_calls[0],
                     status="failed",
-                    error=_tool_error("planner_fallback", reason or "planner fallback"),
-                    metadata={"fallback_type": "planner"},
+                    failure=build_tool_failure(
+                        "execution_error",
+                        message=reason or "planner fallback",
+                        stop_plan=True,
+                    ),
+                    observability={"fallback_type": "planner"},
                 )
             ]
         elif tool_calls and fallback.get("type") == "tool":
@@ -825,8 +1092,12 @@ def run_planner_runtime(
                 build_tool_result_envelope(
                     tool_calls[0],
                     status="failed",
-                    error=_tool_error("tool_fallback", reason or "tool fallback"),
-                    metadata={"fallback_type": "tool"},
+                    failure=build_tool_failure(
+                        "execution_error",
+                        message=reason or "tool fallback",
+                        stop_plan=True,
+                    ),
+                    observability={"fallback_type": "tool"},
                 )
             ]
 
@@ -849,6 +1120,7 @@ def run_planner_runtime(
         "runtime_envelope_fields": list(final_state.get("runtime", {}).get("envelope_fields", list(RUNTIME_ENVELOPE_FIELDS))),
         "planner_input_context": dict(final_state.get("runtime", {}).get("planner_input_context", {})),
         "capability_registry": list(final_state.get("runtime", {}).get("capability_registry", [])),
+        "tool_registry_entries": list(final_state.get("runtime", {}).get("tool_registry_entries", [])),
         "tool_calls": [dict(item) for item in list(final_state.get("tool_calls") or [])],
         "tool_results": [dict(item) for item in list(final_state.get("tool_results") or [])],
         "tool_fallback": bool(fallback.get("type") == "tool"),

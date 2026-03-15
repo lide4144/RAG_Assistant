@@ -25,6 +25,7 @@ from app.kernel_api import (
     get_latest_import_result,
     _build_sources_from_qa_report,
     _derive_runtime_tool_fallback,
+    _build_runtime_tool_results,
     _planner_runtime_route_executor,
     get_task_status,
     _run_qa_once,
@@ -71,6 +72,8 @@ class KernelApiContractTests(unittest.TestCase):
         self.assertEqual(sources[0].title, 'Paper A')
         self.assertEqual(sources[0].snippet, 'alpha')
         self.assertEqual(sources[0].locator, 'p.1')
+        self.assertEqual(sources[0].provenance_type, 'citation')
+        self.assertTrue(sources[0].citation_indexable)
 
     def test_run_qa_once_contract(self) -> None:
         payload = KernelChatRequest(sessionId='s1', mode='local', query='q1', traceId='trace-1')
@@ -206,7 +209,20 @@ class KernelApiContractTests(unittest.TestCase):
 
     def test_runtime_observation_merges_into_run_artifacts(self) -> None:
         run_id = "kernel_api_runtime_merge"
-        response = KernelChatResponse(traceId="trace-merge", answer="merged [1]", sources=[])
+        response = KernelChatResponse(
+            traceId="trace-merge",
+            answer="merged [1]",
+            sources=[
+                SourceItem(
+                    source_type="local",
+                    source_id="chunk-1",
+                    title="Paper A",
+                    snippet="snippet",
+                    locator="p.1",
+                    score=0.9,
+                )
+            ],
+        )
         tool_calls = [{"id": "tool-1", "tool_name": "fact_qa", "produces": [], "status": "dispatched"}]
 
         with tempfile.TemporaryDirectory() as tmp:
@@ -237,6 +253,39 @@ class KernelApiContractTests(unittest.TestCase):
             self.assertFalse(payload["tool_fallback"])
             self.assertEqual(payload["tool_results"][0]["status"], "succeeded")
             self.assertEqual(payload["tool_results"][0]["metadata"]["trace_id"], "trace-merge")
+            self.assertEqual(payload["tool_results"][0]["sources"][0]["provenance_type"], "citation")
+            self.assertTrue(payload["tool_results"][0]["sources"][0]["citation_indexable"])
+
+    def test_runtime_tool_results_preserve_empty_result_failure_type(self) -> None:
+        results = _build_runtime_tool_results(
+            [{"tool_name": "catalog_lookup", "produces": ["paper_set"]}],
+            selected_path="summary_passthrough",
+            tool_fallback=True,
+            tool_fallback_reason="catalog_lookup_empty",
+            failed_tool="catalog_lookup",
+            trace={
+                "short_circuit": {
+                    "triggered": True,
+                    "reason": "catalog_lookup_empty",
+                    "step": "catalog_lookup",
+                }
+            },
+        )
+
+        self.assertEqual(results[0]["error"]["code"], "empty_result")
+        self.assertEqual(results[0]["error"]["user_safe_message"], "未找到符合条件的论文，因此未继续执行后续步骤。")
+
+    def test_runtime_tool_results_preserve_missing_dependencies_failure_type(self) -> None:
+        results = _build_runtime_tool_results(
+            [{"tool_name": "cross_doc_summary", "produces": []}],
+            selected_path="summary_passthrough",
+            tool_fallback=True,
+            tool_fallback_reason="missing_dependencies:paper_set",
+            failed_tool="cross_doc_summary",
+        )
+
+        self.assertEqual(results[0]["error"]["code"], "missing_dependencies")
+        self.assertEqual(results[0]["error"]["failed_dependency"], "paper_set")
 
     def test_graph_build_task_start_and_status_contract(self) -> None:
         def _fake_run_graph_build(

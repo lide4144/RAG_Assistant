@@ -77,6 +77,10 @@ class PlannerShellTests(unittest.TestCase):
         self.assertEqual([row["tool_name"] for row in result["observation"]["tool_calls"]], ["fact_qa"])
         self.assertEqual(result["observation"]["tool_results"][0]["status"], "succeeded")
         self.assertEqual(result["observation"]["tool_results"][0]["metadata"]["trace_id"], "trace-shell")
+        self.assertEqual(result["observation"]["tool_calls"][0]["call_id"], "tool-1")
+        self.assertEqual(result["observation"]["tool_calls"][0]["streaming_mode"], "text_stream")
+        self.assertEqual(result["observation"]["tool_calls"][0]["evidence_policy"], "citation_required")
+        self.assertTrue(any(row["tool_name"] == "title_term_localization" for row in result["observation"]["tool_registry_entries"]))
 
     def test_summary_query_uses_passthrough_compat_route(self) -> None:
         calls: list[str] = []
@@ -126,6 +130,7 @@ class PlannerShellTests(unittest.TestCase):
         self.assertEqual(result["observation"]["planner"]["decision_result"], "delegate_research_assistant")
         self.assertEqual(result["observation"]["selected_path"], "research_assistant_passthrough")
         self.assertEqual([row["tool_name"] for row in result["observation"]["tool_calls"]], ["paper_assistant"])
+        self.assertTrue(any(row["provenance_type"] == "explanatory" for row in result["observation"]["tool_results"][0]["sources"]))
 
     def test_planner_clarify_route_sets_clarification_decision(self) -> None:
         result = run_planner_shell(
@@ -275,6 +280,68 @@ class PlannerShellTests(unittest.TestCase):
         self.assertTrue(result["observation"]["planner_shell_fallback"])
         self.assertEqual(result["observation"]["planner_shell_fallback_reason"], "action_plan_step_limit_exceeded")
         self.assertEqual(result["observation"]["selected_path"], "legacy_fallback")
+
+    def test_multi_step_plan_executes_catalog_then_summary(self) -> None:
+        planner_result = self._planner_result(
+            primary_capability="cross_doc_summary",
+            strictness="summary",
+            selected_tools_or_skills=["catalog_lookup", "cross_doc_summary"],
+            action_plan=[
+                {"action": "catalog_lookup", "query": "总结这些 Transformer 论文", "produces": "paper_set"},
+                {"action": "cross_doc_summary", "query": "总结这些 Transformer 论文", "depends_on": ["paper_set"]},
+            ],
+        )
+        compat_calls: list[dict[str, object]] = []
+
+        def compat_executor(payload, **kwargs):
+            _ = payload
+            compat_calls.append(
+                {
+                    "selected_path": kwargs["selected_path"],
+                    "tool_names": [row["tool_name"] for row in kwargs["tool_calls"]],
+                    "prior_tool_results": len(kwargs["prior_tool_results"]),
+                    "available_artifacts": dict(kwargs["available_artifacts"]),
+                    "record_runtime_observation": kwargs["record_runtime_observation"],
+                }
+            )
+            return _response("summary")
+
+        with (
+            patch("app.planner_runtime.build_rule_based_plan", return_value=planner_result),
+            patch(
+                "app.planner_runtime.execute_catalog_lookup",
+                return_value={
+                    "state": "ready",
+                    "matched_count": 2,
+                    "selected_count": 2,
+                    "truncated": False,
+                    "paper_set": [{"paper_id": "p1", "title": "Paper 1"}],
+                    "short_circuit": False,
+                    "short_circuit_reason": None,
+                },
+            ),
+        ):
+            result = run_planner_shell(
+                KernelChatRequest(sessionId="s1", mode="local", query="总结这些 Transformer 论文", history=[], traceId="trace-multi"),
+                fact_qa_executor=lambda payload, **kwargs: _response(),
+                compat_executor=compat_executor,
+                legacy_executor=lambda payload, **kwargs: _response("legacy"),
+            )
+
+        self.assertEqual(result["response"].traceId, "summary")
+        self.assertEqual(result["observation"]["selected_path"], "summary_passthrough")
+        self.assertEqual([row["tool_name"] for row in result["observation"]["tool_calls"]], ["catalog_lookup", "cross_doc_summary"])
+        self.assertEqual([row["tool_name"] for row in result["observation"]["tool_results"]], ["catalog_lookup", "cross_doc_summary"])
+        self.assertEqual(result["observation"]["tool_results"][0]["artifacts"][0]["artifact_name"], "paper_set")
+        self.assertEqual(compat_calls, [
+            {
+                "selected_path": "summary_passthrough",
+                "tool_names": ["catalog_lookup", "cross_doc_summary"],
+                "prior_tool_results": 1,
+                "available_artifacts": {"paper_set": [{"paper_id": "p1", "title": "Paper 1"}]},
+                "record_runtime_observation": True,
+            }
+        ])
 
     def test_executor_failure_falls_back_to_legacy_path(self) -> None:
         legacy_calls: list[tuple[str, bool]] = []

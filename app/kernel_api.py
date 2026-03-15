@@ -21,6 +21,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
+from app.agent_tools import build_tool_failure, build_tool_result_envelope
 from app.admin_llm_config import load_runtime_llm_config, mask_api_key, normalize_api_base, save_runtime_llm_config
 from app.config import load_and_validate_config
 from app.graph_build import run_graph_build
@@ -38,7 +39,7 @@ from app.pipeline_runtime_config import (
     resolve_effective_marker_tuning,
 )
 from app.paths import CONFIGS_DIR, DATA_DIR, RUNS_DIR
-from app.planner_runtime import HAS_LANGGRAPH, build_tool_result_envelope, run_planner_runtime
+from app.planner_runtime import HAS_LANGGRAPH, run_planner_runtime
 from app.index_vec import load_vec_index
 from app.qa import parse_args, run_qa
 
@@ -76,6 +77,8 @@ class SourceItem(BaseModel):
     snippet: str
     locator: str
     score: float
+    provenance_type: Literal["citation", "metadata", "explanatory"] = "citation"
+    citation_indexable: bool = True
 
 
 class KernelChatResponse(BaseModel):
@@ -361,6 +364,79 @@ def _parse_source_type(raw: str) -> Literal["local", "web", "graph"]:
     return "local"
 
 
+def _serialize_source_item(source: SourceItem) -> dict[str, Any]:
+    payload = source.model_dump()
+    payload["citation_indexable"] = bool(payload.get("provenance_type") == "citation")
+    return payload
+
+
+def _build_tool_provenance_sources(
+    tool_name: str,
+    *,
+    trace: dict[str, Any] | None,
+    response: KernelChatResponse | None,
+) -> list[dict[str, Any]]:
+    execution_trace = list((trace or {}).get("execution_trace") or [])
+    if tool_name == "catalog_lookup":
+        for row in execution_trace:
+            if not isinstance(row, dict) or str(row.get("action") or "") != "catalog_lookup":
+                continue
+            matched = int(row.get("matched_count", 0) or 0)
+            selected = int(row.get("selected_count", 0) or 0)
+            return [
+                {
+                    "source_type": "local",
+                    "source_id": "catalog_lookup",
+                    "title": "Paper Catalog",
+                    "snippet": f"matched={matched}, selected={selected}",
+                    "locator": "catalog",
+                    "score": 1.0,
+                    "provenance_type": "metadata",
+                    "citation_indexable": False,
+                }
+            ]
+    if tool_name == "control":
+        return [
+            {
+                "source_type": "local",
+                "source_id": "control_intent",
+                "title": "Control Intent",
+                "snippet": "structured control instruction",
+                "locator": "runtime",
+                "score": 1.0,
+                "provenance_type": "metadata",
+                "citation_indexable": False,
+            }
+        ]
+    if tool_name == "paper_assistant" and response is not None:
+        return [
+            {
+                "source_type": "local",
+                "source_id": "paper_assistant_guidance",
+                "title": "Research Assistant Guidance",
+                "snippet": response.answer[:120].strip(),
+                "locator": "assistant",
+                "score": 1.0,
+                "provenance_type": "explanatory",
+                "citation_indexable": False,
+            }
+        ]
+    if tool_name == "title_term_localization":
+        return [
+            {
+                "source_type": "local",
+                "source_id": "title_term_localization",
+                "title": "Localization",
+                "snippet": "localized title or term explanation",
+                "locator": "localization",
+                "score": 1.0,
+                "provenance_type": "explanatory",
+                "citation_indexable": False,
+            }
+        ]
+    return []
+
+
 def _build_sources_from_qa_report(qa_report: dict[str, Any]) -> list[SourceItem]:
     grouped = qa_report.get("evidence_grouped", [])
     if not isinstance(grouped, list):
@@ -392,6 +468,8 @@ def _build_sources_from_qa_report(qa_report: dict[str, Any]) -> list[SourceItem]
                     snippet=str(row.get("quote", "")).strip(),
                     locator=str(row.get("section_page", source_id)).strip() or source_id,
                     score=float(score) if isinstance(score, (int, float)) else 0.0,
+                    provenance_type="citation",
+                    citation_indexable=True,
                 )
             )
     return normalized
@@ -465,6 +543,7 @@ def _merge_planner_runtime_observation(run_id: str, observation: dict[str, Any])
         "runtime_stable_fields": observation.get("runtime_stable_fields"),
         "runtime_envelope_fields": observation.get("runtime_envelope_fields"),
         "capability_registry": observation.get("capability_registry"),
+        "tool_registry_entries": observation.get("tool_registry_entries"),
         "tool_calls": observation.get("tool_calls"),
         "tool_results": observation.get("tool_results"),
         "tool_fallback": bool(observation.get("tool_fallback", False)),
@@ -573,17 +652,32 @@ def _build_runtime_tool_results(
     short_circuit = dict((trace or {}).get("short_circuit") or {})
     if bool(short_circuit.get("triggered")):
         short_circuit_tool = str(short_circuit.get("step") or failed_tool or normalized_calls[0].get("tool_name") or "")
+        short_circuit_reason = str(short_circuit.get("reason") or "short_circuit")
+        failure_type = "precondition_failed"
+        user_safe_message = short_circuit_reason
+        if short_circuit_reason in {"catalog_lookup_empty", "empty_result"}:
+            failure_type = "empty_result"
+            user_safe_message = "未找到符合条件的论文，因此未继续执行后续步骤。"
         return [
             build_tool_result_envelope(
                 tool_call,
                 status="clarify_required" if tool_call.get("tool_name") == short_circuit_tool else "skipped",
-                result=(
+                output=(
                     {"clarify_questions": list((trace or {}).get("clarify_questions") or [])}
                     if tool_call.get("tool_name") == short_circuit_tool
                     else {}
                 ),
-                error={},
-                metadata={"short_circuit_reason": short_circuit.get("reason")},
+                observability={"short_circuit_reason": short_circuit.get("reason")},
+                failure=(
+                    build_tool_failure(
+                        failure_type,
+                        message=short_circuit_reason,
+                        user_safe_message=user_safe_message,
+                        stop_plan=True,
+                    )
+                    if tool_call.get("tool_name") == short_circuit_tool
+                    else {}
+                ),
             )
             for tool_call in normalized_calls
         ]
@@ -592,30 +686,53 @@ def _build_runtime_tool_results(
     for tool_call in normalized_calls:
         tool_name = str(tool_call.get("tool_name") or "")
         if tool_fallback and tool_name == str(failed_tool or ""):
+            failure_reason = str(tool_fallback_reason or "tool fallback")
+            failure_type = "execution_error"
+            failed_dependency = None
+            if failure_reason.startswith("missing_dependencies:"):
+                failure_type = "missing_dependencies"
+                failed_dependency = failure_reason.split(":", 1)[1] or None
+            elif failure_reason in {"catalog_lookup_empty", "empty_result"}:
+                failure_type = "empty_result"
             results.append(
                 build_tool_result_envelope(
                     tool_call,
                     status="failed",
-                    error={
-                        "code": "tool_fallback",
-                        "message": str(tool_fallback_reason or "tool fallback"),
-                    },
-                    metadata={"selected_path": selected_path},
+                    observability={"selected_path": selected_path},
+                    failure=build_tool_failure(
+                        failure_type,
+                        message=failure_reason,
+                        failed_dependency=failed_dependency,
+                        user_safe_message=(
+                            "未找到符合条件的论文，因此未继续执行后续步骤。"
+                            if failure_type == "empty_result"
+                            else failure_reason
+                        ),
+                        stop_plan=True,
+                    ),
                 )
             )
             continue
         status = "succeeded" if not tool_fallback else "skipped"
-        result = {"selected_path": selected_path} if status == "succeeded" else {}
-        metadata = {"selected_path": selected_path}
+        output = {"selected_path": selected_path} if status == "succeeded" else {}
+        observability = {"selected_path": selected_path}
+        sources_payload: list[dict[str, Any]] = []
         if response is not None and status == "succeeded":
-            metadata["trace_id"] = response.traceId
-            metadata["source_count"] = len(response.sources)
+            observability["trace_id"] = response.traceId
+            observability["source_count"] = len(response.sources)
+            sources_payload = [_serialize_source_item(item) for item in response.sources if item.provenance_type == "citation"]
+        sources_payload.extend(_build_tool_provenance_sources(tool_name, trace=trace, response=response))
+        artifacts_payload = []
+        for artifact_name in list(tool_call.get("produces") or []):
+            artifacts_payload.append({"artifact_name": artifact_name, "available": status == "succeeded"})
         results.append(
             build_tool_result_envelope(
                 tool_call,
                 status=status,
-                result=result,
-                metadata=metadata,
+                output=output,
+                artifacts=artifacts_payload,
+                sources=sources_payload,
+                observability=observability,
             )
         )
     return results
@@ -630,8 +747,13 @@ def _planner_runtime_route_executor(
     runtime_fallback_reason: str | None = None,
     planner_result: Any = None,
     tool_calls: list[dict[str, Any]] | None = None,
+    active_tool_call: dict[str, Any] | None = None,
+    prior_tool_results: list[dict[str, Any]] | None = None,
+    available_artifacts: dict[str, Any] | None = None,
+    record_runtime_observation: bool = True,
 ) -> KernelChatResponse:
     response, run_id = _run_qa_pipeline(payload, on_stream_delta)
+    del active_tool_call, available_artifacts
     observation = {
         "planner_runtime_used": True,
         "planner_runtime_backend": "langgraph" if HAS_LANGGRAPH else "fallback",
@@ -640,8 +762,9 @@ def _planner_runtime_route_executor(
         "planner_runtime_passthrough": selected_path.endswith("_passthrough") or selected_path == "legacy_fallback",
         "runtime_contract_version": "agent-first-v1",
         "capability_registry": None,
+        "tool_registry_entries": None,
         "tool_calls": list(tool_calls or []),
-        "tool_results": [],
+        "tool_results": [dict(item) for item in list(prior_tool_results or []) if isinstance(item, dict)],
         "selected_path": selected_path,
         "planner": {
             "decision_version": getattr(planner_result, "decision_version", None),
@@ -670,11 +793,12 @@ def _planner_runtime_route_executor(
         observation["short_circuit"] = trace.get("short_circuit", {"triggered": False, "reason": None, "step": None})
         observation["truncated"] = bool(trace.get("truncated", False))
         observation["capability_registry"] = trace.get("capability_registry")
+        observation["tool_registry_entries"] = trace.get("tool_registry_entries")
         tool_fallback, tool_fallback_reason, failed_tool = _derive_runtime_tool_fallback(trace, observation)
         observation["tool_fallback"] = tool_fallback
         observation["tool_fallback_reason"] = tool_fallback_reason
         observation["failed_tool"] = failed_tool
-        observation["tool_results"] = _build_runtime_tool_results(
+        current_results = _build_runtime_tool_results(
             tool_calls,
             selected_path=selected_path,
             tool_fallback=tool_fallback,
@@ -683,6 +807,7 @@ def _planner_runtime_route_executor(
             trace=trace,
             response=response,
         )
+        observation["tool_results"].extend(current_results[len(observation["tool_results"]) :])
     except FileNotFoundError:
         observation["execution_trace"] = []
         observation["short_circuit"] = {"triggered": False, "reason": None, "step": None}
@@ -690,7 +815,7 @@ def _planner_runtime_route_executor(
         observation["tool_fallback"] = bool(observation.get("tool_fallback", False))
         observation["tool_fallback_reason"] = observation.get("tool_fallback_reason")
         observation["failed_tool"] = observation.get("failed_tool")
-        observation["tool_results"] = _build_runtime_tool_results(
+        current_results = _build_runtime_tool_results(
             tool_calls,
             selected_path=selected_path,
             tool_fallback=bool(observation.get("tool_fallback", False)),
@@ -698,7 +823,9 @@ def _planner_runtime_route_executor(
             failed_tool=observation.get("failed_tool"),
             response=response,
         )
-    _merge_planner_runtime_observation(run_id, observation)
+        observation["tool_results"].extend(current_results[len(observation["tool_results"]) :])
+    if record_runtime_observation:
+        _merge_planner_runtime_observation(run_id, observation)
     return response
 
 
@@ -746,7 +873,7 @@ def _build_streaming_chat_response(
                             "type": "sources",
                             "traceId": trace_id,
                             "mode": payload.mode,
-                            "sources": [item.dict() for item in response.sources],
+                            "sources": [_serialize_source_item(item) for item in response.sources],
                         },
                     }
                 )

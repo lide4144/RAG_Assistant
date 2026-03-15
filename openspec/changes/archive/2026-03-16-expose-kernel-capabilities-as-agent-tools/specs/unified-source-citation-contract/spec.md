@@ -1,8 +1,5 @@
-# unified-source-citation-contract 规范
+## ADDED Requirements
 
-## 目的
-待定 - 由归档变更 perplexica-like-tech-stack-migration 创建。归档后请更新目的。
-## 需求
 ### 需求:系统必须对非 citation 类 tool 输出提供显式 provenance 类型
 系统必须允许来源结构显式区分 `citation`、`metadata` 与 `explanatory` provenance。对于由 `catalog_lookup`、`control`、`title_term_localization` 或研究辅助建议段生成的非正文证据结果，系统必须使用 `metadata` 或 `explanatory` 类型标记；禁止把它们伪装为 chunk/page citation。
 
@@ -13,6 +10,8 @@
 #### 场景:中文化结果标记为 explanatory provenance
 - **当** `title_term_localization` 输出标题中文化或术语解释
 - **那么** 返回来源必须标记为 `explanatory` provenance，而不是正文 citation
+
+## MODIFIED Requirements
 
 ### 需求:系统必须统一本地与 Web 来源结构
 系统必须以同构字段输出本地证据与 Web 来源，至少包含 `source_type`、`source_id`、`title`、`snippet`、`locator`、`score`；在 agent-first tool 输出场景下，来源结构还必须显式包含 provenance 类型，以区分 `citation`、`metadata` 与 `explanatory` 结果；禁止按来源类型返回完全不同的引用结构，也禁止把非 citation 类 tool 输出伪装成正文证据来源。
@@ -35,3 +34,5 @@
 #### 场景:非 citation provenance 不参与正文编号
 - **当** 回答同时包含目录元数据说明或中文化解释
 - **那么** 这些 `metadata` 或 `explanatory` 来源必须不占用正文 citation 编号
+
+## REMOVED Requirements
