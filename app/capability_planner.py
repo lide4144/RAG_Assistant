@@ -47,6 +47,16 @@ STOPWORDS = {
 }
 CATALOG_TERMS = ("哪些论文", "列出", "列一下", "上传", "知识库", "库中", "导入")
 SUMMARY_TERMS = ("总结", "概览", "差异", "对比", "比较", "归纳", "表格")
+PAPER_ASSISTANT_TERMS = (
+    "研究建议",
+    "下一步",
+    "创新点",
+    "启发",
+    "灵感",
+    "研究方向",
+    "未来工作",
+    "局限",
+)
 STRICT_FACT_TERMS = (
     "准确率",
     "召回率",
@@ -173,6 +183,7 @@ def build_rule_based_plan(
     normalized_query = _normalize_spaces(standalone_query or user_input)
     wants_catalog = _contains_any(normalized_query, CATALOG_TERMS)
     wants_summary = _contains_any(normalized_query, SUMMARY_TERMS)
+    wants_paper_assistant = _contains_any(normalized_query, PAPER_ASSISTANT_TERMS)
     strict_fact = _strict_fact_signal(normalized_query)
     limit = _extract_limit(normalized_query, catalog_limit)
     steps: list[PlannerStep] = []
@@ -188,7 +199,19 @@ def build_rule_based_plan(
         )
         steps.append(catalog_step)
         confidence = 0.82
-        if wants_summary and not strict_fact:
+        if wants_paper_assistant and not strict_fact:
+            primary_capability = "paper_assistant"
+            strictness = "summary"
+            steps.append(
+                PlannerStep(
+                    action="paper_assistant",
+                    query=normalized_query,
+                    depends_on=["paper_set"],
+                    params={"style": "research_assistant"},
+                )
+            )
+            confidence = 0.91
+        elif wants_summary and not strict_fact:
             primary_capability = "cross_doc_summary"
             strictness = "summary"
             steps.append(
@@ -208,6 +231,17 @@ def build_rule_based_plan(
         else:
             primary_capability = "catalog_lookup"
             strictness = "catalog"
+    elif wants_paper_assistant and not strict_fact:
+        primary_capability = "paper_assistant"
+        strictness = "summary"
+        steps.append(
+            PlannerStep(
+                action="paper_assistant",
+                query=normalized_query,
+                params={"style": "research_assistant"},
+            )
+        )
+        confidence = 0.8
     elif wants_summary and not strict_fact:
         primary_capability = "cross_doc_summary"
         strictness = "summary"

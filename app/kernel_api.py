@@ -38,7 +38,7 @@ from app.pipeline_runtime_config import (
     resolve_effective_marker_tuning,
 )
 from app.paths import CONFIGS_DIR, DATA_DIR, RUNS_DIR
-from app.planner_shell import HAS_LANGGRAPH, run_planner_shell
+from app.planner_runtime import HAS_LANGGRAPH, build_tool_result_envelope, run_planner_runtime
 from app.index_vec import load_vec_index
 from app.qa import parse_args, run_qa
 
@@ -446,15 +446,29 @@ def _save_run_artifact(path: Path, payload: dict[str, Any]) -> None:
     path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
-def _merge_planner_shell_observation(run_id: str, observation: dict[str, Any]) -> None:
+def _merge_planner_runtime_observation(run_id: str, observation: dict[str, Any]) -> None:
     run_dir = Path(RUNS_DIR) / run_id
     planner = dict(observation.get("planner") or {})
     extra = {
-        "planner_shell_used": bool(observation.get("planner_shell_used", True)),
-        "planner_shell_backend": observation.get("planner_shell_backend"),
-        "planner_shell_fallback": bool(observation.get("planner_shell_fallback", False)),
-        "planner_shell_fallback_reason": observation.get("planner_shell_fallback_reason"),
-        "planner_shell_passthrough": bool(observation.get("planner_shell_passthrough", False)),
+        "planner_runtime_used": bool(observation.get("planner_runtime_used", True)),
+        "planner_runtime_backend": observation.get("planner_runtime_backend"),
+        "planner_runtime_fallback": bool(observation.get("planner_runtime_fallback", False)),
+        "planner_runtime_fallback_reason": observation.get("planner_runtime_fallback_reason"),
+        "planner_runtime_passthrough": bool(observation.get("planner_runtime_passthrough", False)),
+        # Backward-compatible aliases while consumers migrate off "shell" wording.
+        "planner_shell_used": bool(observation.get("planner_runtime_used", True)),
+        "planner_shell_backend": observation.get("planner_runtime_backend"),
+        "planner_shell_fallback": bool(observation.get("planner_runtime_fallback", False)),
+        "planner_shell_fallback_reason": observation.get("planner_runtime_fallback_reason"),
+        "planner_shell_passthrough": bool(observation.get("planner_runtime_passthrough", False)),
+        "runtime_contract_version": observation.get("runtime_contract_version"),
+        "runtime_stable_fields": observation.get("runtime_stable_fields"),
+        "runtime_envelope_fields": observation.get("runtime_envelope_fields"),
+        "tool_calls": observation.get("tool_calls"),
+        "tool_results": observation.get("tool_results"),
+        "tool_fallback": bool(observation.get("tool_fallback", False)),
+        "tool_fallback_reason": observation.get("tool_fallback_reason"),
+        "failed_tool": observation.get("failed_tool"),
         "selected_path": observation.get("selected_path"),
         "execution_trace": observation.get("execution_trace"),
         "short_circuit": observation.get("short_circuit"),
@@ -503,22 +517,122 @@ def _run_qa_once(payload: KernelChatRequest, on_stream_delta: Callable[[str], No
     return response
 
 
-def _planner_shell_route_executor(
+def _derive_runtime_tool_fallback(trace: dict[str, Any], observation: dict[str, Any]) -> tuple[bool, str | None, str | None]:
+    existing_flag = observation.get("tool_fallback")
+    existing_reason = observation.get("tool_fallback_reason")
+    existing_failed_tool = observation.get("failed_tool")
+    if existing_flag:
+        return bool(existing_flag), (
+            str(existing_reason) if existing_reason is not None else None
+        ), (str(existing_failed_tool) if existing_failed_tool is not None else None)
+
+    short_circuit = dict(trace.get("short_circuit") or {})
+    if bool(short_circuit.get("triggered")):
+        return True, (
+            str(short_circuit.get("reason")) if short_circuit.get("reason") is not None else "short_circuit"
+        ), (str(short_circuit.get("step")) if short_circuit.get("step") is not None else None)
+
+    execution_trace = list(trace.get("execution_trace") or [])
+    for row in execution_trace:
+        if not isinstance(row, dict):
+            continue
+        if str(row.get("state") or "").strip() == "short_circuit":
+            return True, (
+                str(row.get("short_circuit_reason")) if row.get("short_circuit_reason") is not None else "short_circuit"
+            ), (str(row.get("action")) if row.get("action") is not None else None)
+
+    return False, None, None
+
+
+def _build_runtime_tool_results(
+    tool_calls: list[dict[str, Any]] | None,
+    *,
+    selected_path: str,
+    tool_fallback: bool,
+    tool_fallback_reason: str | None,
+    failed_tool: str | None,
+    trace: dict[str, Any] | None = None,
+    response: KernelChatResponse | None = None,
+) -> list[dict[str, Any]]:
+    normalized_calls = [dict(item) for item in list(tool_calls or []) if isinstance(item, dict)]
+    if not normalized_calls:
+        return []
+
+    existing_results = trace.get("tool_results") if isinstance(trace, dict) else None
+    if isinstance(existing_results, list) and existing_results:
+        return [dict(item) for item in existing_results if isinstance(item, dict)]
+
+    short_circuit = dict((trace or {}).get("short_circuit") or {})
+    if bool(short_circuit.get("triggered")):
+        short_circuit_tool = str(short_circuit.get("step") or failed_tool or normalized_calls[0].get("tool_name") or "")
+        return [
+            build_tool_result_envelope(
+                tool_call,
+                status="clarify_required" if tool_call.get("tool_name") == short_circuit_tool else "skipped",
+                result=(
+                    {"clarify_questions": list((trace or {}).get("clarify_questions") or [])}
+                    if tool_call.get("tool_name") == short_circuit_tool
+                    else {}
+                ),
+                error={},
+                metadata={"short_circuit_reason": short_circuit.get("reason")},
+            )
+            for tool_call in normalized_calls
+        ]
+
+    results: list[dict[str, Any]] = []
+    for tool_call in normalized_calls:
+        tool_name = str(tool_call.get("tool_name") or "")
+        if tool_fallback and tool_name == str(failed_tool or ""):
+            results.append(
+                build_tool_result_envelope(
+                    tool_call,
+                    status="failed",
+                    error={
+                        "code": "tool_fallback",
+                        "message": str(tool_fallback_reason or "tool fallback"),
+                    },
+                    metadata={"selected_path": selected_path},
+                )
+            )
+            continue
+        status = "succeeded" if not tool_fallback else "skipped"
+        result = {"selected_path": selected_path} if status == "succeeded" else {}
+        metadata = {"selected_path": selected_path}
+        if response is not None and status == "succeeded":
+            metadata["trace_id"] = response.traceId
+            metadata["source_count"] = len(response.sources)
+        results.append(
+            build_tool_result_envelope(
+                tool_call,
+                status=status,
+                result=result,
+                metadata=metadata,
+            )
+        )
+    return results
+
+
+def _planner_runtime_route_executor(
     payload: KernelChatRequest,
     *,
     selected_path: str,
     on_stream_delta: Callable[[str], None] | None = None,
-    planner_shell_fallback: bool = False,
-    planner_shell_fallback_reason: str | None = None,
+    runtime_fallback: bool = False,
+    runtime_fallback_reason: str | None = None,
     planner_result: Any = None,
+    tool_calls: list[dict[str, Any]] | None = None,
 ) -> KernelChatResponse:
     response, run_id = _run_qa_pipeline(payload, on_stream_delta)
     observation = {
-        "planner_shell_used": True,
-        "planner_shell_backend": "langgraph" if HAS_LANGGRAPH else "fallback",
-        "planner_shell_fallback": planner_shell_fallback,
-        "planner_shell_fallback_reason": planner_shell_fallback_reason,
-        "planner_shell_passthrough": selected_path.endswith("_passthrough") or selected_path == "legacy_fallback",
+        "planner_runtime_used": True,
+        "planner_runtime_backend": "langgraph" if HAS_LANGGRAPH else "fallback",
+        "planner_runtime_fallback": runtime_fallback,
+        "planner_runtime_fallback_reason": runtime_fallback_reason,
+        "planner_runtime_passthrough": selected_path.endswith("_passthrough") or selected_path == "legacy_fallback",
+        "runtime_contract_version": "agent-first-v1",
+        "tool_calls": list(tool_calls or []),
+        "tool_results": [],
         "selected_path": selected_path,
         "planner": {
             "planner_used": getattr(planner_result, "planner_used", None),
@@ -533,31 +647,61 @@ def _planner_shell_route_executor(
     }
     try:
         trace = _load_run_trace(run_id)
-        observation["planner_shell_backend"] = (
-            "langgraph" if trace.get("planner_shell_used") is None else trace.get("planner_shell_backend", "langgraph")
+        observation["planner_runtime_backend"] = (
+            "langgraph" if trace.get("planner_runtime_used") is None else trace.get("planner_runtime_backend", "langgraph")
         )
         observation["execution_trace"] = trace.get("execution_trace", [])
         observation["short_circuit"] = trace.get("short_circuit", {"triggered": False, "reason": None, "step": None})
         observation["truncated"] = bool(trace.get("truncated", False))
+        tool_fallback, tool_fallback_reason, failed_tool = _derive_runtime_tool_fallback(trace, observation)
+        observation["tool_fallback"] = tool_fallback
+        observation["tool_fallback_reason"] = tool_fallback_reason
+        observation["failed_tool"] = failed_tool
+        observation["tool_results"] = _build_runtime_tool_results(
+            tool_calls,
+            selected_path=selected_path,
+            tool_fallback=tool_fallback,
+            tool_fallback_reason=tool_fallback_reason,
+            failed_tool=failed_tool,
+            trace=trace,
+            response=response,
+        )
     except FileNotFoundError:
         observation["execution_trace"] = []
         observation["short_circuit"] = {"triggered": False, "reason": None, "step": None}
         observation["truncated"] = False
-    _merge_planner_shell_observation(run_id, observation)
+        observation["tool_fallback"] = bool(observation.get("tool_fallback", False))
+        observation["tool_fallback_reason"] = observation.get("tool_fallback_reason")
+        observation["failed_tool"] = observation.get("failed_tool")
+        observation["tool_results"] = _build_runtime_tool_results(
+            tool_calls,
+            selected_path=selected_path,
+            tool_fallback=bool(observation.get("tool_fallback", False)),
+            tool_fallback_reason=observation.get("tool_fallback_reason"),
+            failed_tool=observation.get("failed_tool"),
+            response=response,
+        )
+    _merge_planner_runtime_observation(run_id, observation)
     return response
+
+
+def _run_planner_runtime_once(
+    payload: KernelChatRequest, on_stream_delta: Callable[[str], None] | None = None
+) -> KernelChatResponse:
+    result = run_planner_runtime(
+        payload,
+        fact_qa_executor=_planner_runtime_route_executor,
+        compat_executor=_planner_runtime_route_executor,
+        legacy_executor=_planner_runtime_route_executor,
+        on_stream_delta=on_stream_delta,
+    )
+    return result["response"]
 
 
 def _run_planner_shell_once(
     payload: KernelChatRequest, on_stream_delta: Callable[[str], None] | None = None
 ) -> KernelChatResponse:
-    result = run_planner_shell(
-        payload,
-        fact_qa_executor=_planner_shell_route_executor,
-        compat_executor=_planner_shell_route_executor,
-        legacy_executor=_planner_shell_route_executor,
-        on_stream_delta=on_stream_delta,
-    )
-    return result["response"]
+    return _run_planner_runtime_once(payload, on_stream_delta)
 
 
 def _build_streaming_chat_response(

@@ -16,7 +16,8 @@ const PLANNER_QA_STREAM_PATH = '/planner/qa/stream';
 const LEGACY_QA_PATH = '/qa';
 const LEGACY_QA_STREAM_PATH = '/qa/stream';
 
-function shouldFallbackPlannerShell(status: number | undefined): boolean {
+// Gateway only owns transport compatibility; planner/runtime semantics remain in Python kernel.
+function shouldFallbackPlannerRuntime(status: number | undefined): boolean {
   return status === 404 || status === 405 || status === 501 || status === 502 || status === 503;
 }
 
@@ -93,7 +94,7 @@ export async function requestKernelAnswer(payload: KernelChatRequest): Promise<K
     }
 
     if (error instanceof AxiosError) {
-      if (shouldFallbackPlannerShell(error.response?.status)) {
+      if (shouldFallbackPlannerRuntime(error.response?.status)) {
         return requestKernelAnswerLegacy(payload);
       }
       if (error.code === 'ECONNABORTED') {
@@ -252,7 +253,7 @@ export async function streamKernelAnswer(
     body: JSON.stringify(payload)
   });
 
-  if ((!response.ok || !response.body) && shouldFallbackPlannerShell(response.status)) {
+  if ((!response.ok || !response.body) && shouldFallbackPlannerRuntime(response.status)) {
     response = await fetch(`${config.kernelBaseUrl}${LEGACY_QA_STREAM_PATH}`, {
       method: 'POST',
       headers: {
