@@ -11,6 +11,63 @@ interface EventMeta {
   webProvider?: WebProviderMeta;
 }
 
+type AgentExecutionTimestamp = string;
+
+export interface PlanningEvent {
+  type: 'planning';
+  traceId: string;
+  mode: ChatMode;
+  timestamp: AgentExecutionTimestamp;
+  phase: 'planning';
+  decisionResult?: string;
+  selectedPath?: string;
+  selectedToolsOrSkills?: string[];
+}
+
+export interface ToolSelectionEvent {
+  type: 'toolSelection';
+  traceId: string;
+  mode: ChatMode;
+  timestamp: AgentExecutionTimestamp;
+  toolName: string;
+  callId: string;
+  status: 'selected';
+}
+
+export interface ToolRunningEvent {
+  type: 'toolRunning';
+  traceId: string;
+  mode: ChatMode;
+  timestamp: AgentExecutionTimestamp;
+  toolName: string;
+  callId: string;
+  status: 'running';
+}
+
+export interface ToolResultEvent {
+  type: 'toolResult';
+  traceId: string;
+  mode: ChatMode;
+  timestamp: AgentExecutionTimestamp;
+  toolName: string;
+  callId: string;
+  status: 'succeeded' | 'failed' | 'clarify_required' | 'blocked' | 'skipped';
+  resultKind?: 'final' | 'intermediate' | 'empty' | 'failed' | 'clarify_required';
+  message?: string;
+}
+
+export interface FallbackEvent {
+  type: 'fallback';
+  traceId: string;
+  mode: ChatMode;
+  timestamp: AgentExecutionTimestamp;
+  fallbackScope: 'planner' | 'tool' | 'legacy';
+  reasonCode: string;
+  failedTool?: string;
+  continues: boolean;
+  message?: string;
+}
+
 export interface ClientChatRequestEvent {
   type: 'chat';
   payload: {
@@ -111,6 +168,11 @@ export interface TaskErrorEvent {
 
 export type ClientInboundEvent = ClientChatRequestEvent | ClientTaskStartGraphBuildEvent;
 export type OutboundEvent =
+  | PlanningEvent
+  | ToolSelectionEvent
+  | ToolRunningEvent
+  | ToolResultEvent
+  | FallbackEvent
   | MessageEvent
   | SourcesEvent
   | MessageEndEvent

@@ -22,6 +22,56 @@ function shouldFallbackPlannerRuntime(status: number | undefined): boolean {
 }
 
 export type KernelStreamEvent =
+  | {
+      type: 'planning';
+      traceId: string;
+      mode: 'local' | 'web' | 'hybrid';
+      timestamp: string;
+      phase: 'planning';
+      decisionResult?: string;
+      selectedPath?: string;
+      selectedToolsOrSkills?: string[];
+    }
+  | {
+      type: 'toolSelection';
+      traceId: string;
+      mode: 'local' | 'web' | 'hybrid';
+      timestamp: string;
+      toolName: string;
+      callId: string;
+      status: 'selected';
+    }
+  | {
+      type: 'toolRunning';
+      traceId: string;
+      mode: 'local' | 'web' | 'hybrid';
+      timestamp: string;
+      toolName: string;
+      callId: string;
+      status: 'running';
+    }
+  | {
+      type: 'toolResult';
+      traceId: string;
+      mode: 'local' | 'web' | 'hybrid';
+      timestamp: string;
+      toolName: string;
+      callId: string;
+      status: 'succeeded' | 'failed' | 'clarify_required' | 'blocked' | 'skipped';
+      resultKind?: 'final' | 'intermediate' | 'empty' | 'failed' | 'clarify_required';
+      message?: string;
+    }
+  | {
+      type: 'fallback';
+      traceId: string;
+      mode: 'local' | 'web' | 'hybrid';
+      timestamp: string;
+      fallbackScope: 'planner' | 'tool' | 'legacy';
+      reasonCode: string;
+      failedTool?: string;
+      continues: boolean;
+      message?: string;
+    }
   | { type: 'message'; traceId: string; mode: 'local' | 'web' | 'hybrid'; content: string }
   | {
       type: 'sources';
@@ -36,6 +86,11 @@ export type KernelStreamEvent =
       usage?: { latencyMs: number };
     }
   | { type: 'error'; traceId: string; code: string; message: string };
+
+const allowedModes = new Set(['local', 'web', 'hybrid']);
+const allowedToolResultStatuses = new Set(['succeeded', 'failed', 'clarify_required', 'blocked', 'skipped']);
+const allowedToolResultKinds = new Set(['final', 'intermediate', 'empty', 'failed', 'clarify_required']);
+const allowedFallbackScopes = new Set(['planner', 'tool', 'legacy']);
 
 export type KernelTaskState = 'idle' | 'queued' | 'running' | 'succeeded' | 'failed' | 'cancelled';
 
@@ -194,6 +249,176 @@ export async function getKernelTaskStatus(taskId: string): Promise<KernelTaskSta
   }
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
+}
+
+function normalizeMode(value: unknown): 'local' | 'web' | 'hybrid' | null {
+  return typeof value === 'string' && allowedModes.has(value) ? (value as 'local' | 'web' | 'hybrid') : null;
+}
+
+function normalizeTimestamp(value: unknown): string {
+  return typeof value === 'string' && value.trim().length > 0 ? value : new Date(0).toISOString();
+}
+
+function normalizeKernelStreamEvent(eventType: string, payload: unknown): KernelStreamEvent | null {
+  if (!isRecord(payload)) {
+    return null;
+  }
+
+  const type = typeof payload.type === 'string' ? payload.type : eventType;
+  if (type !== eventType) {
+    return null;
+  }
+
+  const traceId = typeof payload.traceId === 'string' && payload.traceId.trim().length > 0 ? payload.traceId : null;
+  if (!traceId && type !== 'error') {
+    return null;
+  }
+
+  if (type === 'error') {
+    return {
+      type: 'error',
+      traceId: traceId ?? 'unknown',
+      code: typeof payload.code === 'string' && payload.code.trim().length > 0 ? payload.code : 'KERNEL_BAD_RESPONSE',
+      message: typeof payload.message === 'string' && payload.message.trim().length > 0 ? payload.message : 'Kernel error'
+    };
+  }
+
+  const mode = normalizeMode(payload.mode);
+  if (!mode || !traceId) {
+    return null;
+  }
+
+  if (type === 'message') {
+    if (typeof payload.content !== 'string') {
+      return null;
+    }
+    return { type: 'message', traceId, mode, content: payload.content };
+  }
+
+  if (type === 'sources') {
+    if (!Array.isArray(payload.sources)) {
+      return null;
+    }
+    return {
+      type: 'sources',
+      traceId,
+      mode,
+      sources: payload.sources as KernelChatResponse['sources']
+    };
+  }
+
+  if (type === 'messageEnd') {
+    const usage = isRecord(payload.usage) && typeof payload.usage.latencyMs === 'number'
+      ? { latencyMs: payload.usage.latencyMs }
+      : undefined;
+    return {
+      type: 'messageEnd',
+      traceId,
+      mode,
+      usage
+    };
+  }
+
+  if (type === 'planning') {
+    return {
+      type: 'planning',
+      traceId,
+      mode,
+      timestamp: normalizeTimestamp(payload.timestamp),
+      phase: 'planning',
+      decisionResult: typeof payload.decisionResult === 'string' ? payload.decisionResult : undefined,
+      selectedPath: typeof payload.selectedPath === 'string' ? payload.selectedPath : undefined,
+      selectedToolsOrSkills: Array.isArray(payload.selectedToolsOrSkills)
+        ? payload.selectedToolsOrSkills.filter((item): item is string => typeof item === 'string' && item.trim().length > 0)
+        : undefined
+    };
+  }
+
+  if (type === 'toolSelection') {
+    const toolName = typeof payload.toolName === 'string' && payload.toolName.trim().length > 0 ? payload.toolName : null;
+    const callId = typeof payload.callId === 'string' && payload.callId.trim().length > 0 ? payload.callId : null;
+    if (!toolName || !callId) {
+      return null;
+    }
+    return {
+      type: 'toolSelection',
+      traceId,
+      mode,
+      timestamp: normalizeTimestamp(payload.timestamp),
+      toolName,
+      callId,
+      status: 'selected'
+    };
+  }
+
+  if (type === 'toolRunning') {
+    const toolName = typeof payload.toolName === 'string' && payload.toolName.trim().length > 0 ? payload.toolName : null;
+    const callId = typeof payload.callId === 'string' && payload.callId.trim().length > 0 ? payload.callId : null;
+    if (!toolName || !callId) {
+      return null;
+    }
+    return {
+      type: 'toolRunning',
+      traceId,
+      mode,
+      timestamp: normalizeTimestamp(payload.timestamp),
+      toolName,
+      callId,
+      status: 'running'
+    };
+  }
+
+  if (type === 'toolResult') {
+    const toolName = typeof payload.toolName === 'string' && payload.toolName.trim().length > 0 ? payload.toolName : null;
+    const callId = typeof payload.callId === 'string' && payload.callId.trim().length > 0 ? payload.callId : null;
+    const status =
+      typeof payload.status === 'string' && allowedToolResultStatuses.has(payload.status) ? payload.status : null;
+    if (!toolName || !callId || !status) {
+      return null;
+    }
+    return {
+      type: 'toolResult',
+      traceId,
+      mode,
+      timestamp: normalizeTimestamp(payload.timestamp),
+      toolName,
+      callId,
+      status: status as 'succeeded' | 'failed' | 'clarify_required' | 'blocked' | 'skipped',
+      resultKind:
+        typeof payload.resultKind === 'string' && allowedToolResultKinds.has(payload.resultKind)
+          ? (payload.resultKind as 'final' | 'intermediate' | 'empty' | 'failed' | 'clarify_required')
+          : undefined,
+      message: typeof payload.message === 'string' ? payload.message : undefined
+    };
+  }
+
+  if (type === 'fallback') {
+    const fallbackScope =
+      typeof payload.fallbackScope === 'string' && allowedFallbackScopes.has(payload.fallbackScope)
+        ? payload.fallbackScope
+        : null;
+    const reasonCode = typeof payload.reasonCode === 'string' && payload.reasonCode.trim().length > 0 ? payload.reasonCode : null;
+    if (!fallbackScope || !reasonCode || typeof payload.continues !== 'boolean') {
+      return null;
+    }
+    return {
+      type: 'fallback',
+      traceId,
+      mode,
+      timestamp: normalizeTimestamp(payload.timestamp),
+      fallbackScope: fallbackScope as 'planner' | 'tool' | 'legacy',
+      reasonCode,
+      failedTool: typeof payload.failedTool === 'string' ? payload.failedTool : undefined,
+      continues: payload.continues,
+      message: typeof payload.message === 'string' ? payload.message : undefined
+    };
+  }
+
+  return null;
+}
+
 function parseSseData(buffer: string): { consumed: number; events: KernelStreamEvent[] } {
   const events: KernelStreamEvent[] = [];
   let consumed = 0;
@@ -223,8 +448,11 @@ function parseSseData(buffer: string): { consumed: number; events: KernelStreamE
     }
 
     try {
-      const parsed = JSON.parse(dataLines.join('\n')) as KernelStreamEvent;
-      events.push(parsed);
+      const parsed = JSON.parse(dataLines.join('\n')) as unknown;
+      const normalized = normalizeKernelStreamEvent(eventType, parsed);
+      if (normalized) {
+        events.push(normalized);
+      }
     } catch {
       events.push({
         type: 'error',

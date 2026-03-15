@@ -195,6 +195,88 @@ test('streamKernelAnswer falls back to legacy /qa/stream and preserves event con
   );
 });
 
+test('streamKernelAnswer normalizes supported agent execution events and strips unsupported payload fields', async () => {
+  const events: Array<Record<string, unknown>> = [];
+
+  global.fetch = async () =>
+    new Response(
+      'event: planning\n' +
+        'data: {"type":"planning","traceId":"trace-agent","mode":"local","timestamp":"2026-03-16T10:00:00Z","phase":"planning","decisionResult":"local_execute","selectedToolsOrSkills":["fact_qa"],"internalTrace":{"node":"secret"}}\n\n' +
+        'event: toolSelection\n' +
+        'data: {"type":"toolSelection","traceId":"trace-agent","mode":"local","timestamp":"2026-03-16T10:00:01Z","toolName":"fact_qa","callId":"tool-1","status":"selected","debug":"drop-me"}\n\n' +
+        'event: toolRunning\n' +
+        'data: {"type":"toolRunning","traceId":"trace-agent","mode":"local","timestamp":"2026-03-16T10:00:02Z","toolName":"fact_qa","callId":"tool-1","status":"running","prompt":"hidden"}\n\n' +
+        'event: toolResult\n' +
+        'data: {"type":"toolResult","traceId":"trace-agent","mode":"local","timestamp":"2026-03-16T10:00:03Z","toolName":"fact_qa","callId":"tool-1","status":"succeeded","resultKind":"final","message":"done","trace":["hidden"]}\n\n' +
+        'event: unsupportedEvent\n' +
+        'data: {"type":"unsupportedEvent","traceId":"trace-agent","mode":"local"}\n\n' +
+        'event: messageEnd\n' +
+        'data: {"type":"messageEnd","traceId":"trace-agent","mode":"local","usage":{"latencyMs":5}}\n\n',
+      {
+        status: 200,
+        headers: { 'content-type': 'text/event-stream' }
+      }
+    );
+
+  await streamKernelAnswer(
+    {
+      sessionId: 's1',
+      mode: 'local',
+      query: 'q1',
+      history: [],
+      traceId: 'trace-1'
+    },
+    (event) => events.push(event as unknown as Record<string, unknown>)
+  );
+
+  assert.deepEqual(
+    events.map((event) => event.type),
+    ['planning', 'toolSelection', 'toolRunning', 'toolResult', 'messageEnd']
+  );
+  assert.equal('internalTrace' in events[0], false);
+  assert.equal('debug' in events[1], false);
+  assert.equal('prompt' in events[2], false);
+  assert.equal('trace' in events[3], false);
+});
+
+test('streamKernelAnswer preserves fallback events without mapping them to errors', async () => {
+  const events: Array<{ type: string; reasonCode?: string; continues?: boolean }> = [];
+
+  global.fetch = async () =>
+    new Response(
+      'event: planning\n' +
+        'data: {"type":"planning","traceId":"trace-fallback","mode":"local","timestamp":"2026-03-16T10:00:00Z","phase":"planning","decisionResult":"legacy_fallback"}\n\n' +
+        'event: fallback\n' +
+        'data: {"type":"fallback","traceId":"trace-fallback","mode":"local","timestamp":"2026-03-16T10:00:01Z","fallbackScope":"legacy","reasonCode":"legacy_fallback","continues":true,"message":"fallback in use"}\n\n' +
+        'event: message\n' +
+        'data: {"type":"message","traceId":"trace-fallback","mode":"local","content":"legacy answer"}\n\n' +
+        'event: messageEnd\n' +
+        'data: {"type":"messageEnd","traceId":"trace-fallback","mode":"local"}\n\n',
+      {
+        status: 200,
+        headers: { 'content-type': 'text/event-stream' }
+      }
+    );
+
+  await streamKernelAnswer(
+    {
+      sessionId: 's1',
+      mode: 'local',
+      query: 'q1',
+      history: [],
+      traceId: 'trace-1'
+    },
+    (event) => events.push(event as { type: string; reasonCode?: string; continues?: boolean })
+  );
+
+  assert.deepEqual(
+    events.map((event) => event.type),
+    ['planning', 'fallback', 'message', 'messageEnd']
+  );
+  assert.equal(events[1]?.reasonCode, 'legacy_fallback');
+  assert.equal(events[1]?.continues, true);
+});
+
 test('streamKernelAnswer keeps hybrid mode on legacy /qa/stream during phase one', async () => {
   const seen: string[] = [];
   const events: Array<{ type: string }> = [];
