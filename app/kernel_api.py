@@ -39,6 +39,7 @@ from app.pipeline_runtime_config import (
     resolve_effective_marker_tuning,
 )
 from app.paths import CONFIGS_DIR, DATA_DIR, RUNS_DIR
+from app.planner_shadow_review import save_shadow_review
 from app.planner_runtime import HAS_LANGGRAPH, run_planner_runtime
 from app.index_vec import load_vec_index
 from app.qa import parse_args, run_qa
@@ -68,6 +69,7 @@ class KernelChatRequest(BaseModel):
     query: str = Field(min_length=1)
     history: list[HistoryMessage] = Field(default_factory=list)
     traceId: str | None = None
+    configPath: str | None = None
 
 
 class SourceItem(BaseModel):
@@ -170,6 +172,24 @@ class MarkerLLMPayload(BaseModel):
 class AdminSavePipelineConfigRequest(BaseModel):
     marker_tuning: MarkerTuningPayload
     marker_llm: MarkerLLMPayload = Field(default_factory=MarkerLLMPayload)
+
+
+class PlannerShadowReviewRequest(BaseModel):
+    trace_id: str = Field(min_length=1)
+    label: Literal["llm_better", "rule_better", "tie", "both_bad"]
+    reviewer: str | None = None
+    notes: str | None = None
+    planner_source_mode: str | None = None
+
+
+class PlannerShadowReviewResponse(BaseModel):
+    trace_id: str
+    label: str
+    reviewer: str | None = None
+    notes: str | None = None
+    planner_source_mode: str | None = None
+    updated_at: str
+    allowed_labels: list[str]
 
 
 TaskState = Literal["idle", "queued", "running", "succeeded", "failed", "cancelled"]
@@ -477,6 +497,7 @@ def _build_sources_from_qa_report(qa_report: dict[str, Any]) -> list[SourceItem]
 
 def _build_qa_args(payload: KernelChatRequest, run_id: str, on_stream_delta: Callable[[str], None] | None) -> argparse.Namespace:
     qa_mode = _map_kernel_mode_to_qa_mode(payload.mode)
+    config_path = str(payload.configPath or (CONFIGS_DIR / "default.yaml"))
     args = parse_args(
         [
             "--q",
@@ -492,7 +513,7 @@ def _build_qa_args(payload: KernelChatRequest, run_id: str, on_stream_delta: Cal
             "--embed-index",
             str(DATA_DIR / "indexes" / "vec_index_embed.json"),
             "--config",
-            str(CONFIGS_DIR / "default.yaml"),
+            config_path,
             "--session-id",
             payload.sessionId,
             "--session-store",
@@ -542,6 +563,11 @@ def _merge_planner_runtime_observation(run_id: str, observation: dict[str, Any])
         "runtime_contract_version": observation.get("runtime_contract_version"),
         "runtime_stable_fields": observation.get("runtime_stable_fields"),
         "runtime_envelope_fields": observation.get("runtime_envelope_fields"),
+        "planner_source_mode": observation.get("planner_source_mode"),
+        "planner_execution_source": observation.get("planner_execution_source"),
+        "planner_validation": observation.get("planner_validation"),
+        "shadow_compare": observation.get("shadow_compare"),
+        "planner_candidates": observation.get("planner_candidates"),
         "capability_registry": observation.get("capability_registry"),
         "tool_registry_entries": observation.get("tool_registry_entries"),
         "tool_calls": observation.get("tool_calls"),
@@ -878,6 +904,9 @@ def _build_agent_execution_stream_events(
                 "decisionResult": str(planner.get("decision_result") or "legacy_fallback"),
                 "selectedPath": str(observation.get("selected_path") or "legacy_fallback"),
                 "selectedToolsOrSkills": selected_tools,
+                "plannerSource": str(planner.get("planner_source") or "fallback"),
+                "plannerSourceMode": str(observation.get("planner_source_mode") or "rule_only"),
+                "executionSource": str(observation.get("planner_execution_source") or planner.get("planner_source") or "fallback"),
             },
         }
     ]
@@ -1017,6 +1046,28 @@ def _build_agent_execution_stream_events(
                     "failedTool": str(failed_tool).strip() if failed_tool else None,
                     "continues": True,
                     "message": fallback_message or None,
+                },
+            }
+        )
+    elif (
+        str(observation.get("planner_source_mode") or "") == "llm_primary_with_rule_fallback"
+        and str(observation.get("planner_execution_source") or "") == "rule"
+        and isinstance(observation.get("planner_validation"), dict)
+        and str(observation["planner_validation"].get("status") or "") == "reject"
+    ):
+        events.append(
+            {
+                "event": "fallback",
+                "data": {
+                    "type": "fallback",
+                    "traceId": trace_id,
+                    "mode": mode,
+                    "timestamp": _agent_event_timestamp(),
+                    "fallbackScope": "planner",
+                    "reasonCode": "llm_decision_rejected_rule_fallback",
+                    "failedTool": None,
+                    "continues": True,
+                    "message": None,
                 },
             }
         )
@@ -2733,6 +2784,22 @@ def get_runtime_overview() -> dict[str, Any]:
 @app.get("/health")
 def health() -> dict[str, str]:
     return {"status": "ok", "service": "python-kernel-fastapi"}
+
+
+@app.post("/api/planner/shadow-review", response_model=PlannerShadowReviewResponse)
+def save_planner_shadow_review(payload: PlannerShadowReviewRequest) -> PlannerShadowReviewResponse:
+    try:
+        saved = save_shadow_review(
+            trace_id=payload.trace_id,
+            label=payload.label,
+            reviewer=payload.reviewer,
+            notes=payload.notes,
+            planner_source_mode=payload.planner_source_mode,
+            base_dir=RUNS_DIR,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail={"code": "INVALID_SHADOW_REVIEW", "message": str(exc)}) from exc
+    return PlannerShadowReviewResponse(**saved)
 
 
 @app.post("/api/tasks/graph-build/start", response_model=TaskStatusResponse)

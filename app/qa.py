@@ -46,6 +46,7 @@ from app.retrieve import (
 )
 from app.runlog import create_run_dir, save_json, validate_trace_schema
 from app.paths import CONFIGS_DIR, DATA_DIR, RUNS_DIR
+from app.planner_policy import apply_assistant_mode_decision_policy, prefer_assistant_mode_clarify
 from app.session_state import (
     append_turn_record,
     build_control_intent_anchor_query,
@@ -898,8 +899,8 @@ def _filter_candidates_by_topic(
     return kept, dropped
 
 
-def _build_answer_citations(evidence_grouped: list[dict[str, Any]]) -> list[dict[str, str]]:
-    citations: list[dict[str, str]] = []
+def _build_answer_citations(evidence_grouped: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    citations: list[dict[str, Any]] = []
     for group in evidence_grouped:
         pid = group.get("paper_id", "unknown-paper")
         for item in group.get("evidence", []):
@@ -993,10 +994,10 @@ def _bind_claim_plan_to_citations(
     *,
     claim_plan: list[dict[str, str]],
     answer: str,
-    answer_citations: list[dict[str, str]],
+    answer_citations: list[dict[str, Any]],
     evidence_grouped: list[dict[str, Any]],
     min_bind_ratio: float = 0.6,
-) -> tuple[str, list[dict[str, str]], dict[str, Any]]:
+) -> tuple[str, list[dict[str, Any]], dict[str, Any]]:
     report: dict[str, Any] = {
         "enabled": bool(claim_plan),
         "claim_count": len(claim_plan),
@@ -1184,8 +1185,8 @@ def _extract_key_claims(answer: str) -> list[dict[str, Any]]:
     return claims
 
 
-def _build_evidence_lookup(evidence_grouped: list[dict[str, Any]]) -> dict[str, dict[str, str]]:
-    lookup: dict[str, dict[str, str]] = {}
+def _build_evidence_lookup(evidence_grouped: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
+    lookup: dict[str, dict[str, Any]] = {}
     for group in evidence_grouped:
         paper_id = group.get("paper_id", "unknown-paper")
         for item in group.get("evidence", []):
@@ -1198,15 +1199,17 @@ def _build_evidence_lookup(evidence_grouped: list[dict[str, Any]]) -> dict[str, 
                 "section_page": str(item.get("section_page", "")),
                 "section_id": str(item.get("section_id", "")),
                 "quote": str(item.get("quote", "")),
+                "block_type": str(item.get("block_type", "")),
+                "structure_provenance": item.get("structure_provenance"),
             }
     return lookup
 
 
 def _normalize_citations(
-    answer_citations: list[dict[str, str]],
-    evidence_lookup: dict[str, dict[str, str]],
-) -> list[dict[str, str]]:
-    normalized: list[dict[str, str]] = []
+    answer_citations: list[dict[str, Any]],
+    evidence_lookup: dict[str, dict[str, Any]],
+) -> list[dict[str, Any]]:
+    normalized: list[dict[str, Any]] = []
     seen: set[tuple[str, str, str]] = set()
     for citation in answer_citations:
         if not isinstance(citation, dict):
@@ -1263,12 +1266,12 @@ def _apply_evidence_policy_gate(
     *,
     question: str,
     answer: str,
-    answer_citations: list[dict[str, str]],
+    answer_citations: list[dict[str, Any]],
     evidence_grouped: list[dict[str, Any]],
     output_warnings: list[str],
     policy_enforced: bool,
     claim_binding_report: dict[str, Any] | None = None,
-) -> tuple[str, list[dict[str, str]], dict[str, Any]]:
+) -> tuple[str, list[dict[str, Any]], dict[str, Any]]:
     evidence_lookup = _build_evidence_lookup(evidence_grouped)
     normalized_citations = _normalize_citations(answer_citations, evidence_lookup)
     claims = _extract_key_claims(answer)
@@ -1602,7 +1605,7 @@ def _extract_fenced_blocks(text: str) -> list[tuple[str, str]]:
     return blocks
 
 
-def _parse_answer_dict(payload: dict[str, Any]) -> tuple[str | None, list[dict[str, str]]]:
+def _parse_answer_dict(payload: dict[str, Any]) -> tuple[str | None, list[dict[str, Any]]]:
     answer = str(payload.get("answer", "")).strip()
     if not answer:
         # Allow alternative structured formats.
@@ -1621,22 +1624,27 @@ def _parse_answer_dict(payload: dict[str, Any]) -> tuple[str | None, list[dict[s
     citations_raw = payload.get("answer_citations", [])
     if citations_raw is None:
         citations_raw = []
-    normalized: list[dict[str, str]] = []
+    normalized: list[dict[str, Any]] = []
     if isinstance(citations_raw, list):
         for row in citations_raw:
             if not isinstance(row, dict):
                 continue
-            normalized.append(
-                {
-                    "chunk_id": str(row.get("chunk_id", "")).strip(),
-                    "paper_id": str(row.get("paper_id", "")).strip(),
-                    "section_page": str(row.get("section_page", "")).strip(),
-                }
-            )
+            normalized_row: dict[str, Any] = {
+                "chunk_id": str(row.get("chunk_id", "")).strip(),
+                "paper_id": str(row.get("paper_id", "")).strip(),
+                "section_page": str(row.get("section_page", "")).strip(),
+            }
+            block_type = str(row.get("block_type", "")).strip()
+            if block_type:
+                normalized_row["block_type"] = block_type
+            structure_provenance = row.get("structure_provenance")
+            if isinstance(structure_provenance, dict) and structure_provenance:
+                normalized_row["structure_provenance"] = structure_provenance
+            normalized.append(normalized_row)
     return (answer or None), normalized
 
 
-def _try_parse_structured_payload(raw: str) -> tuple[str | None, list[dict[str, str]] | None]:
+def _try_parse_structured_payload(raw: str) -> tuple[str | None, list[dict[str, Any]] | None]:
     candidates: list[str] = []
     base = raw.strip()
     if base:
@@ -1766,7 +1774,7 @@ def _build_answer_llm_diag(
 def _parse_answer_payload(
     *,
     content: str,
-) -> tuple[str | None, list[dict[str, str]] | None, str | None]:
+) -> tuple[str | None, list[dict[str, Any]] | None, str | None]:
     raw = (content or "").strip()
     answer, citations = _try_parse_structured_payload(raw)
     if answer is not None and citations is not None:
@@ -1789,7 +1797,7 @@ def _try_llm_answer_with_evidence(
     on_stream_delta: Callable[[str], None] | None = None,
 ) -> tuple[
     str | None,
-    list[dict[str, str]] | None,
+    list[dict[str, Any]] | None,
     str | None,
     dict[str, Any] | None,
     dict[str, Any],
@@ -2015,7 +2023,7 @@ def _build_answer(
     config: Any,
     history_turns: list[dict[str, Any]],
     on_stream_delta: Callable[[str], None] | None = None,
-) -> tuple[str, list[dict[str, str]], bool, bool, dict[str, Any] | None, dict[str, Any], dict[str, Any]]:
+) -> tuple[str, list[dict[str, Any]], bool, bool, dict[str, Any] | None, dict[str, Any], dict[str, Any]]:
     stream_observation = {
         "answer_stream_enabled": bool(getattr(config, "answer_stream_enabled", False)),
         "answer_stream_used": False,
@@ -2050,7 +2058,8 @@ def _build_answer(
             },
         )
 
-    if _is_insufficient_evidence(evidence_grouped):
+    has_paper_clue = bool(scope_reason.get("has_paper_clue"))
+    if not has_paper_clue and _is_insufficient_evidence(evidence_grouped):
         if "insufficient_evidence_for_answer" not in output_warnings:
             output_warnings.append("insufficient_evidence_for_answer")
         return (
@@ -2161,7 +2170,6 @@ def _build_answer(
             context_budget,
         )
 
-    has_paper_clue = bool(scope_reason.get("has_paper_clue"))
     if has_paper_clue:
         first_group = next((g for g in evidence_grouped if g.get("evidence")), None)
         if first_group is None:
@@ -2212,6 +2220,75 @@ def _resolve_run_dir(args: argparse.Namespace) -> Path:
 
     run_id_arg = str(getattr(args, "run_id", "")).strip() or None
     return create_run_dir(RUNS_DIR, run_id_arg)
+
+
+def _collect_planner_policy_constraint_signals(
+    *,
+    decision: str,
+    clarify_questions: list[str],
+    clarify_limit_hit: bool,
+    forced_partial_answer: bool,
+    sufficiency_gate: dict[str, Any],
+    evidence_policy_gate: dict[str, Any],
+    output_warnings: list[str],
+    final_refuse_source: str | None,
+) -> list[str]:
+    signals: list[str] = []
+    if clarify_questions or decision == "clarify":
+        signals.append("missing_prerequisites")
+    if "insufficient_evidence_for_answer" in output_warnings or final_refuse_source == "sufficiency_gate":
+        signals.append("insufficient_evidence")
+    if bool(evidence_policy_gate.get("triggered")) or "citation_mapping_incomplete_low_confidence" in output_warnings:
+        signals.append("citation_incomplete")
+    if bool(clarify_limit_hit):
+        signals.append("clarify_limit_hit")
+    if bool(forced_partial_answer):
+        signals.append("forced_partial_answer")
+    for rule in list(sufficiency_gate.get("triggered_rules", []) or []):
+        normalized = str(rule).strip()
+        if normalized.startswith("control_intent_anchor_"):
+            signals.append("missing_prerequisites")
+            break
+    ordered: list[str] = []
+    for signal in signals:
+        if signal not in ordered:
+            ordered.append(signal)
+    return ordered
+
+
+def _build_planner_policy_trace(
+    *,
+    planner_result: Any,
+    decision: str,
+    decision_reason: str,
+    clarify_questions: list[str],
+    assistant_mode_used: bool,
+    clarify_limit_hit: bool,
+    forced_partial_answer: bool,
+    final_refuse_source: str | None,
+    constraint_signals: list[str],
+) -> dict[str, Any]:
+    decision_source = "planner"
+    if decision == "clarify" and clarify_questions:
+        decision_source = "planner_policy"
+    if assistant_mode_used or clarify_limit_hit or forced_partial_answer:
+        decision_source = "planner_policy"
+    if final_refuse_source in {"sufficiency_gate", "evidence_policy_gate"}:
+        decision_source = "planner_policy"
+    if getattr(planner_result, "decision_result", "") == "clarify" and decision == "clarify":
+        decision_source = "planner"
+    return {
+        "decision": decision,
+        "decision_reason": decision_reason,
+        "decision_source": decision_source,
+        "constraint_signals": list(constraint_signals),
+        "requires_clarification": bool(decision == "clarify"),
+        "clarify_question": clarify_questions[0] if clarify_questions else None,
+        "clarify_limit_hit": bool(clarify_limit_hit),
+        "forced_partial_answer": bool(forced_partial_answer),
+        "assistant_mode_used": bool(assistant_mode_used),
+        "final_refuse_source": final_refuse_source,
+    }
 
 
 def run_qa(args: argparse.Namespace) -> int:
@@ -2566,6 +2643,7 @@ def run_qa(args: argparse.Namespace) -> int:
                 }
                 rewrite_result.rewrite_selected_by = "legacy_strategy"
                 query_used = rewrite_result.rewrite_llm_query or rewrite_result.rewrite_rule_query
+                rewrite_result.rewritten_query = query_used
             elif bool(getattr(config, "rewrite_arbitration_enabled", True)):
                 arbitration_top_k = max(6, min(12, int(top_k)))
                 rule_metrics = _rewrite_candidate_metrics(
@@ -2975,57 +3053,23 @@ def run_qa(args: argparse.Namespace) -> int:
         if isinstance(triggered_rules, list) and force_clarify_code not in triggered_rules:
             triggered_rules.append(force_clarify_code)
     clarify_questions = [str(q).strip() for q in sufficiency_gate.get("clarify_questions", []) if str(q).strip()][:1]
-    assistant_mode_used = False
-    clarify_limit_hit = bool(sufficiency_gate.get("clarify_limit_hit", False))
-    forced_partial_answer = bool(sufficiency_gate.get("forced_partial_answer", False))
-    if (
-        assistant_mode_enabled
-        and open_summary_intent
-        and not assistant_mode_force_legacy_gate
-        and decision == "refuse"
-    ):
-        assistant_mode_used = True
-        if force_partial_answer_on_limit and clarify_streak_before_turn >= clarify_limit:
-            decision = "answer"
-            decision_reason = "助理模式下连续澄清达到上限，改为低置信可追溯回答。"
-            clarify_limit_hit = True
-            forced_partial_answer = True
-            clarify_questions = []
-            triggered_rules = list(sufficiency_gate.get("triggered_rules", []) or [])
-            if "assistant_mode_refuse_forced_partial_answer" not in triggered_rules:
-                triggered_rules.append("assistant_mode_refuse_forced_partial_answer")
-            sufficiency_gate["triggered_rules"] = triggered_rules
-            sufficiency_gate["decision"] = "answer"
-            sufficiency_gate["reason"] = decision_reason
-            sufficiency_gate["clarify_questions"] = []
-            sufficiency_gate["clarify_limit_hit"] = True
-            sufficiency_gate["forced_partial_answer"] = True
-        else:
-            decision = "clarify"
-            decision_reason = "助理模式下优先最小澄清而非直接拒答。"
-            clarify_questions = ["你更希望我先展开哪一部分（方法、实验结果或应用场景）？"]
-            sufficiency_gate["decision"] = "clarify"
-            sufficiency_gate["reason"] = decision_reason
-            sufficiency_gate["clarify_questions"] = list(clarify_questions)
-            sufficiency_gate["clarify_limit_hit"] = clarify_limit_hit
-            sufficiency_gate["forced_partial_answer"] = forced_partial_answer
-    if (
-        assistant_mode_enabled
-        and open_summary_intent
-        and not assistant_mode_force_legacy_gate
-        and decision == "answer"
-        and force_partial_answer_on_limit
-        and clarify_streak_before_turn >= clarify_limit
-        and not forced_partial_answer
-    ):
-        clarify_limit_hit = True
-        forced_partial_answer = True
-        sufficiency_gate["clarify_limit_hit"] = True
-        sufficiency_gate["forced_partial_answer"] = True
-        triggered_rules = list(sufficiency_gate.get("triggered_rules", []) or [])
-        if "assistant_summary_clarify_limit_force_partial_answer" not in triggered_rules:
-            triggered_rules.append("assistant_summary_clarify_limit_force_partial_answer")
-        sufficiency_gate["triggered_rules"] = triggered_rules
+    assistant_policy = apply_assistant_mode_decision_policy(
+        assistant_mode_enabled=assistant_mode_enabled,
+        open_summary_intent=open_summary_intent,
+        assistant_mode_force_legacy_gate=assistant_mode_force_legacy_gate,
+        decision=decision,
+        clarify_questions=clarify_questions,
+        sufficiency_gate=sufficiency_gate,
+        force_partial_answer_on_limit=force_partial_answer_on_limit,
+        clarify_streak_before_turn=clarify_streak_before_turn,
+        clarify_limit=clarify_limit,
+    )
+    decision = assistant_policy.decision
+    decision_reason = assistant_policy.decision_reason
+    clarify_questions = list(assistant_policy.clarify_questions)
+    assistant_mode_used = assistant_policy.assistant_mode_used
+    clarify_limit_hit = assistant_policy.clarify_limit_hit
+    forced_partial_answer = assistant_policy.forced_partial_answer
     final_refuse_source: str | None = "sufficiency_gate" if decision == "refuse" else None
     assistant_summary_suggestions: list[str] = []
     stream_display = {
@@ -3070,18 +3114,6 @@ def run_qa(args: argparse.Namespace) -> int:
         "history_trimmed_turns": 0,
         "context_overflow_fallback": False,
     }
-
-    def _prefer_clarify_for_assistant_mode(refuse_reason: str) -> bool:
-        nonlocal decision, decision_reason, clarify_questions, answer, answer_citations, final_refuse_source
-        if not assistant_mode_used or clarify_limit_hit:
-            return False
-        decision = "clarify"
-        decision_reason = f"{refuse_reason} 助理模式下优先最小澄清。"
-        clarify_questions = ["你更希望我先展开哪一部分（方法、实验结果或应用场景）？"]
-        answer = "为确保回答基于充分证据，请先澄清以下问题：\n1. " + clarify_questions[0]
-        answer_citations = []
-        final_refuse_source = None
-        return True
 
     evidence_policy_gate: dict[str, Any] = {"enabled": bool(config.evidence_policy_enforced), "skipped": "not_evaluated"}
     if decision == "answer":
@@ -3164,7 +3196,21 @@ def run_qa(args: argparse.Namespace) -> int:
                 claim_binding_report=answer_stream_observation.get("claim_binding"),
             )
             if bool(evidence_policy_gate.get("triggered")):
-                if not _prefer_clarify_for_assistant_mode("关键结论缺少可追溯证据，触发证据门控。"):
+                policy_override = prefer_assistant_mode_clarify(
+                    assistant_mode_used=assistant_mode_used,
+                    clarify_limit_hit=clarify_limit_hit,
+                    decision=decision,
+                    refuse_reason="关键结论缺少可追溯证据，触发证据门控。",
+                    final_refuse_source=final_refuse_source,
+                )
+                if policy_override.applied:
+                    decision = policy_override.decision
+                    decision_reason = policy_override.decision_reason
+                    clarify_questions = list(policy_override.clarify_questions)
+                    answer = str(policy_override.answer or "")
+                    answer_citations = list(policy_override.answer_citations or [])
+                    final_refuse_source = policy_override.final_refuse_source
+                else:
                     decision = "refuse"
                     decision_reason = "关键结论缺少可追溯证据，触发证据门控拒答。"
                     clarify_questions = []
@@ -3206,12 +3252,48 @@ def run_qa(args: argparse.Namespace) -> int:
     citation_chunk_ids = {c["chunk_id"] for c in answer_citations}
     grouped_chunk_ids = {item["chunk_id"] for item in _flatten_evidence(evidence_grouped)}
     if not citation_chunk_ids.issubset(grouped_chunk_ids):
-        if not _prefer_clarify_for_assistant_mode("回答引用与已分配证据不一致，触发低置信降级。"):
+        policy_override = prefer_assistant_mode_clarify(
+            assistant_mode_used=assistant_mode_used,
+            clarify_limit_hit=clarify_limit_hit,
+            decision=decision,
+            refuse_reason="回答引用与已分配证据不一致，触发低置信降级。",
+            final_refuse_source=final_refuse_source,
+        )
+        if not policy_override.applied:
             output_warnings.append("citation_mapping_incomplete_low_confidence")
             answer_citations = [c for c in answer_citations if c.get("chunk_id") in grouped_chunk_ids]
             low_conf_note = "低置信提示：部分引用未能完整映射到证据分组，请结合原文核验。"
             if low_conf_note not in answer:
                 answer = f"{answer}\n\n{low_conf_note}".strip()
+        else:
+            decision = policy_override.decision
+            decision_reason = policy_override.decision_reason
+            clarify_questions = list(policy_override.clarify_questions)
+            answer = str(policy_override.answer or "")
+            answer_citations = list(policy_override.answer_citations or [])
+            final_refuse_source = policy_override.final_refuse_source
+
+    planner_policy_constraint_signals = _collect_planner_policy_constraint_signals(
+        decision=decision,
+        clarify_questions=clarify_questions,
+        clarify_limit_hit=clarify_limit_hit,
+        forced_partial_answer=forced_partial_answer,
+        sufficiency_gate=sufficiency_gate,
+        evidence_policy_gate=evidence_policy_gate,
+        output_warnings=output_warnings,
+        final_refuse_source=final_refuse_source,
+    )
+    planner_policy_trace = _build_planner_policy_trace(
+        planner_result=planner_result,
+        decision=decision,
+        decision_reason=decision_reason,
+        clarify_questions=clarify_questions,
+        assistant_mode_used=assistant_mode_used,
+        clarify_limit_hit=clarify_limit_hit,
+        forced_partial_answer=forced_partial_answer,
+        final_refuse_source=final_refuse_source,
+        constraint_signals=planner_policy_constraint_signals,
+    )
 
     answer = _prepend_notice(answer, structure_coverage_notice)
 
@@ -3392,6 +3474,8 @@ def run_qa(args: argparse.Namespace) -> int:
         "final_refuse_source": final_refuse_source,
         "clarify_questions": clarify_questions,
         "sufficiency_gate": sufficiency_gate,
+        "planner_policy": planner_policy_trace,
+        "planner_policy_constraint_signals": planner_policy_constraint_signals,
         "session_reset_audit": session_reset_audit,
         "final_answer": answer,
         "mode": args.mode,
@@ -3403,6 +3487,7 @@ def run_qa(args: argparse.Namespace) -> int:
         "scope_mode": scope_mode,
         "scope_reason": scope_reason,
         "query_used": query_used,
+        "rewritten_query": rewrite_result.rewritten_query,
         "calibrated_query": query_used,
         "calibration_reason": calibration_result.calibration_reason,
         "query_retry_used": query_retry_used,
@@ -3604,9 +3689,12 @@ def run_qa(args: argparse.Namespace) -> int:
         "final_refuse_source": final_refuse_source,
         "clarify_questions": clarify_questions,
         "sufficiency_gate": sufficiency_gate,
+        "planner_policy": planner_policy_trace,
+        "planner_policy_constraint_signals": planner_policy_constraint_signals,
         "session_reset_audit": session_reset_audit,
         "evidence_policy_gate": evidence_policy_gate,
         "evidence_policy_enforced": bool(config.evidence_policy_enforced),
+        "rewritten_query": rewrite_result.rewritten_query,
         "rewrite_rule_query": rewrite_result.rewrite_rule_query,
         "rewrite_llm_query": rewrite_result.rewrite_llm_query,
         "keywords_entities": rewrite_result.keywords_entities,

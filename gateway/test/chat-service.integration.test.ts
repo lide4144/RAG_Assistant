@@ -102,7 +102,10 @@ test('local mode forwards agent execution events before standard chat closure', 
         timestamp: '2026-03-16T10:00:00Z',
         phase: 'planning',
         decisionResult: 'local_execute',
-        selectedPath: 'fact_qa'
+        selectedPath: 'fact_qa',
+        plannerSource: 'llm',
+        plannerSourceMode: 'llm_primary_with_rule_fallback',
+        executionSource: 'llm'
       });
       onEvent({
         type: 'toolSelection',
@@ -174,6 +177,10 @@ test('local mode forwards agent execution events before standard chat closure', 
     'message',
     'messageEnd'
   ]);
+  const planning = emitted[0];
+  assert.ok(planning && planning.type === 'planning');
+  assert.equal(planning.plannerSourceMode, 'llm_primary_with_rule_fallback');
+  assert.equal(planning.executionSource, 'llm');
 });
 
 test('local mode preserves fallback events and still closes with standard message events', async () => {

@@ -91,7 +91,9 @@ DEFAULT_PLANNER_DECISION_VERSION = "planner-policy-v1"
 DEFAULT_LOCAL_CAPABILITIES = {"fact_qa", "catalog_lookup", "cross_doc_summary", "control", "paper_assistant"}
 DEFAULT_WEB_CAPABILITIES = {"web_research"}
 PLANNER_SOURCE_RULE = "rule"
+PLANNER_SOURCE_LLM = "llm"
 PLANNER_SOURCE_FALLBACK = "fallback"
+PLANNER_SOURCES = {PLANNER_SOURCE_RULE, PLANNER_SOURCE_LLM, PLANNER_SOURCE_FALLBACK}
 PLANNER_DECISION_RESULTS = {
     "clarify",
     "local_execute",
@@ -225,7 +227,62 @@ def normalize_planner_source(value: str | None) -> str:
     normalized = _normalize_spaces(str(value or "")).lower()
     if normalized in {"rule_based", PLANNER_SOURCE_RULE}:
         return PLANNER_SOURCE_RULE
+    if normalized in {"llm_based", PLANNER_SOURCE_LLM}:
+        return PLANNER_SOURCE_LLM
     return PLANNER_SOURCE_FALLBACK
+
+
+def serialize_planner_result(result: PlannerResult) -> dict[str, Any]:
+    return {
+        "decision_version": result.decision_version,
+        "user_goal": result.user_goal,
+        "planner_used": bool(result.planner_used),
+        "planner_source": normalize_planner_source(result.planner_source),
+        "planner_fallback": bool(result.planner_fallback),
+        "planner_fallback_reason": result.planner_fallback_reason,
+        "planner_confidence": float(result.planner_confidence),
+        "is_new_topic": bool(result.is_new_topic),
+        "should_clear_pending_clarify": bool(result.should_clear_pending_clarify),
+        "relation_to_previous": result.relation_to_previous,
+        "standalone_query": result.standalone_query,
+        "primary_capability": result.primary_capability,
+        "strictness": result.strictness,
+        "decision_result": result.decision_result,
+        "knowledge_route": result.knowledge_route,
+        "research_mode": result.research_mode,
+        "requires_clarification": bool(result.requires_clarification),
+        "selected_tools_or_skills": [str(item).strip() for item in list(result.selected_tools_or_skills or []) if str(item).strip()],
+        "fallback": dict(result.fallback or {}),
+        "clarify_question": result.clarify_question,
+        "action_plan": [dict(step) for step in list(result.action_plan or []) if isinstance(step, dict)],
+    }
+
+
+def parse_planner_result(payload: dict[str, Any], *, default_query: str = "") -> PlannerResult:
+    query = _normalize_spaces(str(payload.get("standalone_query") or payload.get("user_goal") or default_query))
+    return PlannerResult(
+        decision_version=str(payload.get("decision_version") or DEFAULT_PLANNER_DECISION_VERSION),
+        user_goal=str(payload.get("user_goal") or query),
+        planner_used=bool(payload.get("planner_used", True)),
+        planner_source=normalize_planner_source(str(payload.get("planner_source") or PLANNER_SOURCE_FALLBACK)),
+        planner_fallback=bool(payload.get("planner_fallback", False)),
+        planner_fallback_reason=(str(payload.get("planner_fallback_reason")).strip() if payload.get("planner_fallback_reason") is not None else None),
+        planner_confidence=float(payload.get("planner_confidence", 0.0)),
+        is_new_topic=bool(payload.get("is_new_topic", False)),
+        should_clear_pending_clarify=bool(payload.get("should_clear_pending_clarify", False)),
+        relation_to_previous=str(payload.get("relation_to_previous") or "same_topic_or_no_pending"),
+        standalone_query=query,
+        primary_capability=str(payload.get("primary_capability") or "fact_qa"),
+        strictness=str(payload.get("strictness") or "strict_fact"),
+        decision_result=str(payload.get("decision_result") or "legacy_fallback"),
+        knowledge_route=str(payload.get("knowledge_route") or "local"),
+        research_mode=str(payload.get("research_mode") or "none"),
+        requires_clarification=bool(payload.get("requires_clarification", False)),
+        selected_tools_or_skills=[str(item).strip() for item in list(payload.get("selected_tools_or_skills") or []) if str(item).strip()],
+        fallback=dict(payload.get("fallback") or {}),
+        clarify_question=(str(payload.get("clarify_question")).strip() if payload.get("clarify_question") is not None else None),
+        action_plan=[dict(step) for step in list(payload.get("action_plan") or []) if isinstance(step, dict)],
+    )
 
 
 def paper_assistant_clarification(query: str, *, depends_on: list[str] | None = None) -> tuple[list[str], str | None]:

@@ -2,6 +2,7 @@ import axios, { AxiosError } from 'axios';
 import { config } from '../config.js';
 import { KernelClientError, KernelErrorCode } from '../errors.js';
 import type { KernelChatRequest, KernelChatResponse } from '../types/kernel.js';
+import type { AgentEvent } from '../types/agent-events.js';
 
 const client = axios.create({
   baseURL: config.kernelBaseUrl,
@@ -22,56 +23,7 @@ function shouldFallbackPlannerRuntime(status: number | undefined): boolean {
 }
 
 export type KernelStreamEvent =
-  | {
-      type: 'planning';
-      traceId: string;
-      mode: 'local' | 'web' | 'hybrid';
-      timestamp: string;
-      phase: 'planning';
-      decisionResult?: string;
-      selectedPath?: string;
-      selectedToolsOrSkills?: string[];
-    }
-  | {
-      type: 'toolSelection';
-      traceId: string;
-      mode: 'local' | 'web' | 'hybrid';
-      timestamp: string;
-      toolName: string;
-      callId: string;
-      status: 'selected';
-    }
-  | {
-      type: 'toolRunning';
-      traceId: string;
-      mode: 'local' | 'web' | 'hybrid';
-      timestamp: string;
-      toolName: string;
-      callId: string;
-      status: 'running';
-    }
-  | {
-      type: 'toolResult';
-      traceId: string;
-      mode: 'local' | 'web' | 'hybrid';
-      timestamp: string;
-      toolName: string;
-      callId: string;
-      status: 'succeeded' | 'failed' | 'clarify_required' | 'blocked' | 'skipped';
-      resultKind?: 'final' | 'intermediate' | 'empty' | 'failed' | 'clarify_required';
-      message?: string;
-    }
-  | {
-      type: 'fallback';
-      traceId: string;
-      mode: 'local' | 'web' | 'hybrid';
-      timestamp: string;
-      fallbackScope: 'planner' | 'tool' | 'legacy';
-      reasonCode: string;
-      failedTool?: string;
-      continues: boolean;
-      message?: string;
-    }
+  | AgentEvent
   | { type: 'message'; traceId: string; mode: 'local' | 'web' | 'hybrid'; content: string }
   | {
       type: 'sources';
@@ -322,6 +274,19 @@ function normalizeKernelStreamEvent(eventType: string, payload: unknown): Kernel
   }
 
   if (type === 'planning') {
+    const plannerSource =
+      typeof payload.plannerSource === 'string' && ['rule', 'llm', 'fallback'].includes(payload.plannerSource)
+        ? (payload.plannerSource as 'rule' | 'llm' | 'fallback')
+        : undefined;
+    const plannerSourceMode =
+      typeof payload.plannerSourceMode === 'string' &&
+      ['rule_only', 'shadow_compare', 'llm_primary_with_rule_fallback'].includes(payload.plannerSourceMode)
+        ? (payload.plannerSourceMode as 'rule_only' | 'shadow_compare' | 'llm_primary_with_rule_fallback')
+        : undefined;
+    const executionSource =
+      typeof payload.executionSource === 'string' && ['rule', 'llm', 'fallback'].includes(payload.executionSource)
+        ? (payload.executionSource as 'rule' | 'llm' | 'fallback')
+        : undefined;
     return {
       type: 'planning',
       traceId,
@@ -332,7 +297,10 @@ function normalizeKernelStreamEvent(eventType: string, payload: unknown): Kernel
       selectedPath: typeof payload.selectedPath === 'string' ? payload.selectedPath : undefined,
       selectedToolsOrSkills: Array.isArray(payload.selectedToolsOrSkills)
         ? payload.selectedToolsOrSkills.filter((item): item is string => typeof item === 'string' && item.trim().length > 0)
-        : undefined
+        : undefined,
+      plannerSource,
+      plannerSourceMode,
+      executionSource
     };
   }
 
