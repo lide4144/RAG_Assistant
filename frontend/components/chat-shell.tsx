@@ -18,7 +18,7 @@ import remarkGfm from 'remark-gfm';
 import remarkMath from 'remark-math';
 import rehypeKatex from 'rehype-katex';
 import rehypeHighlight from 'rehype-highlight';
-import type { ChatMessage, ChatMode, RuntimeOverview, SourceItem, ViewMode } from '../lib/types';
+import type { AgentEvent, ChatMessage, ChatMode, RuntimeOverview, SourceItem, ViewMode } from '../lib/types';
 import { fetchAdminJson } from '../lib/admin-http';
 import { resolveAdminUrl, resolveGatewayWebSocketUrl } from '../lib/deployment-endpoints';
 import { buildGraphSubgraph } from '../lib/graph';
@@ -26,56 +26,7 @@ import { mapConnectionStatus, mapRuntimeLevel } from '../lib/status-mapper';
 import { GraphSubgraphPanel } from './graph-subgraph';
 
 type WsPayload =
-  | {
-      type: 'planning';
-      traceId: string;
-      mode: ChatMode;
-      timestamp: string;
-      phase: 'planning';
-      decisionResult?: string;
-      selectedPath?: string;
-      selectedToolsOrSkills?: string[];
-    }
-  | {
-      type: 'toolSelection';
-      traceId: string;
-      mode: ChatMode;
-      timestamp: string;
-      toolName: string;
-      callId: string;
-      status: 'selected';
-    }
-  | {
-      type: 'toolRunning';
-      traceId: string;
-      mode: ChatMode;
-      timestamp: string;
-      toolName: string;
-      callId: string;
-      status: 'running';
-    }
-  | {
-      type: 'toolResult';
-      traceId: string;
-      mode: ChatMode;
-      timestamp: string;
-      toolName: string;
-      callId: string;
-      status: 'succeeded' | 'failed' | 'clarify_required' | 'blocked' | 'skipped';
-      resultKind?: 'final' | 'intermediate' | 'empty' | 'failed' | 'clarify_required';
-      message?: string;
-    }
-  | {
-      type: 'fallback';
-      traceId: string;
-      mode: ChatMode;
-      timestamp: string;
-      fallbackScope: 'planner' | 'tool' | 'legacy';
-      reasonCode: string;
-      failedTool?: string;
-      continues: boolean;
-      message?: string;
-    }
+  | AgentEvent
   | { type: 'message'; traceId: string; mode: ChatMode; content: string }
   | { type: 'sources'; traceId: string; mode: ChatMode; sources: SourceItem[] }
   | { type: 'messageEnd'; traceId: string; mode: ChatMode; usage?: { latencyMs: number } }
@@ -131,6 +82,7 @@ export function ChatShell() {
 
   const wsRef = useRef<WebSocket | null>(null);
   const pendingSourcesRef = useRef<Record<string, SourceItem[]>>({});
+  const pendingAgentEventsRef = useRef<Record<string, AgentEvent[]>>({});
   const messageBottomRef = useRef<HTMLDivElement | null>(null);
   const sessionIdRef = useRef(crypto.randomUUID());
 
@@ -158,6 +110,28 @@ export function ChatShell() {
     ws.onmessage = (event) => {
       const payload = JSON.parse(event.data) as WsPayload;
 
+      if (
+        payload.type === 'planning' ||
+        payload.type === 'toolSelection' ||
+        payload.type === 'toolRunning' ||
+        payload.type === 'toolResult' ||
+        payload.type === 'fallback'
+      ) {
+        const existingEvents = pendingAgentEventsRef.current[payload.traceId] ?? [];
+        pendingAgentEventsRef.current[payload.traceId] = [...existingEvents, payload];
+        setMessages((prev) =>
+          prev.map((item) =>
+            item.traceId === payload.traceId && item.role === 'assistant'
+              ? {
+                  ...item,
+                  agentEvents: [...(item.agentEvents ?? []), payload]
+                }
+              : item
+          )
+        );
+        return;
+      }
+
       if (payload.type === 'sources') {
         pendingSourcesRef.current[payload.traceId] = payload.sources;
         return;
@@ -174,7 +148,8 @@ export function ChatShell() {
               content: payload.content,
               mode: payload.mode,
               status: 'streaming',
-              sources: pendingSourcesRef.current[payload.traceId] ?? []
+              sources: pendingSourcesRef.current[payload.traceId] ?? [],
+              agentEvents: pendingAgentEventsRef.current[payload.traceId] ?? []
             };
             return [...prev, assistantMessage];
           }
@@ -199,13 +174,16 @@ export function ChatShell() {
               ? {
                   ...item,
                   status: 'done',
-                  sources: pendingSourcesRef.current[payload.traceId] ?? item.sources
+                  sources: pendingSourcesRef.current[payload.traceId] ?? item.sources,
+                  agentEvents: pendingAgentEventsRef.current[payload.traceId] ?? item.agentEvents
                 }
               : item
           )
         );
         setIsSending(false);
         setSendError('');
+        delete pendingSourcesRef.current[payload.traceId];
+        delete pendingAgentEventsRef.current[payload.traceId];
         return;
       }
 
@@ -219,11 +197,14 @@ export function ChatShell() {
             content: `请求失败：${payload.code} - ${payload.message}`,
             mode,
             status: 'error',
-            sources: []
+            sources: [],
+            agentEvents: pendingAgentEventsRef.current[payload.traceId] ?? []
           }
         ]);
         setSendError(payload.message);
         setIsSending(false);
+        delete pendingSourcesRef.current[payload.traceId];
+        delete pendingAgentEventsRef.current[payload.traceId];
       }
     };
 
@@ -661,6 +642,32 @@ export function ChatShell() {
                           </ReactMarkdown>
                         </div>
 
+                        {viewMode === 'developer' && message.role === 'assistant' && (message.agentEvents?.length ?? 0) > 0 ? (
+                          <div className="mt-4 rounded-[20px] border border-slate-200 bg-slate-50/90 p-3" data-testid={`agent-events-${message.id}`}>
+                            <div className="mb-2 flex items-center gap-2 text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">
+                              <Bot className="h-3.5 w-3.5" />
+                              Agent 事件
+                            </div>
+                            <div className="space-y-2">
+                              {message.agentEvents?.map((agentEvent, index) => (
+                                <div
+                                  key={`${message.id}-agent-${index}`}
+                                  className={`rounded-2xl border px-3 py-2 text-xs ${
+                                    agentEvent.type === 'fallback'
+                                      ? 'border-amber-200 bg-amber-50 text-amber-900'
+                                      : agentEvent.type === 'planning'
+                                        ? 'border-sky-200 bg-sky-50 text-sky-900'
+                                        : 'border-slate-200 bg-white text-slate-700'
+                                  }`}
+                                >
+                                  <p className="font-medium">{formatAgentEventTitle(agentEvent)}</p>
+                                  <p className="mt-1 leading-5">{formatAgentEventDetail(agentEvent)}</p>
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        ) : null}
+
                         {message.sources && message.sources.length > 0 ? (
                           <div className="mt-4 rounded-[20px] border border-slate-200 bg-slate-50/80 p-3">
                             <div className="mb-2 flex items-center gap-2 text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">
@@ -871,6 +878,38 @@ function formatRelativeTime(raw: string) {
     return raw;
   }
   return date.toLocaleString('zh-CN', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+}
+
+function formatAgentEventTitle(event: AgentEvent) {
+  if (event.type === 'planning') {
+    return `Planning · ${event.executionSource || event.plannerSource || 'unknown'}`;
+  }
+  if (event.type === 'toolSelection') {
+    return `Tool selected · ${event.toolName}`;
+  }
+  if (event.type === 'toolRunning') {
+    return `Tool running · ${event.toolName}`;
+  }
+  if (event.type === 'toolResult') {
+    return `Tool result · ${event.toolName} · ${event.status}`;
+  }
+  return `Fallback · ${event.fallbackScope}`;
+}
+
+function formatAgentEventDetail(event: AgentEvent) {
+  if (event.type === 'planning') {
+    const tools = (event.selectedToolsOrSkills ?? []).join(', ') || 'none';
+    return `decision=${event.decisionResult || '-'} path=${event.selectedPath || '-'} sourceMode=${event.plannerSourceMode || '-'} tools=${tools}`;
+  }
+  if (event.type === 'toolSelection' || event.type === 'toolRunning') {
+    return `callId=${event.callId}`;
+  }
+  if (event.type === 'toolResult') {
+    return event.message ? `${event.resultKind || event.status} · ${event.message}` : `${event.resultKind || event.status}`;
+  }
+  const toolPart = event.failedTool ? ` failedTool=${event.failedTool}` : '';
+  const messagePart = event.message ? ` · ${event.message}` : '';
+  return `reason=${event.reasonCode}${toolPart}${messagePart}`;
 }
 
 function toSourceLabel(type: SourceItem['source_type']) {

@@ -1,3 +1,6 @@
+import type { AgentEvent } from './agent-events';
+export type { AgentEvent } from './agent-events';
+
 export type ChatMode = 'local' | 'web' | 'hybrid';
 export type ViewMode = 'user' | 'developer';
 
@@ -16,6 +19,7 @@ export interface ChatMessage {
   role: 'user' | 'assistant';
   content: string;
   sources?: SourceItem[];
+  agentEvents?: AgentEvent[];
   graphExpand?: boolean;
   status?: 'streaming' | 'done' | 'error';
   mode?: ChatMode;

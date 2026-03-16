@@ -1,10 +1,14 @@
 from __future__ import annotations
 
+import json
+import os
 import unittest
+from types import SimpleNamespace
 from unittest.mock import patch
 
 from app.capability_planner import PlannerResult
 from app.kernel_api import KernelChatRequest, KernelChatResponse, SourceItem
+from app.llm_client import LLMCallResult
 from app.planner_shell import run_planner_shell
 
 
@@ -396,6 +400,585 @@ class PlannerShellTests(unittest.TestCase):
         self.assertEqual(calls, ["web_delegate_passthrough"])
         self.assertEqual(result["observation"]["selected_path"], "web_delegate_passthrough")
         self.assertEqual(result["observation"]["planner"]["decision_result"], "delegate_web")
+
+    def test_shadow_compare_records_rule_and_llm_decisions_without_changing_primary_answer(self) -> None:
+        llm_decision = {
+            "decision_version": "planner-policy-v1",
+            "planner_source": "llm",
+            "planner_used": True,
+            "planner_confidence": 0.92,
+            "user_goal": "总结这几篇论文的差异",
+            "standalone_query": "总结这几篇论文的差异",
+            "is_new_topic": False,
+            "should_clear_pending_clarify": False,
+            "relation_to_previous": "same_topic_or_no_pending",
+            "primary_capability": "fact_qa",
+            "strictness": "strict_fact",
+            "decision_result": "local_execute",
+            "knowledge_route": "local",
+            "research_mode": "none",
+            "requires_clarification": False,
+            "clarify_question": None,
+            "selected_tools_or_skills": ["fact_qa"],
+            "action_plan": [{"action": "fact_qa", "query": "总结这几篇论文的差异"}],
+            "fallback": {"type": None, "reason": None},
+        }
+        with patch.dict(os.environ, {"PLANNER_SOURCE_MODE": "shadow_compare", "PLANNER_LLM_DECISION_JSON": json.dumps(llm_decision)}, clear=False):
+            result = run_planner_shell(
+                KernelChatRequest(sessionId="s1", mode="local", query="总结这几篇论文的差异", history=[], traceId="trace-shadow"),
+                fact_qa_executor=lambda payload, **kwargs: _response(),
+                compat_executor=lambda payload, **kwargs: _response("compat"),
+                legacy_executor=lambda payload, **kwargs: _response("legacy"),
+            )
+
+        self.assertEqual(result["response"].traceId, "compat")
+        self.assertEqual(result["observation"]["planner_source_mode"], "shadow_compare")
+        self.assertEqual(result["observation"]["planner_execution_source"], "rule")
+        self.assertIsNotNone(result["observation"]["shadow_compare"])
+        self.assertEqual(result["observation"]["shadow_compare"]["actual_execution_source"], "rule")
+        diff_fields = [row["field"] for row in result["observation"]["shadow_compare"]["diff"]]
+        self.assertIn("primary_capability", diff_fields)
+
+    def test_shadow_compare_calls_real_llm_planner_path_when_override_absent(self) -> None:
+        llm_payload = {
+            "decision_version": "planner-policy-v1",
+            "planner_source": "llm",
+            "planner_used": True,
+            "planner_confidence": 0.91,
+            "user_goal": "总结这几篇论文的差异",
+            "standalone_query": "总结这几篇论文的差异",
+            "is_new_topic": False,
+            "should_clear_pending_clarify": False,
+            "relation_to_previous": "same_topic_or_no_pending",
+            "primary_capability": "cross_doc_summary",
+            "strictness": "summary",
+            "decision_result": "local_execute",
+            "knowledge_route": "local",
+            "research_mode": "none",
+            "requires_clarification": False,
+            "clarify_question": None,
+            "selected_tools_or_skills": ["cross_doc_summary"],
+            "action_plan": [{"action": "cross_doc_summary", "query": "总结这几篇论文的差异"}],
+            "fallback": {"type": None, "reason": None},
+        }
+        planner_cfg = SimpleNamespace(
+            planner_provider="siliconflow",
+            planner_model="planner-model",
+            planner_api_base="https://planner.example.com",
+            planner_api_key_env="SILICONFLOW_API_KEY",
+            planner_use_llm=True,
+            planner_timeout_ms=6000,
+            llm_max_retries=0,
+        )
+
+        with (
+            patch.dict(
+                os.environ,
+                {"PLANNER_SOURCE_MODE": "shadow_compare", "PLANNER_LLM_DECISION_JSON": "", "SILICONFLOW_API_KEY": "test-key"},
+                clear=False,
+            ),
+            patch("app.planner_runtime.load_and_validate_config", return_value=(planner_cfg, [])),
+            patch(
+                "app.planner_runtime.call_chat_completion",
+                return_value=LLMCallResult(
+                    ok=True,
+                    content=json.dumps(llm_payload, ensure_ascii=False),
+                    reason=None,
+                    attempts_used=1,
+                    max_retries=0,
+                    elapsed_ms=12,
+                    provider_used="siliconflow",
+                    model_used="planner-model",
+                ),
+            ) as mocked_llm,
+        ):
+            result = run_planner_shell(
+                KernelChatRequest(sessionId="s1", mode="local", query="总结这几篇论文的差异", history=[], traceId="trace-shadow-real-llm"),
+                fact_qa_executor=lambda payload, **kwargs: _response(),
+                compat_executor=lambda payload, **kwargs: _response("compat"),
+                legacy_executor=lambda payload, **kwargs: _response("legacy"),
+            )
+
+        self.assertEqual(mocked_llm.call_count, 1)
+        self.assertEqual(result["observation"]["planner_source_mode"], "shadow_compare")
+        self.assertEqual(result["observation"]["planner_llm_diagnostics"]["status"], "ok")
+        self.assertEqual(result["observation"]["planner_candidates"]["llm"]["planner_source"], "llm")
+        self.assertEqual(result["observation"]["shadow_compare"]["llm_decision"]["primary_capability"], "cross_doc_summary")
+
+    def test_llm_planner_uses_request_config_path(self) -> None:
+        llm_payload = {
+            "decision_version": "planner-policy-v1",
+            "planner_source": "llm",
+            "planner_used": True,
+            "planner_confidence": 0.91,
+            "user_goal": "总结这几篇论文的差异",
+            "standalone_query": "总结这几篇论文的差异",
+            "is_new_topic": False,
+            "should_clear_pending_clarify": False,
+            "relation_to_previous": "same_topic_or_no_pending",
+            "primary_capability": "cross_doc_summary",
+            "strictness": "summary",
+            "decision_result": "local_execute",
+            "knowledge_route": "local",
+            "research_mode": "none",
+            "requires_clarification": False,
+            "clarify_question": None,
+            "selected_tools_or_skills": ["cross_doc_summary"],
+            "action_plan": [{"action": "cross_doc_summary", "query": "总结这几篇论文的差异"}],
+            "fallback": {"type": None, "reason": None},
+        }
+        planner_cfg = SimpleNamespace(
+            planner_provider="siliconflow",
+            planner_model="planner-model",
+            planner_api_base="https://planner.example.com",
+            planner_api_key_env="SILICONFLOW_API_KEY",
+            planner_use_llm=True,
+            planner_timeout_ms=6000,
+            llm_max_retries=0,
+        )
+
+        with (
+            patch.dict(
+                os.environ,
+                {"PLANNER_SOURCE_MODE": "shadow_compare", "PLANNER_LLM_DECISION_JSON": "", "SILICONFLOW_API_KEY": "test-key"},
+                clear=False,
+            ),
+            patch("app.planner_runtime.load_and_validate_config", return_value=(planner_cfg, [])) as mocked_load_config,
+            patch(
+                "app.planner_runtime.call_chat_completion",
+                return_value=LLMCallResult(
+                    ok=True,
+                    content=json.dumps(llm_payload, ensure_ascii=False),
+                    reason=None,
+                    attempts_used=1,
+                    max_retries=0,
+                    elapsed_ms=12,
+                    provider_used="siliconflow",
+                    model_used="planner-model",
+                ),
+            ),
+        ):
+            _ = run_planner_shell(
+                KernelChatRequest(
+                    sessionId="s1",
+                    mode="local",
+                    query="总结这几篇论文的差异",
+                    history=[],
+                    traceId="trace-shadow-config",
+                    configPath="/tmp/runtime-config.yaml",
+                ),
+                fact_qa_executor=lambda payload, **kwargs: _response(),
+                compat_executor=lambda payload, **kwargs: _response("compat"),
+                legacy_executor=lambda payload, **kwargs: _response("legacy"),
+            )
+
+        self.assertEqual(mocked_load_config.call_count, 2)
+        self.assertEqual(mocked_load_config.call_args_list[0].args, ("/tmp/runtime-config.yaml",))
+        self.assertEqual(mocked_load_config.call_args_list[1].args, ("/tmp/runtime-config.yaml",))
+
+    def test_llm_primary_mode_accepts_valid_llm_decision(self) -> None:
+        llm_decision = {
+            "decision_version": "planner-policy-v1",
+            "planner_source": "llm",
+            "planner_used": True,
+            "planner_confidence": 0.95,
+            "user_goal": "这篇论文的作者是谁",
+            "standalone_query": "这篇论文的作者是谁",
+            "is_new_topic": False,
+            "should_clear_pending_clarify": False,
+            "relation_to_previous": "same_topic_or_no_pending",
+            "primary_capability": "fact_qa",
+            "strictness": "strict_fact",
+            "decision_result": "local_execute",
+            "knowledge_route": "local",
+            "research_mode": "none",
+            "requires_clarification": False,
+            "clarify_question": None,
+            "selected_tools_or_skills": ["fact_qa"],
+            "action_plan": [{"action": "fact_qa", "query": "这篇论文的作者是谁"}],
+            "fallback": {"type": None, "reason": None},
+        }
+        calls: list[str] = []
+
+        def fact_executor(payload, **kwargs):
+            _ = payload
+            calls.append(kwargs["selected_path"])
+            return _response("llm-primary")
+
+        with patch.dict(os.environ, {"PLANNER_SOURCE_MODE": "llm_primary_with_rule_fallback", "PLANNER_LLM_DECISION_JSON": json.dumps(llm_decision)}, clear=False):
+            result = run_planner_shell(
+                KernelChatRequest(sessionId="s1", mode="local", query="这篇论文的作者是谁", history=[], traceId="trace-llm-primary"),
+                fact_qa_executor=fact_executor,
+                compat_executor=lambda payload, **kwargs: _response("compat"),
+                legacy_executor=lambda payload, **kwargs: _response("legacy"),
+            )
+
+        self.assertEqual(calls, ["fact_qa"])
+        self.assertEqual(result["observation"]["planner_source_mode"], "llm_primary_with_rule_fallback")
+        self.assertEqual(result["observation"]["planner_execution_source"], "llm")
+        self.assertEqual(result["observation"]["planner"]["planner_source"], "llm")
+        self.assertEqual(result["observation"]["planner_validation"]["status"], "accept")
+
+    def test_llm_primary_mode_rejects_invalid_llm_decision_and_falls_back_to_rule(self) -> None:
+        invalid_llm_decision = {
+            "decision_version": "planner-policy-v1",
+            "planner_source": "llm",
+            "planner_used": True,
+            "planner_confidence": 0.95,
+            "user_goal": "这篇论文的作者是谁",
+            "standalone_query": "这篇论文的作者是谁",
+            "is_new_topic": False,
+            "should_clear_pending_clarify": False,
+            "relation_to_previous": "same_topic_or_no_pending",
+            "primary_capability": "fact_qa",
+            "strictness": "strict_fact",
+            "decision_result": "local_execute",
+            "knowledge_route": "local",
+            "research_mode": "none",
+            "requires_clarification": False,
+            "clarify_question": None,
+            "selected_tools_or_skills": ["unknown_tool"],
+            "action_plan": [{"action": "unknown_tool", "query": "这篇论文的作者是谁"}],
+            "fallback": {"type": None, "reason": None},
+        }
+
+        with patch.dict(os.environ, {"PLANNER_SOURCE_MODE": "llm_primary_with_rule_fallback", "PLANNER_LLM_DECISION_JSON": json.dumps(invalid_llm_decision)}, clear=False):
+            result = run_planner_shell(
+                KernelChatRequest(sessionId="s1", mode="local", query="这篇论文的作者是谁", history=[], traceId="trace-llm-fallback"),
+                fact_qa_executor=lambda payload, **kwargs: _response("rule-fallback"),
+                compat_executor=lambda payload, **kwargs: _response("compat"),
+                legacy_executor=lambda payload, **kwargs: _response("legacy"),
+            )
+
+        self.assertEqual(result["response"].traceId, "rule-fallback")
+        self.assertEqual(result["observation"]["planner_source_mode"], "llm_primary_with_rule_fallback")
+        self.assertEqual(result["observation"]["planner_execution_source"], "rule")
+        self.assertEqual(result["observation"]["planner_validation"]["status"], "reject")
+        self.assertIn("unsupported_tool:unknown_tool", result["observation"]["planner_validation"]["reason_codes"])
+
+    def test_llm_primary_mode_rejects_invalid_llm_schema_without_legacy_fallback(self) -> None:
+        invalid_llm_decision = {
+            "decision_version": "planner-policy-v1",
+            "planner_source": "llm",
+            "planner_used": True,
+            "planner_confidence": "high",
+            "user_goal": "这篇论文的作者是谁",
+            "standalone_query": "这篇论文的作者是谁",
+            "primary_capability": "fact_qa",
+            "strictness": "strict_fact",
+            "decision_result": "local_execute",
+            "knowledge_route": "local",
+            "research_mode": "none",
+            "requires_clarification": False,
+            "selected_tools_or_skills": ["fact_qa"],
+            "fallback": "none",
+            "action_plan": [{"action": "fact_qa", "query": "这篇论文的作者是谁"}],
+        }
+        calls: list[tuple[str, bool]] = []
+        planner_cfg = SimpleNamespace(
+            planner_provider="siliconflow",
+            planner_model="planner-model",
+            planner_api_base="https://planner.example.com",
+            planner_api_key_env="SILICONFLOW_API_KEY",
+            planner_use_llm=True,
+            planner_timeout_ms=6000,
+            llm_max_retries=0,
+        )
+
+        def fact_executor(payload, **kwargs):
+            _ = payload
+            calls.append((kwargs["selected_path"], kwargs["runtime_fallback"]))
+            return _response("schema-fallback")
+
+        with (
+            patch.dict(
+                os.environ,
+                {"PLANNER_SOURCE_MODE": "llm_primary_with_rule_fallback", "PLANNER_LLM_DECISION_JSON": "", "SILICONFLOW_API_KEY": "test-key"},
+                clear=False,
+            ),
+            patch("app.planner_runtime.load_and_validate_config", return_value=(planner_cfg, [])),
+            patch(
+                "app.planner_runtime.call_chat_completion",
+                return_value=LLMCallResult(
+                    ok=True,
+                    content=json.dumps(invalid_llm_decision, ensure_ascii=False),
+                    reason=None,
+                    attempts_used=1,
+                    max_retries=0,
+                    elapsed_ms=12,
+                    provider_used="siliconflow",
+                    model_used="planner-model",
+                ),
+            ),
+        ):
+            result = run_planner_shell(
+                KernelChatRequest(sessionId="s1", mode="local", query="这篇论文的作者是谁", history=[], traceId="trace-llm-schema"),
+                fact_qa_executor=fact_executor,
+                compat_executor=lambda payload, **kwargs: _response("compat"),
+                legacy_executor=lambda payload, **kwargs: _response("legacy"),
+            )
+
+        self.assertEqual(calls, [("fact_qa", False)])
+        self.assertEqual(result["response"].traceId, "schema-fallback")
+        self.assertEqual(result["observation"]["selected_path"], "fact_qa")
+        self.assertFalse(result["observation"]["planner_runtime_fallback"])
+        self.assertEqual(result["observation"]["planner_execution_source"], "rule")
+        self.assertEqual(result["observation"]["planner_validation"]["status"], "reject")
+        self.assertIn("invalid_type:planner_confidence", result["observation"]["planner_validation"]["reason_codes"])
+        self.assertIn("invalid_type:fallback", result["observation"]["planner_validation"]["reason_codes"])
+
+    def test_shadow_compare_respects_planner_use_llm_flag_even_when_api_key_exists(self) -> None:
+        planner_cfg = SimpleNamespace(
+            planner_provider="siliconflow",
+            planner_model="planner-model",
+            planner_api_base="https://planner.example.com",
+            planner_api_key_env="SILICONFLOW_API_KEY",
+            planner_use_llm=False,
+            planner_timeout_ms=6000,
+            llm_max_retries=0,
+        )
+
+        with (
+            patch.dict(
+                os.environ,
+                {"PLANNER_SOURCE_MODE": "shadow_compare", "PLANNER_LLM_DECISION_JSON": "", "SILICONFLOW_API_KEY": "test-key"},
+                clear=False,
+            ),
+            patch("app.planner_runtime.load_and_validate_config", return_value=(planner_cfg, [])),
+            patch("app.planner_runtime.call_chat_completion") as mocked_llm,
+        ):
+            result = run_planner_shell(
+                KernelChatRequest(sessionId="s1", mode="local", query="总结这几篇论文的差异", history=[], traceId="trace-llm-disabled"),
+                fact_qa_executor=lambda payload, **kwargs: _response(),
+                compat_executor=lambda payload, **kwargs: _response("compat"),
+                legacy_executor=lambda payload, **kwargs: _response("legacy"),
+            )
+
+        mocked_llm.assert_not_called()
+        self.assertEqual(result["observation"]["planner_source_mode"], "shadow_compare")
+        self.assertEqual(result["observation"]["planner_execution_source"], "rule")
+        self.assertEqual(result["observation"]["planner_llm_diagnostics"]["reason"], "planner_llm_disabled")
+        self.assertEqual(result["observation"]["planner_validation"]["status"], "reject")
+        self.assertIn("planner_llm_disabled", result["observation"]["planner_validation"]["reason_codes"])
+
+    def test_llm_primary_mode_rejects_raw_schema_before_normalization(self) -> None:
+        invalid_llm_decision = {
+            "decision_version": "planner-policy-v1",
+            "planner_source": "llm",
+            "planner_used": True,
+            "planner_confidence": 0.9,
+            "user_goal": "这篇论文的作者是谁",
+            "standalone_query": "这篇论文的作者是谁",
+            "primary_capability": "fact_qa",
+            "strictness": "strict_fact",
+            "decision_result": "local_execute",
+            "knowledge_route": "local",
+            "research_mode": "none",
+            "requires_clarification": False,
+            "selected_tools_or_skills": "fact_qa",
+            "fallback": {"type": None, "reason": None},
+            "action_plan": ["bad-step", {"action": "fact_qa", "query": "这篇论文的作者是谁"}],
+        }
+        planner_cfg = SimpleNamespace(
+            planner_provider="siliconflow",
+            planner_model="planner-model",
+            planner_api_base="https://planner.example.com",
+            planner_api_key_env="SILICONFLOW_API_KEY",
+            planner_use_llm=True,
+            planner_timeout_ms=6000,
+            llm_max_retries=0,
+        )
+
+        with (
+            patch.dict(
+                os.environ,
+                {"PLANNER_SOURCE_MODE": "llm_primary_with_rule_fallback", "PLANNER_LLM_DECISION_JSON": "", "SILICONFLOW_API_KEY": "test-key"},
+                clear=False,
+            ),
+            patch("app.planner_runtime.load_and_validate_config", return_value=(planner_cfg, [])),
+            patch(
+                "app.planner_runtime.call_chat_completion",
+                return_value=LLMCallResult(
+                    ok=True,
+                    content=json.dumps(invalid_llm_decision, ensure_ascii=False),
+                    reason=None,
+                    attempts_used=1,
+                    max_retries=0,
+                    elapsed_ms=12,
+                    provider_used="siliconflow",
+                    model_used="planner-model",
+                ),
+            ),
+        ):
+            result = run_planner_shell(
+                KernelChatRequest(sessionId="s1", mode="local", query="这篇论文的作者是谁", history=[], traceId="trace-llm-raw-schema"),
+                fact_qa_executor=lambda payload, **kwargs: _response("raw-schema-fallback"),
+                compat_executor=lambda payload, **kwargs: _response("compat"),
+                legacy_executor=lambda payload, **kwargs: _response("legacy"),
+            )
+
+        self.assertEqual(result["response"].traceId, "raw-schema-fallback")
+        self.assertEqual(result["observation"]["planner_validation"]["status"], "reject")
+        self.assertIn("invalid_type:selected_tools_or_skills", result["observation"]["planner_validation"]["reason_codes"])
+        self.assertIn("invalid_type:action_plan_step", result["observation"]["planner_validation"]["reason_codes"])
+        self.assertEqual(result["observation"]["planner_candidates"]["llm"]["selected_tools_or_skills"], "fact_qa")
+        self.assertEqual(result["observation"]["planner_candidates"]["llm"]["action_plan"][0], "bad-step")
+
+    def test_runtime_uses_configured_planner_limits_for_policy_flags_and_rule_planner(self) -> None:
+        planner_cfg = SimpleNamespace(
+            planner_max_steps=5,
+            planner_max_papers=42,
+            planner_summary_min_papers=7,
+        )
+        planner_result = self._planner_result()
+
+        with (
+            patch("app.planner_runtime.load_and_validate_config", return_value=(planner_cfg, [])),
+            patch("app.planner_runtime.build_rule_based_plan", return_value=planner_result) as mocked_planner,
+        ):
+            result = run_planner_shell(
+                KernelChatRequest(sessionId="s1", mode="local", query="这篇论文作者是谁", history=[], traceId="trace-configured-limits"),
+                fact_qa_executor=lambda payload, **kwargs: _response(),
+                compat_executor=lambda payload, **kwargs: _response("compat"),
+                legacy_executor=lambda payload, **kwargs: _response("legacy"),
+            )
+
+        planner_kwargs = mocked_planner.call_args.kwargs
+        self.assertEqual(planner_kwargs["max_steps"], 5)
+        self.assertEqual(planner_kwargs["catalog_limit"], 42)
+        policy_flags = result["observation"]["planner_input_context"]["policy_flags"]
+        self.assertEqual(policy_flags["max_steps"], 5)
+        self.assertEqual(policy_flags["catalog_limit"], 42)
+        self.assertEqual(policy_flags["summary_min_papers"], 7)
+
+    def test_llm_primary_mode_rejects_string_boolean_fields(self) -> None:
+        invalid_llm_decision = {
+            "decision_version": "planner-policy-v1",
+            "planner_source": "llm",
+            "planner_used": "yes",
+            "planner_confidence": 0.9,
+            "user_goal": "请先确认范围",
+            "standalone_query": "请先确认范围",
+            "is_new_topic": "false",
+            "should_clear_pending_clarify": "false",
+            "primary_capability": "fact_qa",
+            "strictness": "strict_fact",
+            "decision_result": "clarify",
+            "knowledge_route": "local",
+            "research_mode": "none",
+            "requires_clarification": "false",
+            "clarify_question": "请补充具体论文。",
+            "selected_tools_or_skills": [],
+            "fallback": {"type": None, "reason": None},
+            "action_plan": [],
+        }
+        planner_cfg = SimpleNamespace(
+            planner_provider="siliconflow",
+            planner_model="planner-model",
+            planner_api_base="https://planner.example.com",
+            planner_api_key_env="SILICONFLOW_API_KEY",
+            planner_use_llm=True,
+            planner_timeout_ms=6000,
+            llm_max_retries=0,
+        )
+
+        with (
+            patch.dict(
+                os.environ,
+                {"PLANNER_SOURCE_MODE": "llm_primary_with_rule_fallback", "PLANNER_LLM_DECISION_JSON": "", "SILICONFLOW_API_KEY": "test-key"},
+                clear=False,
+            ),
+            patch("app.planner_runtime.load_and_validate_config", return_value=(planner_cfg, [])),
+            patch(
+                "app.planner_runtime.call_chat_completion",
+                return_value=LLMCallResult(
+                    ok=True,
+                    content=json.dumps(invalid_llm_decision, ensure_ascii=False),
+                    reason=None,
+                    attempts_used=1,
+                    max_retries=0,
+                    elapsed_ms=12,
+                    provider_used="siliconflow",
+                    model_used="planner-model",
+                ),
+            ),
+        ):
+            result = run_planner_shell(
+                KernelChatRequest(sessionId="s1", mode="local", query="请先确认范围", history=[], traceId="trace-bool-schema"),
+                fact_qa_executor=lambda payload, **kwargs: _response("bool-schema-fallback"),
+                compat_executor=lambda payload, **kwargs: _response("compat"),
+                legacy_executor=lambda payload, **kwargs: _response("legacy"),
+            )
+
+        self.assertEqual(result["response"].traceId, "bool-schema-fallback")
+        self.assertEqual(result["observation"]["planner_validation"]["status"], "reject")
+        self.assertIn("invalid_type:planner_used", result["observation"]["planner_validation"]["reason_codes"])
+        self.assertIn("invalid_type:is_new_topic", result["observation"]["planner_validation"]["reason_codes"])
+        self.assertIn("invalid_type:should_clear_pending_clarify", result["observation"]["planner_validation"]["reason_codes"])
+        self.assertIn("invalid_type:requires_clarification", result["observation"]["planner_validation"]["reason_codes"])
+
+    def test_llm_primary_mode_rejects_missing_declared_contract_fields(self) -> None:
+        invalid_llm_decision = {
+            "decision_version": "planner-policy-v1",
+            "planner_source": "llm",
+            "planner_used": True,
+            "planner_confidence": 0.9,
+            "user_goal": "这篇论文的作者是谁",
+            "standalone_query": "这篇论文的作者是谁",
+            "primary_capability": "fact_qa",
+            "strictness": "strict_fact",
+            "decision_result": "local_execute",
+            "knowledge_route": "local",
+            "research_mode": "none",
+            "requires_clarification": False,
+            "selected_tools_or_skills": ["fact_qa"],
+            "fallback": {"type": None, "reason": None},
+            "action_plan": [{"action": "fact_qa", "query": "这篇论文的作者是谁"}],
+        }
+        planner_cfg = SimpleNamespace(
+            planner_provider="siliconflow",
+            planner_model="planner-model",
+            planner_api_base="https://planner.example.com",
+            planner_api_key_env="SILICONFLOW_API_KEY",
+            planner_use_llm=True,
+            planner_timeout_ms=6000,
+            llm_max_retries=0,
+        )
+
+        with (
+            patch.dict(
+                os.environ,
+                {"PLANNER_SOURCE_MODE": "llm_primary_with_rule_fallback", "PLANNER_LLM_DECISION_JSON": "", "SILICONFLOW_API_KEY": "test-key"},
+                clear=False,
+            ),
+            patch("app.planner_runtime.load_and_validate_config", return_value=(planner_cfg, [])),
+            patch(
+                "app.planner_runtime.call_chat_completion",
+                return_value=LLMCallResult(
+                    ok=True,
+                    content=json.dumps(invalid_llm_decision, ensure_ascii=False),
+                    reason=None,
+                    attempts_used=1,
+                    max_retries=0,
+                    elapsed_ms=12,
+                    provider_used="siliconflow",
+                    model_used="planner-model",
+                ),
+            ),
+        ):
+            result = run_planner_shell(
+                KernelChatRequest(sessionId="s1", mode="local", query="这篇论文的作者是谁", history=[], traceId="trace-missing-contract-fields"),
+                fact_qa_executor=lambda payload, **kwargs: _response("missing-contract-fallback"),
+                compat_executor=lambda payload, **kwargs: _response("compat"),
+                legacy_executor=lambda payload, **kwargs: _response("legacy"),
+            )
+
+        self.assertEqual(result["response"].traceId, "missing-contract-fallback")
+        self.assertEqual(result["observation"]["planner_validation"]["status"], "reject")
+        self.assertIn("missing_field:is_new_topic", result["observation"]["planner_validation"]["reason_codes"])
+        self.assertIn("missing_field:should_clear_pending_clarify", result["observation"]["planner_validation"]["reason_codes"])
+        self.assertIn("missing_field:relation_to_previous", result["observation"]["planner_validation"]["reason_codes"])
+        self.assertIn("missing_field:clarify_question", result["observation"]["planner_validation"]["reason_codes"])
 
 
 if __name__ == "__main__":

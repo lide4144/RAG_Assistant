@@ -8,6 +8,7 @@ import time
 import tempfile
 from pathlib import Path
 
+from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
 from app.kernel_api import (
@@ -15,6 +16,7 @@ from app.kernel_api import (
     _TASK_CANCEL_EVENTS,
     _TASKS,
     _TASKS_LOCK,
+    _build_qa_args,
     _build_marker_artifacts,
     cancel_task,
     KernelChatRequest,
@@ -33,6 +35,8 @@ from app.kernel_api import (
     qa_stream,
     planner_qa,
     planner_qa_stream,
+    PlannerShadowReviewRequest,
+    save_planner_shadow_review,
     start_graph_build_task,
     _start_library_import_task,
     GraphBuildTaskStartRequest,
@@ -109,6 +113,20 @@ class KernelApiContractTests(unittest.TestCase):
         self.assertEqual(response.answer, 'hello [1]')
         self.assertEqual(len(response.sources), 1)
         self.assertIsInstance(response.sources[0], SourceItem)
+
+    def test_build_qa_args_uses_request_config_path(self) -> None:
+        payload = KernelChatRequest(
+            sessionId="s1",
+            mode="local",
+            query="q1",
+            history=[],
+            traceId="trace-config",
+            configPath="/tmp/runtime-config.yaml",
+        )
+
+        args = _build_qa_args(payload, run_id="run-config", on_stream_delta=None)
+
+        self.assertEqual(args.config, "/tmp/runtime-config.yaml")
 
     def test_resolve_run_dir_prefers_run_id_when_run_dir_missing(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -190,6 +208,18 @@ class KernelApiContractTests(unittest.TestCase):
 
         self.assertTrue((response.media_type or "").startswith("text/event-stream"))
         self.assertIsNotNone(response.body_iterator)
+
+    def test_shadow_review_endpoint_rejects_invalid_trace_id_with_400(self) -> None:
+        with self.assertRaises(HTTPException) as exc:
+            save_planner_shadow_review(
+                PlannerShadowReviewRequest(
+                    trace_id="!!!",
+                    label="tie",
+                )
+            )
+
+        self.assertEqual(exc.exception.status_code, 400)
+        self.assertEqual(exc.exception.detail["code"], "INVALID_SHADOW_REVIEW")
 
     def test_runtime_tool_fallback_derives_from_short_circuit_trace(self) -> None:
         tool_fallback, reason, failed_tool = _derive_runtime_tool_fallback(

@@ -8,13 +8,37 @@ from pathlib import Path
 from unittest.mock import patch
 
 from app import capability_planner
-from app.capability_planner import build_rule_based_plan, execute_catalog_lookup
+from app.capability_planner import (
+    PLANNER_SOURCE_LLM,
+    build_rule_based_plan,
+    execute_catalog_lookup,
+    parse_planner_result,
+    serialize_planner_result,
+)
 from app.config import PipelineConfig
 from app.qa import run_qa
 from app.retrieve import RetrievalCandidate
 
 
 class CapabilityPlannerTests(unittest.TestCase):
+    def test_planner_result_round_trip_preserves_decision_schema(self) -> None:
+        result = build_rule_based_plan(
+            user_input="总结这几篇论文的差异",
+            standalone_query="总结这几篇论文的差异",
+            dialog_state="normal",
+            history_topic_anchors=[],
+            pending_clarify=None,
+            max_steps=3,
+            catalog_limit=20,
+        )
+        serialized = serialize_planner_result(result)
+        serialized["planner_source"] = PLANNER_SOURCE_LLM
+        parsed = parse_planner_result(serialized, default_query="总结这几篇论文的差异")
+        self.assertEqual(parsed.primary_capability, result.primary_capability)
+        self.assertEqual(parsed.decision_result, result.decision_result)
+        self.assertEqual(parsed.action_plan, result.action_plan)
+        self.assertEqual(parsed.planner_source, PLANNER_SOURCE_LLM)
+
     def test_rule_planner_builds_catalog_then_summary_plan(self) -> None:
         result = build_rule_based_plan(
             user_input="列出我昨天上传的 3 篇大模型论文，并用表格对比一下它们的方法差异",

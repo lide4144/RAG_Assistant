@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from dataclasses import asdict
+import json
+import os
 from typing import Any, Callable, Literal, Protocol, TypedDict
 
 from app.agent_tools import (
@@ -15,12 +17,19 @@ from app.agent_tools import (
 from app.capability_planner import (
     PlannerResult,
     build_planner_fallback,
+    parse_planner_result,
     build_rule_based_plan,
     compose_catalog_answer,
     execute_catalog_lookup,
     normalize_planner_source,
     paper_assistant_clarification,
+    serialize_planner_result,
+    PLANNER_SOURCE_LLM,
+    PLANNER_SOURCE_RULE,
 )
+from app.config import load_and_validate_config
+from app.llm_client import call_chat_completion
+from app.paths import CONFIGS_DIR
 from app.session_state import load_planner_conversation_state
 
 try:  # pragma: no cover - exercised indirectly when langgraph is installed
@@ -62,6 +71,35 @@ RUNTIME_ENVELOPE_FIELDS = (
     "runtime",
 )
 MAX_RUNTIME_TOOL_STEPS = 3
+PLANNER_SOURCE_MODE_ENV = "PLANNER_SOURCE_MODE"
+DEFAULT_PLANNER_SOURCE_MODE = "rule_only"
+PLANNER_SOURCE_MODES = {
+    "rule_only",
+    "shadow_compare",
+    "llm_primary_with_rule_fallback",
+}
+PLANNER_VALIDATION_STATUSES = {"accept", "accept_with_warnings", "reject"}
+PLANNER_DECISION_ENUMS = {
+    "decision_result": {"clarify", "local_execute", "delegate_web", "delegate_research_assistant", "legacy_fallback"},
+    "strictness": {"strict_fact", "summary", "catalog"},
+    "knowledge_route": {"local", "web"},
+    "research_mode": {"none", "paper_assistant"},
+}
+SHADOW_DIFF_FIELDS = (
+    "primary_capability",
+    "strictness",
+    "decision_result",
+    "requires_clarification",
+    "selected_tools_or_skills",
+    "action_plan",
+)
+PLANNER_LLM_SYSTEM_PROMPT = (
+    "You are a planner that routes a RAG assistant request. "
+    "Return only a single JSON object that matches the required planner contract. "
+    "Do not wrap JSON in markdown fences. "
+    "Use only tools or skills present in capability_registry. "
+    "Keep action_plan to at most policy_flags.max_steps steps."
+)
 
 
 class PlannerRuntimePayload(TypedDict, total=False):
@@ -70,12 +108,14 @@ class PlannerRuntimePayload(TypedDict, total=False):
     query: str
     traceId: str | None
     history: list[dict[str, str]]
+    configPath: str | None
 
 
 class PlannerRuntimeState(TypedDict, total=False):
     payload: Any
     request: PlannerRuntimePayload
     planner: dict[str, Any]
+    planner_candidates: dict[str, Any]
     runtime: dict[str, Any]
     tool_calls: list[dict[str, Any]]
     tool_results: list[dict[str, Any]]
@@ -217,29 +257,7 @@ class PlannerRuntimeRunResult(TypedDict):
 
 
 def _serialize_planner_result(result: PlannerResult) -> dict[str, Any]:
-    return {
-        "decision_version": result.decision_version,
-        "user_goal": result.user_goal,
-        "planner_used": result.planner_used,
-        "planner_source": normalize_planner_source(result.planner_source),
-        "planner_fallback": result.planner_fallback,
-        "planner_fallback_reason": result.planner_fallback_reason,
-        "planner_confidence": result.planner_confidence,
-        "is_new_topic": result.is_new_topic,
-        "should_clear_pending_clarify": result.should_clear_pending_clarify,
-        "relation_to_previous": result.relation_to_previous,
-        "standalone_query": result.standalone_query,
-        "primary_capability": result.primary_capability,
-        "strictness": result.strictness,
-        "decision_result": result.decision_result,
-        "knowledge_route": result.knowledge_route,
-        "research_mode": result.research_mode,
-        "requires_clarification": result.requires_clarification,
-        "selected_tools_or_skills": list(result.selected_tools_or_skills or []),
-        "fallback": dict(result.fallback or {}),
-        "clarify_question": result.clarify_question,
-        "action_plan": list(result.action_plan or []),
-    }
+    return serialize_planner_result(result)
 
 
 def _default_runtime_contract() -> dict[str, Any]:
@@ -255,6 +273,7 @@ def _default_runtime_contract() -> dict[str, Any]:
         "tool_registry_entries": [serialize_tool_registry_entry(entry) for entry in sorted(RUNTIME_TOOL_REGISTRY.values(), key=lambda row: row.tool_name)],
         "registry_validation_errors": registry_errors,
         "planner_input_segments": ["request", "conversation_context", "capability_registry", "policy_flags"],
+        "planner_source_modes": sorted(PLANNER_SOURCE_MODES),
     }
 
 
@@ -267,16 +286,391 @@ def _serialize_capability_registry() -> list[dict[str, Any]]:
     return rows
 
 
-def _planner_policy_flags() -> dict[str, Any]:
+def _planner_policy_flags(config: Any | None = None) -> dict[str, Any]:
     return {
         "allow_web_delegation": True,
         "allow_research_assistant": True,
         "force_local_first": False,
-        "max_steps": MAX_RUNTIME_TOOL_STEPS,
+        "max_steps": max(1, int(getattr(config, "planner_max_steps", MAX_RUNTIME_TOOL_STEPS))),
+        "catalog_limit": max(1, int(getattr(config, "planner_max_papers", 20))),
+        "summary_min_papers": max(1, int(getattr(config, "planner_summary_min_papers", 2))),
     }
 
 
-def _build_planner_input_context(request: dict[str, Any]) -> dict[str, Any]:
+def _planner_source_mode() -> str:
+    normalized = str(os.getenv(PLANNER_SOURCE_MODE_ENV, DEFAULT_PLANNER_SOURCE_MODE) or "").strip().lower()
+    if normalized in PLANNER_SOURCE_MODES:
+        return normalized
+    return DEFAULT_PLANNER_SOURCE_MODE
+
+
+def _build_planner_llm_prompt(*, planner_input_context: dict[str, Any], rule_result: PlannerResult) -> str:
+    payload = {
+        "task": "Generate an independent planner decision for the request.",
+        "output_contract": {
+            "decision_version": "planner-policy-v1",
+            "planner_source": "llm",
+            "planner_used": True,
+            "planner_confidence": "float 0..1",
+            "user_goal": "string",
+            "standalone_query": "string",
+            "is_new_topic": "bool",
+            "should_clear_pending_clarify": "bool",
+            "relation_to_previous": "string",
+            "primary_capability": "string",
+            "strictness": "strict_fact|summary|catalog",
+            "decision_result": "clarify|local_execute|delegate_web|delegate_research_assistant|legacy_fallback",
+            "knowledge_route": "local|web",
+            "research_mode": "none|paper_assistant",
+            "requires_clarification": "bool",
+            "clarify_question": "string|null",
+            "selected_tools_or_skills": "string[]",
+            "action_plan": "step[]",
+            "fallback": {"type": "string|null", "reason": "string|null"},
+        },
+        "step_contract": {
+            "action": "registered tool or skill name",
+            "query": "string",
+            "produces": "string|null",
+            "depends_on": "string[]",
+            "params": "object",
+        },
+        "planner_input": planner_input_context,
+        "rule_candidate_reference": _serialize_planner_result(rule_result),
+        "instruction": (
+            "Reason independently from planner_input. "
+            "The rule candidate is only a reference baseline for comparison, not a template to copy."
+        ),
+    }
+    return json.dumps(payload, ensure_ascii=False)
+
+
+def _extract_first_json_object(raw: str) -> dict[str, Any] | None:
+    text = str(raw or "").strip()
+    if not text:
+        return None
+    candidates = [text]
+    if "```" in text:
+        segments = [segment.strip() for segment in text.split("```") if segment.strip()]
+        candidates.extend(segments)
+        candidates.extend(segment.split("\n", 1)[1].strip() for segment in segments if "\n" in segment)
+    decoder = json.JSONDecoder()
+    for candidate in candidates:
+        probe = candidate.strip()
+        if not probe:
+            continue
+        try:
+            parsed = json.loads(probe)
+        except json.JSONDecodeError:
+            for idx, char in enumerate(probe):
+                if char != "{":
+                    continue
+                try:
+                    parsed, _ = decoder.raw_decode(probe[idx:])
+                    break
+                except json.JSONDecodeError:
+                    parsed = None
+            else:
+                parsed = None
+        if isinstance(parsed, dict):
+            return parsed
+    return None
+
+
+def _build_planner_llm_candidate(
+    *,
+    request: dict[str, Any],
+    planner_input_context: dict[str, Any],
+    rule_result: PlannerResult,
+) -> tuple[dict[str, Any] | None, dict[str, Any]]:
+    diagnostics: dict[str, Any] = {
+        "attempted": False,
+        "used_override": False,
+        "status": "skipped",
+        "reason": None,
+        "provider": None,
+        "model": None,
+        "elapsed_ms": 0,
+    }
+    raw_override = os.getenv("PLANNER_LLM_DECISION_JSON", "").strip()
+    if raw_override:
+        diagnostics["attempted"] = True
+        diagnostics["used_override"] = True
+        diagnostics["status"] = "override"
+        try:
+            payload = json.loads(raw_override)
+            if isinstance(payload, dict):
+                return payload, diagnostics
+            diagnostics["status"] = "invalid_override"
+            diagnostics["reason"] = "override_not_object"
+            return None, diagnostics
+        except Exception:
+            diagnostics["status"] = "invalid_override"
+            diagnostics["reason"] = "override_parse_error"
+            return None, diagnostics
+
+    config_path = str(request.get("configPath") or "").strip()
+    if not config_path:
+        diagnostics["reason"] = "planner_config_missing"
+        return None, diagnostics
+
+    cfg, _ = load_and_validate_config(config_path)
+    provider = str(getattr(cfg, "planner_provider", "")).strip()
+    model = str(getattr(cfg, "planner_model", "")).strip()
+    api_base = str(getattr(cfg, "planner_api_base", "")).strip()
+    api_key_env = str(getattr(cfg, "planner_api_key_env", "")).strip()
+    api_key = os.getenv(api_key_env, "").strip() if api_key_env else ""
+    planner_enabled = bool(getattr(cfg, "planner_use_llm", False))
+    diagnostics["provider"] = provider or None
+    diagnostics["model"] = model or None
+    if not planner_enabled:
+        diagnostics["reason"] = "planner_llm_disabled"
+        return None, diagnostics
+    if not model:
+        diagnostics["reason"] = "planner_model_missing"
+        return None, diagnostics
+    if not api_key:
+        diagnostics["reason"] = "planner_api_key_missing"
+        return None, diagnostics
+
+    diagnostics["attempted"] = True
+    timeout_ms = max(1000, int(getattr(cfg, "planner_timeout_ms", 6000)))
+    result = call_chat_completion(
+        provider=provider or "siliconflow",
+        model=model,
+        api_key=api_key,
+        api_base=(api_base or None),
+        system_prompt=PLANNER_LLM_SYSTEM_PROMPT,
+        user_prompt=_build_planner_llm_prompt(planner_input_context=planner_input_context, rule_result=rule_result),
+        timeout_ms=timeout_ms,
+        max_retries=max(0, int(getattr(cfg, "llm_max_retries", 0))),
+        temperature=0.0,
+    )
+    diagnostics["elapsed_ms"] = int(getattr(result, "elapsed_ms", 0) or 0)
+    diagnostics["provider"] = getattr(result, "provider_used", None) or diagnostics["provider"]
+    diagnostics["model"] = getattr(result, "model_used", None) or diagnostics["model"]
+    if not result.ok:
+        diagnostics["status"] = "error"
+        diagnostics["reason"] = str(getattr(result, "reason", None) or "planner_llm_call_failed")
+        diagnostics["status_code"] = getattr(result, "status_code", None)
+        diagnostics["error_category"] = getattr(result, "error_category", None)
+        return None, diagnostics
+
+    payload = _extract_first_json_object(str(result.content or ""))
+    if not isinstance(payload, dict):
+        diagnostics["status"] = "invalid_payload"
+        diagnostics["reason"] = "planner_llm_invalid_json"
+        return None, diagnostics
+
+    diagnostics["status"] = "ok"
+    return payload, diagnostics
+
+
+def _validation_layer(status: str, reason_codes: list[str], warnings: list[str] | None = None) -> dict[str, Any]:
+    return {
+        "status": status if status in PLANNER_VALIDATION_STATUSES else "reject",
+        "reason_codes": list(reason_codes),
+        "warnings": list(warnings or []),
+    }
+
+
+def _validate_structure(planner: dict[str, Any]) -> dict[str, Any]:
+    reason_codes: list[str] = []
+    warnings: list[str] = []
+    bool_fields = (
+        "planner_used",
+        "is_new_topic",
+        "should_clear_pending_clarify",
+        "requires_clarification",
+    )
+    required_fields = (
+        "decision_version",
+        "planner_source",
+        "planner_used",
+        "planner_confidence",
+        "user_goal",
+        "standalone_query",
+        "is_new_topic",
+        "should_clear_pending_clarify",
+        "relation_to_previous",
+        "primary_capability",
+        "strictness",
+        "decision_result",
+        "knowledge_route",
+        "research_mode",
+        "requires_clarification",
+        "clarify_question",
+        "selected_tools_or_skills",
+        "action_plan",
+        "fallback",
+    )
+    for field in required_fields:
+        if field not in planner:
+            reason_codes.append(f"missing_field:{field}")
+    for field, allowed in PLANNER_DECISION_ENUMS.items():
+        value = str(planner.get(field) or "").strip()
+        if value and value not in allowed:
+            reason_codes.append(f"invalid_enum:{field}")
+    for field in bool_fields:
+        if field in planner and not isinstance(planner.get(field), bool):
+            reason_codes.append(f"invalid_type:{field}")
+    confidence = planner.get("planner_confidence")
+    if not isinstance(confidence, (int, float)):
+        reason_codes.append("invalid_type:planner_confidence")
+    elif float(confidence) < 0.0 or float(confidence) > 1.0:
+        reason_codes.append("out_of_range:planner_confidence")
+    if not isinstance(planner.get("selected_tools_or_skills"), list):
+        reason_codes.append("invalid_type:selected_tools_or_skills")
+    if not isinstance(planner.get("action_plan"), list):
+        reason_codes.append("invalid_type:action_plan")
+    if not isinstance(planner.get("fallback"), dict):
+        reason_codes.append("invalid_type:fallback")
+    if planner.get("clarify_question") is not None and not isinstance(planner.get("clarify_question"), str):
+        reason_codes.append("invalid_type:clarify_question")
+    return _validation_layer("reject" if reason_codes else ("accept_with_warnings" if warnings else "accept"), reason_codes, warnings)
+
+
+def _validate_semantics(planner: dict[str, Any]) -> dict[str, Any]:
+    reason_codes: list[str] = []
+    warnings: list[str] = []
+    decision_result = str(planner.get("decision_result") or "")
+    requires_clarification = bool(planner.get("requires_clarification", False))
+    clarify_question = str(planner.get("clarify_question") or "").strip()
+    action_plan = list(planner.get("action_plan") or [])
+    selected_tools = [str(item).strip() for item in list(planner.get("selected_tools_or_skills") or []) if str(item).strip()]
+
+    if requires_clarification and not clarify_question:
+        reason_codes.append("clarify_question_missing")
+    if decision_result == "clarify":
+        if not requires_clarification:
+            reason_codes.append("clarify_result_missing_flag")
+        if action_plan:
+            reason_codes.append("clarify_result_with_action_plan")
+    elif requires_clarification:
+        warnings.append("clarify_flag_without_clarify_result")
+
+    if decision_result == "local_execute" and not action_plan:
+        reason_codes.append("local_execute_missing_action_plan")
+    if decision_result == "delegate_web" and "web_research" not in selected_tools:
+        reason_codes.append("delegate_web_missing_selected_capability")
+    if decision_result == "delegate_research_assistant" and "paper_assistant" not in selected_tools:
+        reason_codes.append("delegate_research_assistant_missing_selected_capability")
+    if decision_result == "legacy_fallback" and not bool(dict(planner.get("fallback") or {}).get("reason")):
+        warnings.append("legacy_fallback_without_reason")
+
+    action_names: list[str] = []
+    for raw_step in action_plan:
+        if isinstance(raw_step, dict):
+            action = str(raw_step.get("action") or "").strip()
+            if action:
+                action_names.append(action)
+    if action_names and selected_tools and action_names != [name for name in selected_tools if name in action_names]:
+        warnings.append("selected_tools_mismatch_action_plan")
+
+    status = "reject" if reason_codes else ("accept_with_warnings" if warnings else "accept")
+    return _validation_layer(status, reason_codes, warnings)
+
+
+def _validate_execution(planner: dict[str, Any], *, policy_flags: dict[str, Any]) -> dict[str, Any]:
+    reason_codes: list[str] = []
+    warnings: list[str] = []
+    action_plan = list(planner.get("action_plan") or [])
+    max_steps = max(1, int(policy_flags.get("max_steps") or MAX_RUNTIME_TOOL_STEPS))
+    if len(action_plan) > max_steps:
+        reason_codes.append("action_plan_step_limit_exceeded")
+
+    produced: set[str] = set()
+    for step in action_plan:
+        if not isinstance(step, dict):
+            reason_codes.append("invalid_type:action_plan_step")
+            continue
+        action = str(step.get("action") or "").strip()
+        query = str(step.get("query") or "").strip()
+        depends_on = [str(item).strip() for item in list(step.get("depends_on") or []) if str(item).strip()]
+        params = step.get("params")
+        if not action:
+            reason_codes.append("missing_field:action")
+            continue
+        if action not in RUNTIME_TOOL_REGISTRY:
+            reason_codes.append(f"unsupported_tool:{action}")
+            continue
+        if not query:
+            reason_codes.append(f"missing_query:{action}")
+        if params is not None and not isinstance(params, dict):
+            reason_codes.append(f"invalid_params:{action}")
+        missing_dep = [name for name in depends_on if name not in produced]
+        if missing_dep:
+            reason_codes.append(f"missing_dependencies:{','.join(missing_dep)}")
+        produces_raw = step.get("produces")
+        if isinstance(produces_raw, list):
+            produced.update(str(item).strip() for item in produces_raw if str(item).strip())
+        elif produces_raw is not None and str(produces_raw).strip():
+            produced.add(str(produces_raw).strip())
+        else:
+            produced.update(RUNTIME_TOOL_REGISTRY[action].produces)
+    status = "reject" if reason_codes else ("accept_with_warnings" if warnings else "accept")
+    return _validation_layer(status, reason_codes, warnings)
+
+
+def _validate_policy(planner: dict[str, Any], *, policy_flags: dict[str, Any]) -> dict[str, Any]:
+    reason_codes: list[str] = []
+    warnings: list[str] = []
+    decision_result = str(planner.get("decision_result") or "")
+    if decision_result == "delegate_web" and not bool(policy_flags.get("allow_web_delegation", False)):
+        reason_codes.append("policy_blocked:web_delegation")
+    if decision_result == "delegate_research_assistant" and not bool(policy_flags.get("allow_research_assistant", True)):
+        reason_codes.append("policy_blocked:research_assistant")
+    if bool(policy_flags.get("force_local_first", False)) and decision_result == "delegate_web":
+        reason_codes.append("policy_blocked:force_local_first")
+    status = "reject" if reason_codes else ("accept_with_warnings" if warnings else "accept")
+    return _validation_layer(status, reason_codes, warnings)
+
+
+def _validate_llm_planner_decision(planner: dict[str, Any], *, policy_flags: dict[str, Any]) -> dict[str, Any]:
+    layers = {
+        "structure": _validate_structure(planner),
+        "semantic": _validate_semantics(planner),
+        "execution": _validate_execution(planner, policy_flags=policy_flags),
+        "policy": _validate_policy(planner, policy_flags=policy_flags),
+    }
+    all_reason_codes: list[str] = []
+    all_warnings: list[str] = []
+    rejected_layers: list[str] = []
+    for layer_name, layer in layers.items():
+        all_reason_codes.extend(str(code) for code in list(layer.get("reason_codes") or []))
+        all_warnings.extend(str(code) for code in list(layer.get("warnings") or []))
+        if layer.get("status") == "reject":
+            rejected_layers.append(layer_name)
+    verdict = "reject" if rejected_layers else ("accept_with_warnings" if all_warnings else "accept")
+    return {
+        "status": verdict,
+        "reason_codes": all_reason_codes,
+        "warnings": all_warnings,
+        "rejected_layers": rejected_layers,
+        "reason_code": all_reason_codes[0] if all_reason_codes else None,
+        "layers": layers,
+    }
+
+
+def _build_shadow_diff(rule_planner: dict[str, Any], llm_planner: dict[str, Any]) -> list[dict[str, Any]]:
+    diffs: list[dict[str, Any]] = []
+    for field in SHADOW_DIFF_FIELDS:
+        rule_value = rule_planner.get(field)
+        llm_value = llm_planner.get(field)
+        if rule_value != llm_value:
+            diffs.append({"field": field, "rule": rule_value, "llm": llm_value})
+    return diffs
+
+
+def _load_runtime_planner_config(request: dict[str, Any]) -> Any:
+    config_path = str(request.get("configPath") or "").strip()
+    if not config_path:
+        config_path = str(CONFIGS_DIR / "default.yaml")
+    config, _ = load_and_validate_config(config_path)
+    return config
+
+
+def _build_planner_input_context(request: dict[str, Any], *, config: Any | None = None) -> dict[str, Any]:
     history = list(request.get("history") or [])
     session_context = load_planner_conversation_state(str(request.get("sessionId") or ""))
     return {
@@ -297,7 +691,7 @@ def _build_planner_input_context(request: dict[str, Any]) -> dict[str, Any]:
             "previous_planner": session_context.get("previous_planner"),
         },
         "capability_registry": _serialize_capability_registry(),
-        "policy_flags": _planner_policy_flags(),
+        "policy_flags": _planner_policy_flags(config),
     }
 
 
@@ -477,6 +871,7 @@ def _paper_assistant_missing_prerequisites(tool_call: dict[str, Any]) -> tuple[l
 def _load_request_context(state: PlannerRuntimeState) -> PlannerRuntimeState:
     next_state = dict(state)
     next_state.setdefault("runtime", _default_runtime_contract())
+    next_state.setdefault("planner_candidates", {})
     next_state.setdefault("tool_calls", [])
     next_state.setdefault("tool_results", [])
     next_state.setdefault("execution_trace", [])
@@ -492,20 +887,104 @@ def _plan_chat_request(state: PlannerRuntimeState) -> PlannerRuntimeState:
     next_state = dict(state)
     request = dict(next_state.get("request") or {})
     query = str(request.get("query") or "").strip()
-    planner_input_context = _build_planner_input_context(request)
+    planner_config = _load_runtime_planner_config(request)
+    planner_input_context = _build_planner_input_context(request, config=planner_config)
     runtime = dict(next_state.get("runtime") or {})
     runtime["planner_input_context"] = planner_input_context
+    runtime["planner_source_mode"] = _planner_source_mode()
     next_state["runtime"] = runtime
-    planner_result = build_rule_based_plan(
+    rule_result = build_rule_based_plan(
         user_input=query,
         standalone_query=query,
         dialog_state="answering",
         history_topic_anchors=list(planner_input_context.get("conversation_context", {}).get("recent_topic_anchors") or []),
         pending_clarify=planner_input_context.get("conversation_context", {}).get("pending_clarify"),
+        max_steps=max(1, int(getattr(planner_config, "planner_max_steps", MAX_RUNTIME_TOOL_STEPS))),
+        catalog_limit=max(1, int(getattr(planner_config, "planner_max_papers", 20))),
         capability_registry=list(planner_input_context.get("capability_registry") or []),
         policy_flags=dict(planner_input_context.get("policy_flags") or {}),
     )
-    next_state["planner"] = _serialize_planner_result(planner_result)
+    policy_flags = dict(planner_input_context.get("policy_flags") or {})
+    planner_source_mode = str(runtime.get("planner_source_mode") or DEFAULT_PLANNER_SOURCE_MODE)
+    llm_result: PlannerResult | None = None
+    llm_candidate_payload: dict[str, Any] | None = None
+    llm_diagnostics: dict[str, Any] = {"attempted": False, "status": "skipped", "reason": None}
+    llm_validation: dict[str, Any] | None = None
+    planner_execution_source = PLANNER_SOURCE_RULE
+    planner = _serialize_planner_result(rule_result)
+
+    if planner_source_mode in {"shadow_compare", "llm_primary_with_rule_fallback"}:
+        llm_candidate_payload, llm_diagnostics = _build_planner_llm_candidate(
+            request=request,
+            planner_input_context=planner_input_context,
+            rule_result=rule_result,
+        )
+        if llm_candidate_payload is None:
+            llm_validation = {
+                "status": "reject",
+                "reason_codes": [str(llm_diagnostics.get("reason") or "planner_llm_unavailable")],
+                "warnings": [],
+                "rejected_layers": ["llm_call"],
+                "reason_code": str(llm_diagnostics.get("reason") or "planner_llm_unavailable"),
+                "layers": {},
+            }
+        else:
+            llm_validation = _validate_llm_planner_decision(llm_candidate_payload, policy_flags=policy_flags)
+            if llm_validation["status"] == "reject":
+                planner["planner_fallback"] = True
+                planner["planner_fallback_reason"] = llm_validation.get("reason_code")
+            else:
+                try:
+                    llm_result = parse_planner_result(llm_candidate_payload, default_query=query)
+                    llm_result = PlannerResult(**{**asdict(llm_result), "planner_source": PLANNER_SOURCE_LLM})
+                except (TypeError, ValueError):
+                    llm_validation = {
+                        "status": "reject",
+                        "reason_codes": ["planner_llm_invalid_schema"],
+                        "warnings": [],
+                        "rejected_layers": ["parse"],
+                        "reason_code": "planner_llm_invalid_schema",
+                        "layers": {},
+                    }
+                    planner["planner_fallback"] = True
+                    planner["planner_fallback_reason"] = "planner_llm_invalid_schema"
+            if planner_source_mode == "llm_primary_with_rule_fallback" and llm_validation["status"] != "reject" and llm_result is not None:
+                planner = _serialize_planner_result(llm_result)
+                planner_execution_source = PLANNER_SOURCE_LLM
+    shadow_record = None
+    if llm_candidate_payload is not None:
+        shadow_record = {
+            "rule_decision": _serialize_planner_result(rule_result),
+            "llm_decision": dict(llm_candidate_payload),
+            "validation": dict(llm_validation or {}),
+            "diff": _build_shadow_diff(_serialize_planner_result(rule_result), dict(llm_candidate_payload)),
+            "actual_execution_source": planner_execution_source,
+            "review": {"label": None, "allowed_labels": ["llm_better", "rule_better", "tie", "both_bad"]},
+        }
+    runtime["planner_validation"] = dict(llm_validation or {})
+    runtime["planner_llm_diagnostics"] = dict(llm_diagnostics or {})
+    runtime["shadow_compare"] = shadow_record
+    runtime["planner_execution_source"] = planner_execution_source
+    runtime["planner_candidates"] = {
+        "rule": _serialize_planner_result(rule_result),
+        "llm": dict(llm_candidate_payload) if llm_candidate_payload is not None else None,
+    }
+    next_state["runtime"] = runtime
+    next_state["planner_candidates"] = runtime["planner_candidates"]
+    next_state["planner"] = planner
+    next_state["execution_trace"] = list(next_state.get("execution_trace") or [])
+    next_state["execution_trace"].append(
+        {
+            "step": "planner_runtime_decision",
+            "state": "selected",
+            "planner_source_mode": planner_source_mode,
+            "planner_execution_source": planner_execution_source,
+            "selected_decision_result": planner.get("decision_result"),
+            "validation_status": (llm_validation or {}).get("status"),
+            "validation_reason_codes": list((llm_validation or {}).get("reason_codes") or []),
+            "shadow_diff_fields": [row["field"] for row in list((shadow_record or {}).get("diff") or [])],
+        }
+    )
     return next_state
 
 
@@ -748,33 +1227,7 @@ def _route_capability(state: PlannerRuntimeState) -> PlannerRuntimeState:
 
 
 def _hydrate_planner_result(planner_data: dict[str, Any], request: dict[str, Any]) -> PlannerResult:
-    return PlannerResult(
-        decision_version=str(planner_data.get("decision_version") or "planner-policy-v1"),
-        user_goal=str(planner_data.get("user_goal") or request.get("query") or ""),
-        planner_used=bool(planner_data.get("planner_used", False)),
-        planner_source=normalize_planner_source(str(planner_data.get("planner_source") or "fallback")),
-        planner_fallback=bool(planner_data.get("planner_fallback", False)),
-        planner_fallback_reason=planner_data.get("planner_fallback_reason"),
-        planner_confidence=float(planner_data.get("planner_confidence", 0.0)),
-        is_new_topic=bool(planner_data.get("is_new_topic", False)),
-        should_clear_pending_clarify=bool(planner_data.get("should_clear_pending_clarify", False)),
-        relation_to_previous=str(planner_data.get("relation_to_previous") or "same_topic_or_no_pending"),
-        standalone_query=str(planner_data.get("standalone_query") or request.get("query") or ""),
-        primary_capability=str(planner_data.get("primary_capability") or "fact_qa"),
-        strictness=str(planner_data.get("strictness") or "strict_fact"),
-        decision_result=str(planner_data.get("decision_result") or "legacy_fallback"),
-        knowledge_route=str(planner_data.get("knowledge_route") or "local"),
-        research_mode=str(planner_data.get("research_mode") or "none"),
-        requires_clarification=bool(planner_data.get("requires_clarification", False)),
-        selected_tools_or_skills=[str(item).strip() for item in list(planner_data.get("selected_tools_or_skills") or []) if str(item).strip()],
-        fallback=dict(planner_data.get("fallback") or {}),
-        clarify_question=(
-            str(planner_data.get("clarify_question")).strip()
-            if planner_data.get("clarify_question") is not None
-            else None
-        ),
-        action_plan=list(planner_data.get("action_plan") or []),
-    )
+    return parse_planner_result(planner_data, default_query=str(request.get("query") or ""))
 
 
 def _run_route(
@@ -1018,6 +1471,7 @@ def run_planner_runtime(
             "query": str(getattr(payload, "query")),
             "traceId": getattr(payload, "traceId", None),
             "history": [asdict(item) if hasattr(item, "__dataclass_fields__") else item.model_dump() for item in getattr(payload, "history", [])],
+            "configPath": str(getattr(payload, "configPath", None) or (CONFIGS_DIR / "default.yaml")),
         },
     }
     compiled_graph, fallback_nodes = _build_graph(
@@ -1119,6 +1573,12 @@ def run_planner_runtime(
         "runtime_stable_fields": list(final_state.get("runtime", {}).get("stable_fields", list(RUNTIME_STABLE_FIELDS))),
         "runtime_envelope_fields": list(final_state.get("runtime", {}).get("envelope_fields", list(RUNTIME_ENVELOPE_FIELDS))),
         "planner_input_context": dict(final_state.get("runtime", {}).get("planner_input_context", {})),
+        "planner_source_mode": final_state.get("runtime", {}).get("planner_source_mode", DEFAULT_PLANNER_SOURCE_MODE),
+        "planner_execution_source": final_state.get("runtime", {}).get("planner_execution_source", normalize_planner_source(dict(final_state.get("planner") or {}).get("planner_source"))),
+        "planner_llm_diagnostics": dict(final_state.get("runtime", {}).get("planner_llm_diagnostics", {})),
+        "planner_validation": dict(final_state.get("runtime", {}).get("planner_validation", {})),
+        "shadow_compare": final_state.get("runtime", {}).get("shadow_compare"),
+        "planner_candidates": final_state.get("runtime", {}).get("planner_candidates"),
         "capability_registry": list(final_state.get("runtime", {}).get("capability_registry", [])),
         "tool_registry_entries": list(final_state.get("runtime", {}).get("tool_registry_entries", [])),
         "tool_calls": [dict(item) for item in list(final_state.get("tool_calls") or [])],
