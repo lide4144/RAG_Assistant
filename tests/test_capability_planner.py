@@ -269,6 +269,8 @@ class CapabilityPlannerIntegrationTests(unittest.TestCase):
             self.assertEqual(trace.get("standalone_query"), "库中有哪些论文")
             self.assertNotIn("准确率", trace.get("standalone_query", ""))
             self.assertEqual(trace.get("final_decision"), "answer_with_catalog")
+            self.assertEqual(trace.get("final_interaction_authority"), "planner")
+            self.assertEqual(trace.get("final_user_visible_posture"), "execute")
 
     def test_planner_exception_falls_back_to_single_step_fact_qa(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

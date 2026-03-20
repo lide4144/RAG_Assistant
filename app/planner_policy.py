@@ -3,6 +3,10 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
+FINAL_INTERACTION_AUTHORITIES = {"planner", "planner_policy"}
+FINAL_USER_VISIBLE_POSTURES = {"execute", "clarify", "partial_answer", "refuse", "delegate"}
+CONSTRAINT_SEVERITIES = {"info", "warning", "high"}
+
 
 @dataclass(frozen=True)
 class AssistantModeDecisionPolicyResult:
@@ -23,6 +27,128 @@ class AssistantModeClarifyOverride:
     answer: str | None
     answer_citations: list[dict[str, Any]] | None
     final_refuse_source: str | None
+
+
+@dataclass(frozen=True)
+class FinalInteractionDecision:
+    decision: str
+    user_visible_posture: str
+    final_interaction_authority: str
+    interaction_decision_source: str
+    decision_reason: str
+    clarify_questions: list[str]
+    final_refuse_source: str | None
+    guardrail_blocked: bool
+    posture_override_forbidden: bool
+    kernel_constraint_summary: list[dict[str, Any]]
+
+
+def build_constraint_envelope(
+    *,
+    constraint_type: str,
+    reason_code: str,
+    severity: str,
+    retryable: bool,
+    blocking_scope: str,
+    user_safe_summary: str,
+    evidence_snapshot: dict[str, Any] | None = None,
+    citation_status: str | None = None,
+    failed_dependency: str | None = None,
+    suggested_next_actions: list[str] | None = None,
+    guardrail_blocked: bool = False,
+    allows_partial_answer: bool = False,
+    clarify_questions: list[str] | None = None,
+) -> dict[str, Any]:
+    normalized_severity = str(severity or "warning").strip().lower()
+    if normalized_severity not in CONSTRAINT_SEVERITIES:
+        normalized_severity = "warning"
+    return {
+        "constraint_type": str(constraint_type or "unspecified").strip() or "unspecified",
+        "reason_code": str(reason_code or "unspecified").strip() or "unspecified",
+        "severity": normalized_severity,
+        "retryable": bool(retryable),
+        "blocking_scope": str(blocking_scope or "response").strip() or "response",
+        "user_safe_summary": str(user_safe_summary or "").strip(),
+        "evidence_snapshot": dict(evidence_snapshot or {}),
+        "citation_status": str(citation_status or "not_evaluated").strip() or "not_evaluated",
+        "failed_dependency": (str(failed_dependency).strip() if failed_dependency else None),
+        "suggested_next_actions": [str(item).strip() for item in list(suggested_next_actions or []) if str(item).strip()],
+        "guardrail_blocked": bool(guardrail_blocked),
+        "allows_partial_answer": bool(allows_partial_answer),
+        "clarify_questions": [str(item).strip() for item in list(clarify_questions or []) if str(item).strip()][:1],
+    }
+
+
+def summarize_constraint_envelopes(envelopes: list[dict[str, Any]] | None) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    for envelope in list(envelopes or []):
+        if not isinstance(envelope, dict):
+            continue
+        row = {
+            "constraint_type": str(envelope.get("constraint_type") or "unspecified").strip() or "unspecified",
+            "reason_code": str(envelope.get("reason_code") or "unspecified").strip() or "unspecified",
+            "severity": str(envelope.get("severity") or "warning").strip() or "warning",
+            "guardrail_blocked": bool(envelope.get("guardrail_blocked", False)),
+            "blocking_scope": str(envelope.get("blocking_scope") or "response").strip() or "response",
+        }
+        if row not in rows:
+            rows.append(row)
+    return rows
+
+
+def resolve_final_interaction_decision(
+    *,
+    planner_result: Any,
+    proposed_decision: str,
+    decision_reason: str,
+    clarify_questions: list[str],
+    final_refuse_source: str | None,
+    constraint_envelopes: list[dict[str, Any]] | None = None,
+    forced_partial_answer: bool = False,
+    posture_override_forbidden: bool = False,
+) -> FinalInteractionDecision:
+    decision = str(proposed_decision or "answer").strip() or "answer"
+    source = "planner_policy:default"
+    guardrail_blocked = any(bool(item.get("guardrail_blocked", False)) for item in list(constraint_envelopes or []) if isinstance(item, dict))
+    if getattr(planner_result, "decision_result", "") == "clarify" and decision == "clarify":
+        source = "planner:clarify"
+    elif final_refuse_source == "evidence_policy_gate":
+        source = "planner_policy:evidence_policy_gate"
+    elif final_refuse_source == "sufficiency_gate":
+        source = "planner_policy:sufficiency_gate"
+    elif decision == "clarify":
+        source = "planner_policy:clarify"
+    elif forced_partial_answer:
+        source = "planner_policy:partial_answer"
+    elif getattr(planner_result, "decision_result", "") in {"delegate_web", "delegate_research_assistant"}:
+        source = f"planner:{getattr(planner_result, 'decision_result', 'delegate')}"
+    else:
+        source = "planner:execute"
+
+    if decision == "clarify":
+        posture = "clarify"
+    elif decision == "refuse":
+        posture = "refuse"
+    elif getattr(planner_result, "decision_result", "") in {"delegate_web", "delegate_research_assistant"}:
+        posture = "delegate"
+    elif forced_partial_answer:
+        posture = "partial_answer"
+    else:
+        posture = "execute"
+
+    authority = "planner" if source.startswith("planner:") else "planner_policy"
+    return FinalInteractionDecision(
+        decision=decision,
+        user_visible_posture=posture,
+        final_interaction_authority=authority,
+        interaction_decision_source=source,
+        decision_reason=str(decision_reason or "").strip(),
+        clarify_questions=[str(item).strip() for item in list(clarify_questions or []) if str(item).strip()][:1],
+        final_refuse_source=(str(final_refuse_source).strip() if final_refuse_source else None),
+        guardrail_blocked=guardrail_blocked,
+        posture_override_forbidden=bool(posture_override_forbidden),
+        kernel_constraint_summary=summarize_constraint_envelopes(constraint_envelopes),
+    )
 
 
 def apply_assistant_mode_decision_policy(

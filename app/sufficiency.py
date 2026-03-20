@@ -5,6 +5,8 @@ import re
 import math
 from typing import Any
 
+from app.planner_policy import build_constraint_envelope
+
 from app.embedding_api import EmbeddingAPIError, fetch_embeddings
 
 TOKEN_RE = re.compile(r"[A-Za-z0-9_]+(?:[-/][A-Za-z0-9_]+)*|[\u4e00-\u9fff]+")
@@ -388,8 +390,13 @@ def run_sufficiency_gate(
         "enabled": enabled,
         "decision": "answer",
         "reason": "证据充分，可进入回答。",
+        "reason_code": "ready_to_answer",
+        "severity": "info",
         "clarify_questions": [],
         "triggered_rules": [],
+        "allows_partial_answer": False,
+        "guardrail_blocked": False,
+        "constraints_envelope": None,
         "topic_match_score": 1.0,
         "topic_match_score_standalone": 1.0,
         "topic_match_score_query_used": 1.0,
@@ -415,10 +422,24 @@ def run_sufficiency_gate(
         ):
             report["decision"] = "answer"
             report["reason"] = "连续澄清达到上限，改为低置信可追溯回答。"
+            report["reason_code"] = "clarify_limit_reached_force_partial_answer"
+            report["severity"] = "warning"
             report["clarify_questions"] = []
             report["clarify_limit_hit"] = True
             report["forced_partial_answer"] = True
+            report["allows_partial_answer"] = True
             report["triggered_rules"].append("clarify_limit_reached_force_partial_answer")
+            report["constraints_envelope"] = build_constraint_envelope(
+                constraint_type="partial_answer",
+                reason_code="clarify_limit_reached_force_partial_answer",
+                severity="warning",
+                retryable=True,
+                blocking_scope="full_answer",
+                user_safe_summary=report["reason"],
+                evidence_snapshot={"evidence_groups": len(evidence_grouped)},
+                suggested_next_actions=["继续补充更具体的论文线索或实验指标。"],
+                allows_partial_answer=True,
+            )
         return report
 
     if not enabled:
@@ -428,20 +449,60 @@ def run_sufficiency_gate(
     if scope_mode == "clarify_scope":
         report["decision"] = "clarify"
         report["reason"] = "问题范围不明确，需要先澄清论文范围。"
+        report["reason_code"] = "scope_clarify_mode"
+        report["severity"] = "warning"
         report["clarify_questions"] = ["请提供论文标题、作者、年份或会议等线索。"]
         report["triggered_rules"].append("scope_clarify_mode")
+        report["constraints_envelope"] = build_constraint_envelope(
+            constraint_type="scope_missing",
+            reason_code="scope_clarify_mode",
+            severity="warning",
+            retryable=True,
+            blocking_scope="query_scope",
+            user_safe_summary=report["reason"],
+            evidence_snapshot={"evidence_groups": len(evidence_grouped)},
+            suggested_next_actions=report["clarify_questions"],
+            clarify_questions=report["clarify_questions"],
+        )
         return _finalize_clarify()
 
     if _is_insufficient_evidence(evidence_grouped):
         if open_summary_intent:
             report["decision"] = "clarify"
             report["reason"] = "当前证据不足以支持开放式总结，请先补充一个核心主题线索。"
+            report["reason_code"] = "insufficient_evidence_minimal_clarify"
+            report["severity"] = "warning"
             report["clarify_questions"] = ["你最关心哪一类主题（方法、实验结果、应用场景）？"]
             report["triggered_rules"].append("insufficient_evidence_minimal_clarify")
+            report["constraints_envelope"] = build_constraint_envelope(
+                constraint_type="evidence_insufficient",
+                reason_code="insufficient_evidence_minimal_clarify",
+                severity="warning",
+                retryable=True,
+                blocking_scope="full_answer",
+                user_safe_summary=report["reason"],
+                evidence_snapshot={"evidence_groups": len(evidence_grouped)},
+                suggested_next_actions=report["clarify_questions"],
+                clarify_questions=report["clarify_questions"],
+            )
             return _finalize_clarify()
         report["decision"] = "refuse"
         report["reason"] = "证据数量或质量不足，无法可靠回答。"
+        report["reason_code"] = "insufficient_evidence_count_or_quality"
+        report["severity"] = "high"
+        report["guardrail_blocked"] = True
         report["triggered_rules"].append("insufficient_evidence_count_or_quality")
+        report["constraints_envelope"] = build_constraint_envelope(
+            constraint_type="evidence_insufficient",
+            reason_code="insufficient_evidence_count_or_quality",
+            severity="high",
+            retryable=True,
+            blocking_scope="full_answer",
+            user_safe_summary=report["reason"],
+            evidence_snapshot={"evidence_groups": len(evidence_grouped)},
+            suggested_next_actions=["补充论文标题、作者、年份或更明确的问题范围。"],
+            guardrail_blocked=True,
+        )
         return report
 
     topic_threshold = float(getattr(config, "sufficiency_topic_match_threshold", 0.15))
@@ -468,19 +529,59 @@ def run_sufficiency_gate(
         if open_summary_intent:
             report["decision"] = "clarify"
             report["reason"] = "证据与当前主题相关性不足，请先明确一个优先主题。"
+            report["reason_code"] = "topic_mismatch_minimal_clarify"
+            report["severity"] = "warning"
             report["clarify_questions"] = ["你想先聚焦哪个主题方向？"]
             report["triggered_rules"].append("topic_mismatch_minimal_clarify")
+            report["constraints_envelope"] = build_constraint_envelope(
+                constraint_type="topic_mismatch",
+                reason_code="topic_mismatch_minimal_clarify",
+                severity="warning",
+                retryable=True,
+                blocking_scope="topic_alignment",
+                user_safe_summary=report["reason"],
+                evidence_snapshot={"topic_match_score": topic_score_robust, "semantic_similarity_score": semantic_score},
+                suggested_next_actions=report["clarify_questions"],
+                clarify_questions=report["clarify_questions"],
+            )
             return _finalize_clarify()
         if _has_topic_cluster_signal(question, evidence_grouped) or _has_topic_cluster_signal(query_used_text, evidence_grouped):
             report["decision"] = "clarify"
             report["reason"] = "检测到同主题论文簇命中，但缺少足够主题约束；请先明确一个聚焦方向。"
+            report["reason_code"] = "topic_mismatch_cluster_minimal_clarify"
+            report["severity"] = "warning"
             report["clarify_questions"] = ["你想先聚焦该主题的哪个方面（方法、实验结果或应用场景）？"]
             report["triggered_rules"].append("topic_mismatch_cluster_minimal_clarify")
+            report["constraints_envelope"] = build_constraint_envelope(
+                constraint_type="topic_mismatch",
+                reason_code="topic_mismatch_cluster_minimal_clarify",
+                severity="warning",
+                retryable=True,
+                blocking_scope="topic_alignment",
+                user_safe_summary=report["reason"],
+                evidence_snapshot={"topic_match_score": topic_score_robust, "semantic_similarity_score": semantic_score},
+                suggested_next_actions=report["clarify_questions"],
+                clarify_questions=report["clarify_questions"],
+            )
             return _finalize_clarify()
     if semantic_score < semantic_threshold and topic_score_robust < topic_threshold:
         report["decision"] = "refuse"
         report["reason"] = "证据与问题主题不匹配，相关性不足。"
+        report["reason_code"] = "topic_mismatch"
+        report["severity"] = "high"
+        report["guardrail_blocked"] = True
         report["triggered_rules"].append("topic_mismatch")
+        report["constraints_envelope"] = build_constraint_envelope(
+            constraint_type="topic_mismatch",
+            reason_code="topic_mismatch",
+            severity="high",
+            retryable=True,
+            blocking_scope="topic_alignment",
+            user_safe_summary=report["reason"],
+            evidence_snapshot={"topic_match_score": topic_score_robust, "semantic_similarity_score": semantic_score},
+            suggested_next_actions=["补充论文标题、作者或更明确的主题方向。"],
+            guardrail_blocked=True,
+        )
         return report
 
     required = _required_key_elements(question, open_summary_intent=open_summary_intent)
@@ -494,8 +595,23 @@ def run_sufficiency_gate(
     if missing and coverage < min_coverage:
         report["decision"] = "clarify"
         report["reason"] = f"证据缺少关键要素：{', '.join(missing)}。"
+        report["reason_code"] = "missing_key_elements"
+        report["severity"] = "warning"
+        report["allows_partial_answer"] = bool(covered)
         report["clarify_questions"] = _build_clarify_questions(question, missing)
         report["triggered_rules"].append("missing_key_elements")
+        report["constraints_envelope"] = build_constraint_envelope(
+            constraint_type="missing_key_elements",
+            reason_code="missing_key_elements",
+            severity="warning",
+            retryable=True,
+            blocking_scope="full_answer",
+            user_safe_summary=report["reason"],
+            evidence_snapshot={"missing_key_elements": list(missing), "key_element_coverage": coverage},
+            suggested_next_actions=report["clarify_questions"],
+            allows_partial_answer=bool(covered),
+            clarify_questions=report["clarify_questions"],
+        )
         return _finalize_clarify()
 
     return report

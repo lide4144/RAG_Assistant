@@ -45,6 +45,13 @@ class RunlogTests(unittest.TestCase):
             "final_decision": "answer_with_evidence",
             "decision": "answer",
             "decision_reason": "证据充分，可进入回答。",
+            "final_interaction_authority": "planner",
+            "interaction_decision_source": "planner:execute",
+            "final_user_visible_posture": "execute",
+            "kernel_constraint_summary": [],
+            "guardrail_blocked": False,
+            "posture_override_forbidden": False,
+            "constraints_envelope": [],
             "clarify_questions": [],
             "sufficiency_gate": {"enabled": True, "decision": "answer", "reason": "证据充分，可进入回答。"},
             "final_answer": "a",
@@ -212,6 +219,12 @@ class RunlogTests(unittest.TestCase):
         ok, errors = validate_trace_schema(trace)
         self.assertFalse(ok)
         self.assertTrue(any("clarify_limit_hit must be bool or null" in err for err in errors))
+
+        trace["clarify_limit_hit"] = False
+        trace["posture_override_forbidden"] = True
+        ok, errors = validate_trace_schema(trace)
+        self.assertFalse(ok)
+        self.assertTrue(any("posture_override_forbidden must not be true" in err for err in errors))
 
 
 class ConfigTests(unittest.TestCase):

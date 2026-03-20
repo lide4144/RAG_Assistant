@@ -46,7 +46,12 @@ from app.retrieve import (
 )
 from app.runlog import create_run_dir, save_json, validate_trace_schema
 from app.paths import CONFIGS_DIR, DATA_DIR, RUNS_DIR
-from app.planner_policy import apply_assistant_mode_decision_policy, prefer_assistant_mode_clarify
+from app.planner_policy import (
+    apply_assistant_mode_decision_policy,
+    build_constraint_envelope,
+    prefer_assistant_mode_clarify,
+    resolve_final_interaction_decision,
+)
 from app.session_state import (
     append_turn_record,
     build_control_intent_anchor_query,
@@ -1280,6 +1285,7 @@ def _apply_evidence_policy_gate(
         "claim_count": len(claims),
         "failed_claims": [],
         "claim_binding_mode": str((claim_binding_report or {}).get("claim_binding_mode", "text_fallback")),
+        "constraints_envelope": None,
     }
     if not policy_enforced or not claims:
         return answer, normalized_citations, gate_report
@@ -1308,7 +1314,19 @@ def _apply_evidence_policy_gate(
         if "insufficient_evidence_for_answer" not in output_warnings:
             output_warnings.append("insufficient_evidence_for_answer")
         gate_report["triggered"] = True
-        return _m8_weak_answer(question, source="evidence_policy_gate"), [], gate_report
+        gate_report["constraints_envelope"] = build_constraint_envelope(
+            constraint_type="citation_legality",
+            reason_code="evidence_policy_gate_claim_not_supported",
+            severity="high",
+            retryable=True,
+            blocking_scope="final_answer",
+            user_safe_summary="关键结论缺少可追溯证据，当前回答不能直接向用户输出。",
+            evidence_snapshot={"failed_claim_count": len(gate_report["failed_claims"])},
+            citation_status="claim_not_supported",
+            suggested_next_actions=["补充更具体的问题线索，或缩小到已有证据支持的结论。"],
+            guardrail_blocked=True,
+        )
+        return answer, [], gate_report
 
     gate_report["triggered"] = False
     gate_report["checked_via"] = "text_fallback"
@@ -2291,6 +2309,16 @@ def _build_planner_policy_trace(
     }
 
 
+def _append_constraint_envelope(
+    envelopes: list[dict[str, Any]],
+    envelope: dict[str, Any] | None,
+) -> None:
+    if not isinstance(envelope, dict):
+        return
+    if envelope not in envelopes:
+        envelopes.append(envelope)
+
+
 def run_qa(args: argparse.Namespace) -> int:
     session_id = str(getattr(args, "session_id", "default"))
     session_store = str(getattr(args, "session_store", str(DATA_DIR / "session_store.json")))
@@ -2989,42 +3017,45 @@ def run_qa(args: argparse.Namespace) -> int:
     assistant_mode_force_legacy_gate = bool(getattr(config, "assistant_mode_force_legacy_gate", False))
     clarify_limit = max(1, int(getattr(config, "assistant_mode_clarify_limit", 2)))
     force_partial_answer_on_limit = bool(getattr(config, "assistant_mode_force_partial_answer_on_limit", True))
-    if planner_short_circuit and bool(planner_short_circuit.get("triggered")):
+    constraint_envelopes: list[dict[str, Any]] = []
+    legacy_posture_override_attempts: list[str] = []
+    planner_catalog_short_circuit = bool(
+        planner_short_circuit
+        and bool(planner_short_circuit.get("triggered"))
+        and (
+            planner_strictness == "catalog"
+            or any(term in standalone_query for term in ("列出", "列一下", "有哪些论文", "上传", "昨天", "今天", "库中"))
+        )
+    )
+    if planner_catalog_short_circuit:
         sufficiency_gate = {
             "decision": "answer",
             "reason": "planner_short_circuit",
+            "reason_code": str(planner_short_circuit.get("reason") or "planner_short_circuit"),
+            "severity": "info",
             "triggered_rules": [str(planner_short_circuit.get("reason") or "planner_short_circuit")],
             "clarify_questions": [],
             "clarify_limit_hit": False,
             "forced_partial_answer": False,
             "missing_key_elements": [],
             "semantic_policy": planner_strictness,
+            "constraints_envelope": None,
         }
         decision = "answer"
         decision_reason = "未找到符合条件的论文，因此未继续执行后续步骤。"
-    elif planner_strictness == "summary":
-        sufficiency_gate = {
-            "decision": "answer",
-            "reason": "summary_route_bypass_strict_gate",
-            "triggered_rules": ["summary_route"],
-            "clarify_questions": [],
-            "clarify_limit_hit": False,
-            "forced_partial_answer": False,
-            "missing_key_elements": [],
-            "semantic_policy": "summary",
-        }
-        decision = "answer"
-        decision_reason = "summary 路径绕过 strict fact 门控。"
     elif planner_strictness == "catalog":
         sufficiency_gate = {
             "decision": "answer",
             "reason": "catalog_route_bypass_retrieval_gate",
+            "reason_code": "catalog_route",
+            "severity": "info",
             "triggered_rules": ["catalog_route"],
             "clarify_questions": [],
             "clarify_limit_hit": False,
             "forced_partial_answer": False,
             "missing_key_elements": [],
             "semantic_policy": "catalog",
+            "constraints_envelope": None,
         }
         decision = "answer"
         decision_reason = "catalog 路径绕过正文证据门控。"
@@ -3044,14 +3075,28 @@ def run_qa(args: argparse.Namespace) -> int:
         )
         decision = str(sufficiency_gate.get("decision", "answer"))
         decision_reason = str(sufficiency_gate.get("reason", "")).strip()
+    _append_constraint_envelope(constraint_envelopes, sufficiency_gate.get("constraints_envelope"))
     retrieval_metrics["semantic_similarity_score"] = sufficiency_gate.get("semantic_similarity_score")
     retrieval_metrics["semantic_strategy_tier"] = sufficiency_gate.get("semantic_policy", planner_strictness)
     if force_clarify_due_to_anchor:
         decision_reason = force_clarify_reason
         sufficiency_gate["reason"] = force_clarify_reason
+        sufficiency_gate["reason_code"] = force_clarify_code or "control_intent_anchor_missing_or_stale"
         triggered_rules = sufficiency_gate.get("triggered_rules")
         if isinstance(triggered_rules, list) and force_clarify_code not in triggered_rules:
             triggered_rules.append(force_clarify_code)
+        sufficiency_gate["constraints_envelope"] = build_constraint_envelope(
+            constraint_type="control_intent_anchor",
+            reason_code=force_clarify_code or "control_intent_anchor_missing_or_stale",
+            severity="warning",
+            retryable=True,
+            blocking_scope="topic_binding",
+            user_safe_summary=force_clarify_reason,
+            evidence_snapshot={"anchor_resolution": anchor_resolution},
+            suggested_next_actions=["补充论文标题、作者或研究主题。"],
+            clarify_questions=[],
+        )
+        _append_constraint_envelope(constraint_envelopes, sufficiency_gate.get("constraints_envelope"))
     clarify_questions = [str(q).strip() for q in sufficiency_gate.get("clarify_questions", []) if str(q).strip()][:1]
     assistant_policy = apply_assistant_mode_decision_policy(
         assistant_mode_enabled=assistant_mode_enabled,
@@ -3071,6 +3116,25 @@ def run_qa(args: argparse.Namespace) -> int:
     clarify_limit_hit = assistant_policy.clarify_limit_hit
     forced_partial_answer = assistant_policy.forced_partial_answer
     final_refuse_source: str | None = "sufficiency_gate" if decision == "refuse" else None
+    if forced_partial_answer and not any(
+        str((item or {}).get("reason_code", "")).strip() == "clarify_limit_reached_force_partial_answer"
+        for item in constraint_envelopes
+        if isinstance(item, dict)
+    ):
+        _append_constraint_envelope(
+            constraint_envelopes,
+            build_constraint_envelope(
+                constraint_type="partial_answer",
+                reason_code="clarify_limit_reached_force_partial_answer",
+                severity="warning",
+                retryable=True,
+                blocking_scope="full_answer",
+                user_safe_summary="连续澄清达到上限，改为低置信可追溯回答。",
+                evidence_snapshot={"clarify_count_before_turn": clarify_streak_before_turn},
+                suggested_next_actions=["补充更具体的论文线索或实验指标。"],
+                allows_partial_answer=True,
+            ),
+        )
     assistant_summary_suggestions: list[str] = []
     stream_display = {
         "enabled": False,
@@ -3116,8 +3180,12 @@ def run_qa(args: argparse.Namespace) -> int:
     }
 
     evidence_policy_gate: dict[str, Any] = {"enabled": bool(config.evidence_policy_enforced), "skipped": "not_evaluated"}
+    answer_guardrail_requires_replan = False
+    answer_guardrail_reason = ""
+    answer_guardrail_clarify_questions: list[str] = []
+    posture_override_forbidden = False
     if decision == "answer":
-        if planner_strictness == "catalog" or (planner_short_circuit and bool(planner_short_circuit.get("triggered"))):
+        if planner_strictness == "catalog" or planner_catalog_short_circuit:
             answer = compose_catalog_answer(catalog_result or {})
             answer_citations = []
             assistant_summary_suggestions = []
@@ -3132,7 +3200,7 @@ def run_qa(args: argparse.Namespace) -> int:
             answer, answer_citations, assistant_summary_suggestions, summary_ready = _build_assistant_summary_answer(
                 question=standalone_query,
                 evidence_grouped=evidence_grouped,
-                min_topics=max(1, int(getattr(config, "planner_summary_min_papers", 2))) if not forced_partial_answer else 1,
+                min_topics=max(3, int(getattr(config, "planner_summary_min_papers", 3))) if not forced_partial_answer else 1,
                 low_confidence_note=forced_partial_answer,
             )
             if summary_ready:
@@ -3155,17 +3223,32 @@ def run_qa(args: argparse.Namespace) -> int:
                     context_budget = dict(empty_context_budget)
                     evidence_policy_gate = {"enabled": bool(config.evidence_policy_enforced), "skipped": "forced_partial_answer"}
                 else:
-                    decision = "clarify"
-                    decision_reason = "可追溯主题不足 3 条，先最小澄清以补齐方向。"
-                    clarify_questions = ["你最关心哪一类主题（方法、实验结果、应用场景）？"]
-                    answer = "为确保回答基于充分证据，请先澄清以下问题：\n1. " + clarify_questions[0]
+                    answer_guardrail_requires_replan = True
+                    answer_guardrail_reason = "可追溯主题不足 3 条，先最小澄清以补齐方向。"
+                    answer_guardrail_clarify_questions = ["你最关心哪一类主题（方法、实验结果、应用场景）？"]
+                    legacy_posture_override_attempts.append("assistant_summary_insufficient_topics")
+                    answer = ""
                     answer_citations = []
                     answer_llm_used = False
                     answer_llm_fallback = False
                     answer_llm_diagnostics = None
                     answer_stream_observation = dict(empty_stream_observation)
                     context_budget = dict(empty_context_budget)
-                    evidence_policy_gate = {"enabled": bool(config.evidence_policy_enforced), "skipped": "assistant_summary_insufficient_topics"}
+                    evidence_policy_gate = {
+                        "enabled": bool(config.evidence_policy_enforced),
+                        "skipped": "assistant_summary_insufficient_topics",
+                        "constraints_envelope": build_constraint_envelope(
+                            constraint_type="evidence_insufficient",
+                            reason_code="assistant_summary_insufficient_topics",
+                            severity="warning",
+                            retryable=True,
+                            blocking_scope="summary_answer",
+                            user_safe_summary=answer_guardrail_reason,
+                            evidence_snapshot={"topic_count": len(evidence_grouped)},
+                            suggested_next_actions=answer_guardrail_clarify_questions,
+                            clarify_questions=answer_guardrail_clarify_questions,
+                        ),
+                    }
         else:
             (
                 answer,
@@ -3195,6 +3278,7 @@ def run_qa(args: argparse.Namespace) -> int:
                 policy_enforced=bool(config.evidence_policy_enforced),
                 claim_binding_report=answer_stream_observation.get("claim_binding"),
             )
+            _append_constraint_envelope(constraint_envelopes, evidence_policy_gate.get("constraints_envelope"))
             if bool(evidence_policy_gate.get("triggered")):
                 policy_override = prefer_assistant_mode_clarify(
                     assistant_mode_used=assistant_mode_used,
@@ -3204,16 +3288,18 @@ def run_qa(args: argparse.Namespace) -> int:
                     final_refuse_source=final_refuse_source,
                 )
                 if policy_override.applied:
-                    decision = policy_override.decision
-                    decision_reason = policy_override.decision_reason
-                    clarify_questions = list(policy_override.clarify_questions)
-                    answer = str(policy_override.answer or "")
-                    answer_citations = list(policy_override.answer_citations or [])
+                    answer_guardrail_requires_replan = True
+                    answer_guardrail_reason = policy_override.decision_reason
+                    answer_guardrail_clarify_questions = list(policy_override.clarify_questions)
+                    legacy_posture_override_attempts.append("evidence_policy_gate_downgrade_to_clarify")
+                    answer = ""
+                    answer_citations = []
                     final_refuse_source = policy_override.final_refuse_source
                 else:
-                    decision = "refuse"
-                    decision_reason = "关键结论缺少可追溯证据，触发证据门控拒答。"
-                    clarify_questions = []
+                    answer_guardrail_requires_replan = True
+                    answer_guardrail_reason = "关键结论缺少可追溯证据，触发证据门控拒答。"
+                    answer_guardrail_clarify_questions = []
+                    legacy_posture_override_attempts.append("evidence_policy_gate_refuse")
                     final_refuse_source = "evidence_policy_gate"
         elif decision == "answer":
             evidence_policy_gate = {"enabled": bool(config.evidence_policy_enforced), "skipped": "forced_partial_answer"}
@@ -3261,17 +3347,55 @@ def run_qa(args: argparse.Namespace) -> int:
         )
         if not policy_override.applied:
             output_warnings.append("citation_mapping_incomplete_low_confidence")
+            _append_constraint_envelope(
+                constraint_envelopes,
+                build_constraint_envelope(
+                    constraint_type="citation_legality",
+                    reason_code="citation_mapping_incomplete_low_confidence",
+                    severity="warning",
+                    retryable=True,
+                    blocking_scope="citation_mapping",
+                    user_safe_summary="部分引用未能完整映射到证据分组，回答已降级为低置信提示。",
+                    citation_status="mapping_incomplete",
+                    suggested_next_actions=["结合原文核验引用，或追问更具体的结论。"],
+                ),
+            )
             answer_citations = [c for c in answer_citations if c.get("chunk_id") in grouped_chunk_ids]
             low_conf_note = "低置信提示：部分引用未能完整映射到证据分组，请结合原文核验。"
             if low_conf_note not in answer:
                 answer = f"{answer}\n\n{low_conf_note}".strip()
         else:
-            decision = policy_override.decision
-            decision_reason = policy_override.decision_reason
-            clarify_questions = list(policy_override.clarify_questions)
-            answer = str(policy_override.answer or "")
-            answer_citations = list(policy_override.answer_citations or [])
+            answer_guardrail_requires_replan = True
+            answer_guardrail_reason = policy_override.decision_reason
+            answer_guardrail_clarify_questions = list(policy_override.clarify_questions)
+            legacy_posture_override_attempts.append("citation_mapping_incomplete_clarify")
+            answer = ""
+            answer_citations = []
             final_refuse_source = policy_override.final_refuse_source
+
+    if answer_guardrail_requires_replan:
+        if final_refuse_source == "evidence_policy_gate":
+            decision = "refuse"
+            clarify_questions = []
+        else:
+            decision = "clarify"
+            clarify_questions = list(answer_guardrail_clarify_questions or clarify_questions or ["请提供论文标题、作者、年份或会议等线索。"])[:1]
+        decision_reason = answer_guardrail_reason or decision_reason
+    posture_override_forbidden = bool(legacy_posture_override_attempts)
+
+    final_interaction = resolve_final_interaction_decision(
+        planner_result=planner_result,
+        proposed_decision=decision,
+        decision_reason=decision_reason,
+        clarify_questions=clarify_questions,
+        final_refuse_source=final_refuse_source,
+        constraint_envelopes=constraint_envelopes,
+        forced_partial_answer=forced_partial_answer,
+        posture_override_forbidden=posture_override_forbidden,
+    )
+    decision = final_interaction.decision
+    decision_reason = final_interaction.decision_reason
+    clarify_questions = list(final_interaction.clarify_questions)
 
     planner_policy_constraint_signals = _collect_planner_policy_constraint_signals(
         decision=decision,
@@ -3295,6 +3419,31 @@ def run_qa(args: argparse.Namespace) -> int:
         constraint_signals=planner_policy_constraint_signals,
     )
 
+    if decision == "clarify":
+        if "insufficient_evidence_for_answer" not in output_warnings:
+            output_warnings.append("insufficient_evidence_for_answer")
+        clarify_questions = (clarify_questions or ["请提供论文标题、作者、年份或会议等线索。"])[:1]
+        answer = "为确保回答基于充分证据，请先澄清以下问题："
+        for idx, q in enumerate(clarify_questions, start=1):
+            answer += f"\n{idx}. {q}"
+        answer_citations = []
+        answer_llm_used = False
+        answer_llm_fallback = False
+        answer_llm_diagnostics = None
+        answer_stream_observation = dict(empty_stream_observation)
+        context_budget = dict(empty_context_budget)
+    elif decision == "refuse":
+        if "insufficient_evidence_for_answer" not in output_warnings:
+            output_warnings.append("insufficient_evidence_for_answer")
+        final_refuse_source = final_refuse_source or "sufficiency_gate"
+        answer = _m8_weak_answer(standalone_query, source=final_refuse_source)
+        answer_citations = []
+        answer_llm_used = False
+        answer_llm_fallback = False
+        answer_llm_diagnostics = None
+        answer_stream_observation = dict(empty_stream_observation)
+        context_budget = dict(empty_context_budget)
+
     answer = _prepend_notice(answer, structure_coverage_notice)
 
     evidence_flat = _flatten_evidence(evidence_grouped)
@@ -3309,7 +3458,7 @@ def run_qa(args: argparse.Namespace) -> int:
             print(f"  - {item['chunk_id']} [{item['section_page']}] {item['quote']}")
 
     run_dir = _resolve_run_dir(args)
-    need_scope_clarification = decision == "clarify" or scope_mode == "clarify_scope" or (
+    need_scope_clarification = final_interaction.user_visible_posture == "clarify" or scope_mode == "clarify_scope" or (
         not bool(scope_reason.get("has_paper_clue")) and "请提供论文标题/作者/年份" in answer
     )
     final_decision = (
@@ -3317,10 +3466,10 @@ def run_qa(args: argparse.Namespace) -> int:
         if need_scope_clarification
         else (
             "insufficient_evidence"
-            if decision == "refuse"
+            if final_interaction.user_visible_posture == "refuse"
             else (
                 "answer_with_catalog"
-                if planner_strictness == "catalog" or bool((planner_short_circuit or {}).get("triggered"))
+                if planner_strictness == "catalog" or planner_catalog_short_circuit
                 else ("llm_answer_with_evidence" if answer_llm_used else ("answer_with_evidence" if evidence_flat else "insufficient_evidence"))
             )
         )
@@ -3328,7 +3477,7 @@ def run_qa(args: argparse.Namespace) -> int:
     next_transient_constraints = [str(x).strip() for x in sufficiency_gate.get("missing_key_elements", []) if str(x).strip()]
     if not need_scope_clarification:
         next_transient_constraints = []
-    clarify_count = (0 if planner_result.is_new_topic else clarify_streak_before_turn) + (1 if decision == "clarify" else 0)
+    clarify_count = (0 if planner_result.is_new_topic else clarify_streak_before_turn) + (1 if final_interaction.user_visible_posture == "clarify" else 0)
 
     turn_number = append_turn_record(
         session_id,
@@ -3464,6 +3613,14 @@ def run_qa(args: argparse.Namespace) -> int:
         "final_decision": final_decision,
         "decision": decision,
         "decision_reason": decision_reason,
+        "final_interaction_authority": final_interaction.final_interaction_authority,
+        "interaction_decision_source": final_interaction.interaction_decision_source,
+        "final_user_visible_posture": final_interaction.user_visible_posture,
+        "kernel_constraint_summary": final_interaction.kernel_constraint_summary,
+        "guardrail_blocked": final_interaction.guardrail_blocked,
+        "posture_override_forbidden": final_interaction.posture_override_forbidden,
+        "constraints_envelope": constraint_envelopes,
+        "legacy_posture_override_attempts": legacy_posture_override_attempts,
         "assistant_mode_enabled": assistant_mode_enabled,
         "assistant_mode_used": assistant_mode_used,
         "assistant_summary_suggestions": assistant_summary_suggestions,
@@ -3679,6 +3836,14 @@ def run_qa(args: argparse.Namespace) -> int:
         "final_decision": final_decision,
         "decision": decision,
         "decision_reason": decision_reason,
+        "final_interaction_authority": final_interaction.final_interaction_authority,
+        "interaction_decision_source": final_interaction.interaction_decision_source,
+        "final_user_visible_posture": final_interaction.user_visible_posture,
+        "kernel_constraint_summary": final_interaction.kernel_constraint_summary,
+        "guardrail_blocked": final_interaction.guardrail_blocked,
+        "posture_override_forbidden": final_interaction.posture_override_forbidden,
+        "constraints_envelope": constraint_envelopes,
+        "legacy_posture_override_attempts": legacy_posture_override_attempts,
         "assistant_mode_enabled": assistant_mode_enabled,
         "assistant_mode_used": assistant_mode_used,
         "assistant_summary_suggestions": assistant_summary_suggestions,

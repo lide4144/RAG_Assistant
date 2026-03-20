@@ -513,10 +513,12 @@ def merge_with_pending_clarify(
     if not isinstance(pending, dict):
         return user_input, False
     original_question = str(pending.get("original_question", "")).strip()
-    clarify_question = str(pending.get("clarify_question", "")).strip()
     if not original_question:
         return user_input, False
-    merged = f"{original_question} {clarify_question} 用户补充：{user_input}".strip()
+    # Keep the original question chain, but avoid mechanically injecting the prior
+    # clarify prompt into the next-turn query. That old stitching path caused rewrite
+    # and meta-guard drift after planner state had already decided this is a follow-up.
+    merged = f"{original_question} 用户补充：{user_input}".strip()
     return merged, True
 
 

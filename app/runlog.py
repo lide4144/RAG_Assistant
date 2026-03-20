@@ -146,6 +146,69 @@ def validate_trace_schema(trace: dict[str, Any]) -> tuple[bool, list[str]]:
     decision_reason = trace.get("decision_reason")
     if decision_reason is not None and not isinstance(decision_reason, str):
         errors.append("decision_reason must be string or null")
+    final_interaction_authority = trace.get("final_interaction_authority")
+    if final_interaction_authority is not None and not isinstance(final_interaction_authority, str):
+        errors.append("final_interaction_authority must be string or null")
+    if isinstance(final_interaction_authority, str) and final_interaction_authority not in {"planner", "planner_policy"}:
+        errors.append("final_interaction_authority must be one of planner|planner_policy")
+    interaction_decision_source = trace.get("interaction_decision_source")
+    if interaction_decision_source is not None and not isinstance(interaction_decision_source, str):
+        errors.append("interaction_decision_source must be string or null")
+    final_user_visible_posture = trace.get("final_user_visible_posture")
+    if final_user_visible_posture is not None and not isinstance(final_user_visible_posture, str):
+        errors.append("final_user_visible_posture must be string or null")
+    if isinstance(final_user_visible_posture, str) and final_user_visible_posture not in {"execute", "clarify", "partial_answer", "refuse", "delegate"}:
+        errors.append("final_user_visible_posture must be one of execute|clarify|partial_answer|refuse|delegate")
+    guardrail_blocked = trace.get("guardrail_blocked")
+    if guardrail_blocked is not None and not isinstance(guardrail_blocked, bool):
+        errors.append("guardrail_blocked must be bool or null")
+    posture_override_forbidden = trace.get("posture_override_forbidden")
+    if posture_override_forbidden is not None and not isinstance(posture_override_forbidden, bool):
+        errors.append("posture_override_forbidden must be bool or null")
+    if posture_override_forbidden is True:
+        errors.append("posture_override_forbidden must not be true")
+    kernel_constraint_summary = trace.get("kernel_constraint_summary")
+    if kernel_constraint_summary is not None and not isinstance(kernel_constraint_summary, list):
+        errors.append("kernel_constraint_summary must be list or null")
+    if isinstance(kernel_constraint_summary, list):
+        for i, item in enumerate(kernel_constraint_summary):
+            if not isinstance(item, dict):
+                errors.append(f"kernel_constraint_summary[{i}] must be object")
+                continue
+            for required_key in ("constraint_type", "reason_code", "severity", "guardrail_blocked", "blocking_scope"):
+                if required_key not in item:
+                    errors.append(f"kernel_constraint_summary[{i}] missing key: {required_key}")
+    constraints_envelope = trace.get("constraints_envelope")
+    if constraints_envelope is not None and not isinstance(constraints_envelope, list):
+        errors.append("constraints_envelope must be list or null")
+    if isinstance(constraints_envelope, list):
+        for i, item in enumerate(constraints_envelope):
+            if not isinstance(item, dict):
+                errors.append(f"constraints_envelope[{i}] must be object")
+                continue
+            for required_key in (
+                "constraint_type",
+                "reason_code",
+                "severity",
+                "retryable",
+                "blocking_scope",
+                "user_safe_summary",
+                "evidence_snapshot",
+                "citation_status",
+                "suggested_next_actions",
+                "guardrail_blocked",
+                "allows_partial_answer",
+                "clarify_questions",
+            ):
+                if required_key not in item:
+                    errors.append(f"constraints_envelope[{i}] missing key: {required_key}")
+    legacy_posture_override_attempts = trace.get("legacy_posture_override_attempts")
+    if legacy_posture_override_attempts is not None and not isinstance(legacy_posture_override_attempts, list):
+        errors.append("legacy_posture_override_attempts must be list or null")
+    if isinstance(legacy_posture_override_attempts, list):
+        for i, item in enumerate(legacy_posture_override_attempts):
+            if not isinstance(item, str):
+                errors.append(f"legacy_posture_override_attempts[{i}] must be string")
     final_refuse_source = trace.get("final_refuse_source")
     if final_refuse_source is not None and not isinstance(final_refuse_source, str):
         errors.append("final_refuse_source must be string or null")

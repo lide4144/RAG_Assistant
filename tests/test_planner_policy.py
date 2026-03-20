@@ -2,7 +2,14 @@ from __future__ import annotations
 
 import unittest
 
-from app.planner_policy import apply_assistant_mode_decision_policy, prefer_assistant_mode_clarify
+from types import SimpleNamespace
+
+from app.planner_policy import (
+    apply_assistant_mode_decision_policy,
+    build_constraint_envelope,
+    prefer_assistant_mode_clarify,
+    resolve_final_interaction_decision,
+)
 
 
 class PlannerPolicyTests(unittest.TestCase):
@@ -73,6 +80,32 @@ class PlannerPolicyTests(unittest.TestCase):
         self.assertEqual(result.decision, "clarify")
         self.assertEqual(result.answer_citations, [])
         self.assertIsNone(result.final_refuse_source)
+
+    def test_resolve_final_interaction_decision_emits_partial_answer_contract(self) -> None:
+        planner_result = SimpleNamespace(decision_result="local_execute")
+        constraint = build_constraint_envelope(
+            constraint_type="partial_answer",
+            reason_code="clarify_limit_reached_force_partial_answer",
+            severity="warning",
+            retryable=True,
+            blocking_scope="full_answer",
+            user_safe_summary="连续澄清达到上限。",
+            allows_partial_answer=True,
+        )
+        result = resolve_final_interaction_decision(
+            planner_result=planner_result,
+            proposed_decision="answer",
+            decision_reason="连续澄清达到上限，改为低置信可追溯回答。",
+            clarify_questions=[],
+            final_refuse_source=None,
+            constraint_envelopes=[constraint],
+            forced_partial_answer=True,
+        )
+
+        self.assertEqual(result.user_visible_posture, "partial_answer")
+        self.assertEqual(result.final_interaction_authority, "planner_policy")
+        self.assertEqual(result.interaction_decision_source, "planner_policy:partial_answer")
+        self.assertEqual(result.kernel_constraint_summary[0]["reason_code"], "clarify_limit_reached_force_partial_answer")
 
 
 if __name__ == "__main__":
