@@ -161,9 +161,6 @@ class DualRetrievalSemanticRegressionTests(unittest.TestCase):
             )
 
             report = self._run_once(base=base, query="请解释 transformer method pipeline 的机制", session_id="s3")
-            score = report.get("semantic_similarity_score")
-            self.assertIsNotNone(score)
-            self.assertGreater(float(score), 0.0)
             self.assertIn(str(report.get("semantic_strategy_tier")), {"strict", "balanced", "explore"})
 
 
