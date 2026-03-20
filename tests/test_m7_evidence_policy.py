@@ -74,9 +74,11 @@ class M7EvidencePolicyTests(unittest.TestCase):
             policy_enforced=True,
         )
 
-        self.assertIn("Evidence Policy Gate", gated_answer)
+        self.assertEqual(gated_answer, answer)
         self.assertEqual(citations, [])
         self.assertTrue(gate_report.get("triggered"))
+        self.assertEqual(gate_report.get("constraints_envelope", {}).get("reason_code"), "evidence_policy_gate_claim_not_supported")
+        self.assertTrue(gate_report.get("constraints_envelope", {}).get("guardrail_blocked"))
         self.assertIn("insufficient_evidence_for_answer", warnings)
 
     def test_gate_can_be_disabled(self) -> None:
@@ -133,9 +135,10 @@ class M7EvidencePolicyTests(unittest.TestCase):
             output_warnings=warnings,
             policy_enforced=True,
         )
-        self.assertIn("Evidence Policy Gate", gated_answer)
+        self.assertEqual(gated_answer, "The experiment reports 92.1 accuracy on benchmark.")
         self.assertEqual(citations, [])
         self.assertTrue(gate_report.get("triggered"))
+        self.assertEqual(gate_report.get("constraints_envelope", {}).get("citation_status"), "claim_not_supported")
         self.assertIn("insufficient_evidence_for_answer", warnings)
 
     def test_extract_key_claims_ignores_uncertainty_disclaimer(self) -> None:

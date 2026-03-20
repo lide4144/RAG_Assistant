@@ -136,6 +136,23 @@ class SufficiencyGateUnitTests(unittest.TestCase):
         self.assertEqual(gate.get("decision"), "clarify")
         self.assertIn("subject_constraint", gate.get("missing_key_elements", []))
 
+    def test_single_paper_metadata_question_does_not_require_subject_constraint(self) -> None:
+        self.cfg.sufficiency_topic_match_threshold = 0.0
+        evidence = _grouped_from_text(
+            [
+                "论文标题为 Transformer Paper，作者为何恺明，发表于 2023 年 NeurIPS。",
+                "该元数据段落给出了作者、年份和会议线索。",
+            ]
+        )
+        gate = run_sufficiency_gate(
+            question="这篇论文的作者和年份是什么？",
+            scope_mode="open",
+            evidence_grouped=evidence,
+            config=self.cfg,
+        )
+        self.assertEqual(gate.get("decision"), "answer")
+        self.assertNotIn("subject_constraint", gate.get("missing_key_elements", []))
+
     def test_question_type_numeric_mapping_triggers_clarify(self) -> None:
         self.cfg.sufficiency_topic_match_threshold = 0.0
         evidence = _grouped_from_text(

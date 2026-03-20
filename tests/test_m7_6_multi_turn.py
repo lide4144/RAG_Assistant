@@ -68,7 +68,7 @@ class M76MultiTurnTests(unittest.TestCase):
             config.embedding.enabled = False
             run_dirs: list[Path] = []
 
-            def _mk_run_dir(_: str) -> Path:
+            def _mk_run_dir(*_: object) -> Path:
                 out = base / f"run_{len(run_dirs) + 1:02d}"
                 out.mkdir(parents=True, exist_ok=False)
                 run_dirs.append(out)
@@ -112,7 +112,7 @@ class M76MultiTurnTests(unittest.TestCase):
             config.embedding.enabled = False
             run_dirs: list[Path] = []
 
-            def _mk_run_dir(_: str) -> Path:
+            def _mk_run_dir(*_: object) -> Path:
                 out = base / f"run_{len(run_dirs) + 1:02d}"
                 out.mkdir(parents=True, exist_ok=False)
                 run_dirs.append(out)
@@ -202,7 +202,7 @@ class M76MultiTurnTests(unittest.TestCase):
             config.embedding.enabled = False
             run_dirs: list[Path] = []
 
-            def _mk_run_dir(_: str) -> Path:
+            def _mk_run_dir(*_: object) -> Path:
                 out = base / f"run_{len(run_dirs) + 1:02d}"
                 out.mkdir(parents=True, exist_ok=False)
                 run_dirs.append(out)
@@ -245,7 +245,7 @@ class M76MultiTurnTests(unittest.TestCase):
             config.embedding.enabled = False
             run_dirs: list[Path] = []
 
-            def _mk_run_dir(_: str) -> Path:
+            def _mk_run_dir(*_: object) -> Path:
                 out = base / f"run_{len(run_dirs) + 1:02d}"
                 out.mkdir(parents=True, exist_ok=False)
                 run_dirs.append(out)
@@ -390,7 +390,7 @@ class M76MultiTurnTests(unittest.TestCase):
                 encoding="utf-8",
             )
 
-            def _mk_run_dir(_: str) -> Path:
+            def _mk_run_dir(*_: object) -> Path:
                 out = base / f"run_{len(run_dirs) + 1:02d}"
                 out.mkdir(parents=True, exist_ok=False)
                 run_dirs.append(out)
@@ -434,7 +434,7 @@ class M76MultiTurnTests(unittest.TestCase):
             config.embedding.enabled = False
             run_dirs: list[Path] = []
 
-            def _mk_run_dir(_: str) -> Path:
+            def _mk_run_dir(*_: object) -> Path:
                 out = base / f"run_{len(run_dirs) + 1:02d}"
                 out.mkdir(parents=True, exist_ok=False)
                 run_dirs.append(out)
@@ -513,7 +513,7 @@ class M76MultiTurnTests(unittest.TestCase):
             run_dirs: list[Path] = []
             captured: dict[str, str] = {}
 
-            def _mk_run_dir(_: str) -> Path:
+            def _mk_run_dir(*_: object) -> Path:
                 out = base / f"run_{len(run_dirs) + 1:02d}"
                 out.mkdir(parents=True, exist_ok=False)
                 run_dirs.append(out)
@@ -556,6 +556,7 @@ class M76MultiTurnTests(unittest.TestCase):
 
             self.assertIn("用户补充：Why does it lack of evidences?", captured.get("user_input", ""))
             self.assertIn("这篇论文的作者是谁？", captured.get("standalone_query", ""))
+            self.assertNotIn("请提供论文标题/作者/年份/会议等线索。", captured.get("user_input", ""))
 
     def test_meta_guard_can_be_disabled_by_config(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -613,7 +614,7 @@ class M76MultiTurnTests(unittest.TestCase):
             config.style_control_max_turn_distance = 3
             run_dirs: list[Path] = []
 
-            def _mk_run_dir(_: str) -> Path:
+            def _mk_run_dir(*_: object) -> Path:
                 out = base / f"run_{len(run_dirs) + 1:02d}"
                 out.mkdir(parents=True, exist_ok=False)
                 run_dirs.append(out)
@@ -665,7 +666,7 @@ class M76MultiTurnTests(unittest.TestCase):
             config.style_control_max_turn_distance = 3
             run_dirs: list[Path] = []
 
-            def _mk_run_dir(_: str) -> Path:
+            def _mk_run_dir(*_: object) -> Path:
                 out = base / f"run_{len(run_dirs) + 1:02d}"
                 out.mkdir(parents=True, exist_ok=False)
                 run_dirs.append(out)
@@ -745,7 +746,7 @@ class M76MultiTurnTests(unittest.TestCase):
             config.style_control_max_turn_distance = 3
             run_dirs: list[Path] = []
 
-            def _mk_run_dir(_: str) -> Path:
+            def _mk_run_dir(*_: object) -> Path:
                 out = base / f"run_{len(run_dirs) + 1:02d}"
                 out.mkdir(parents=True, exist_ok=False)
                 run_dirs.append(out)
