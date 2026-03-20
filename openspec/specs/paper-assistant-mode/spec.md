@@ -19,7 +19,7 @@
 - **那么** 该段内容必须作为 explanatory provenance 处理，而不是被渲染为正文事实 citation
 
 ### 需求:系统必须将论文助理模式纳入 planner runtime 的统一调度
-系统必须将论文助理模式纳入顶层 planner runtime 的统一调度边界；planner 必须基于标准化 policy 输入决定何时进入研究辅助能力、何时先澄清、何时回退到普通事实问答、总结路径或 legacy fallback，并通过 `decision_result`、`research_mode` 与 `selected_tools_or_skills` 明确表达结果；当进入执行阶段时，系统必须通过已注册的 research assistant tool contract 发起调用，禁止将论文助理模式实现为绕过 planner runtime 和 tool registry 的独立旁路入口。
+系统必须将论文助理模式纳入顶层 planner runtime 的统一调度边界；planner 必须基于标准化 policy 输入决定何时进入研究辅助能力、何时先澄清、何时回退到普通事实问答、总结路径或受控结束，并通过 `decision_result`、`research_mode` 与 `selected_tools_or_skills` 明确表达结果；当进入执行阶段时，系统必须通过已注册的 research assistant tool contract 发起调用，禁止将论文助理模式实现为绕过 planner runtime 和 tool registry 的独立旁路入口。
 
 #### 场景:研究辅助请求先经过 planner 决策
 - **当** 用户提出“帮我比较这些论文并给出下一步研究建议”之类的研究辅助请求

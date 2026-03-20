@@ -10,8 +10,9 @@ from unittest.mock import patch
 from app import capability_planner
 from app.capability_planner import (
     PLANNER_SOURCE_LLM,
-    build_rule_based_plan,
+    build_planner_fallback,
     execute_catalog_lookup,
+    paper_assistant_clarification,
     parse_planner_result,
     serialize_planner_result,
 )
@@ -21,16 +22,33 @@ from app.retrieve import RetrievalCandidate
 
 
 class CapabilityPlannerTests(unittest.TestCase):
+    def _planner_payload(self, **overrides) -> dict[str, object]:
+        payload: dict[str, object] = {
+            "decision_version": "planner-policy-v1",
+            "planner_source": "llm",
+            "planner_used": True,
+            "planner_confidence": 0.91,
+            "user_goal": "总结这几篇论文的差异",
+            "standalone_query": "总结这几篇论文的差异",
+            "is_new_topic": False,
+            "should_clear_pending_clarify": False,
+            "relation_to_previous": "same_topic_or_no_pending",
+            "primary_capability": "cross_doc_summary",
+            "strictness": "summary",
+            "decision_result": "local_execute",
+            "knowledge_route": "local",
+            "research_mode": "none",
+            "requires_clarification": False,
+            "clarify_question": None,
+            "selected_tools_or_skills": ["cross_doc_summary"],
+            "action_plan": [{"action": "cross_doc_summary", "query": "总结这几篇论文的差异"}],
+            "fallback": {"type": None, "reason": None},
+        }
+        payload.update(overrides)
+        return payload
+
     def test_planner_result_round_trip_preserves_decision_schema(self) -> None:
-        result = build_rule_based_plan(
-            user_input="总结这几篇论文的差异",
-            standalone_query="总结这几篇论文的差异",
-            dialog_state="normal",
-            history_topic_anchors=[],
-            pending_clarify=None,
-            max_steps=3,
-            catalog_limit=20,
-        )
+        result = parse_planner_result(self._planner_payload(), default_query="总结这几篇论文的差异")
         serialized = serialize_planner_result(result)
         serialized["planner_source"] = PLANNER_SOURCE_LLM
         parsed = parse_planner_result(serialized, default_query="总结这几篇论文的差异")
@@ -39,96 +57,37 @@ class CapabilityPlannerTests(unittest.TestCase):
         self.assertEqual(parsed.action_plan, result.action_plan)
         self.assertEqual(parsed.planner_source, PLANNER_SOURCE_LLM)
 
-    def test_rule_planner_builds_catalog_then_summary_plan(self) -> None:
-        result = build_rule_based_plan(
-            user_input="列出我昨天上传的 3 篇大模型论文，并用表格对比一下它们的方法差异",
-            standalone_query="列出我昨天上传的 3 篇大模型论文，并用表格对比一下它们的方法差异",
-            dialog_state="normal",
-            history_topic_anchors=[],
-            pending_clarify=None,
-            max_steps=3,
-            catalog_limit=20,
+    def test_parse_planner_result_preserves_catalog_then_summary_plan(self) -> None:
+        result = parse_planner_result(
+            self._planner_payload(
+                user_goal="列出我昨天上传的 3 篇大模型论文，并用表格对比一下它们的方法差异",
+                standalone_query="列出我昨天上传的 3 篇大模型论文，并用表格对比一下它们的方法差异",
+                selected_tools_or_skills=["catalog_lookup", "cross_doc_summary"],
+                action_plan=[
+                    {"action": "catalog_lookup", "query": "列出我昨天上传的 3 篇大模型论文，并用表格对比一下它们的方法差异", "produces": "paper_set", "params": {"limit": 3}},
+                    {"action": "cross_doc_summary", "query": "列出我昨天上传的 3 篇大模型论文，并用表格对比一下它们的方法差异", "depends_on": ["paper_set"], "params": {"format": "table"}},
+                ],
+            ),
+            default_query="列出我昨天上传的 3 篇大模型论文，并用表格对比一下它们的方法差异",
         )
-        self.assertEqual(result.primary_capability, "cross_doc_summary")
-        self.assertEqual(result.strictness, "summary")
-        self.assertEqual(result.decision_result, "local_execute")
-        self.assertEqual(result.knowledge_route, "local")
         self.assertEqual([step["action"] for step in result.action_plan], ["catalog_lookup", "cross_doc_summary"])
         self.assertEqual(result.action_plan[1]["params"].get("format"), "table")
-        self.assertEqual(result.selected_tools_or_skills, ["catalog_lookup", "cross_doc_summary"])
 
-    def test_rule_planner_upgrades_strict_fact_escape(self) -> None:
-        result = build_rule_based_plan(
-            user_input="对比这 3 篇论文的准确率具体数值",
-            standalone_query="对比这 3 篇论文的准确率具体数值",
-            dialog_state="normal",
-            history_topic_anchors=[],
-            pending_clarify=None,
-            max_steps=3,
-            catalog_limit=20,
-        )
-        self.assertEqual(result.primary_capability, "fact_qa")
-        self.assertEqual(result.strictness, "strict_fact")
-        self.assertEqual(result.decision_result, "local_execute")
-        self.assertEqual(result.action_plan[-1]["action"], "fact_qa")
+    def test_paper_assistant_clarification_requires_scope_for_deictic_requests(self) -> None:
+        missing, question = paper_assistant_clarification("帮我比较这些论文并给出下一步研究建议")
+        self.assertEqual(missing, ["paper_scope"])
+        self.assertIn("请先说明", question or "")
 
-    def test_rule_planner_emits_paper_assistant_tool_for_research_guidance(self) -> None:
-        result = build_rule_based_plan(
-            user_input="帮我分析 Transformer 压缩方向的论文并给出下一步研究建议",
-            standalone_query="帮我分析 Transformer 压缩方向的论文并给出下一步研究建议",
-            dialog_state="normal",
-            history_topic_anchors=[],
-            pending_clarify=None,
-            max_steps=3,
-            catalog_limit=20,
-        )
-        self.assertEqual(result.primary_capability, "paper_assistant")
-        self.assertEqual(result.strictness, "summary")
-        self.assertEqual(result.decision_result, "delegate_research_assistant")
-        self.assertEqual(result.research_mode, "paper_assistant")
-        self.assertEqual(result.action_plan[-1]["action"], "paper_assistant")
-
-    def test_rule_planner_clarifies_paper_assistant_without_scope(self) -> None:
-        result = build_rule_based_plan(
-            user_input="帮我比较这些论文并给出下一步研究建议",
-            standalone_query="帮我比较这些论文并给出下一步研究建议",
-            dialog_state="normal",
-            history_topic_anchors=[],
-            pending_clarify=None,
-            max_steps=3,
-            catalog_limit=20,
-        )
-        self.assertEqual(result.decision_result, "clarify")
-        self.assertTrue(result.requires_clarification)
-        self.assertEqual(result.research_mode, "none")
-        self.assertEqual(result.action_plan, [])
-        self.assertEqual(result.selected_tools_or_skills, [])
-        self.assertIn("请先说明", result.clarify_question or "")
-
-    def test_rule_planner_delegates_web_when_policy_allows(self) -> None:
-        result = build_rule_based_plan(
+    def test_build_planner_fallback_uses_controlled_terminate(self) -> None:
+        result = build_planner_fallback(
             user_input="请联网查看最近的 RAG 综述",
             standalone_query="请联网查看最近的 RAG 综述",
-            dialog_state="normal",
-            history_topic_anchors=[],
-            pending_clarify=None,
-            capability_registry=[
-                {"name": "fact_qa"},
-                {"name": "catalog_lookup"},
-                {"name": "cross_doc_summary"},
-                {"name": "control"},
-                {"name": "paper_assistant"},
-                {"name": "web_research"},
-            ],
-            policy_flags={"allow_web_delegation": True, "allow_research_assistant": True},
-            max_steps=3,
-            catalog_limit=20,
+            reason="planner_llm_disabled",
+            rejection_layer="llm_call",
         )
-        self.assertEqual(result.decision_result, "delegate_web")
-        self.assertEqual(result.knowledge_route, "web")
-        self.assertEqual(result.primary_capability, "web_research")
-        self.assertEqual(result.action_plan, [])
-        self.assertEqual(result.selected_tools_or_skills, ["web_research"])
+        self.assertEqual(result.decision_result, "controlled_terminate")
+        self.assertEqual(result.planner_source, "fallback")
+        self.assertEqual(result.fallback["rejection_layer"], "llm_call")
 
     def test_catalog_lookup_truncates_and_reports_counts(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -251,6 +210,30 @@ class CapabilityPlannerIntegrationTests(unittest.TestCase):
                     "warnings": [],
                 },
             )()
+            planner_result = parse_planner_result(
+                {
+                    "decision_version": "planner-policy-v1",
+                    "planner_source": "llm",
+                    "planner_used": True,
+                    "planner_confidence": 0.93,
+                    "user_goal": "库中有哪些论文",
+                    "standalone_query": "库中有哪些论文",
+                    "is_new_topic": True,
+                    "should_clear_pending_clarify": True,
+                    "relation_to_previous": "new_topic_catalog_request",
+                    "primary_capability": "catalog_lookup",
+                    "strictness": "catalog",
+                    "decision_result": "local_execute",
+                    "knowledge_route": "local",
+                    "research_mode": "none",
+                    "requires_clarification": False,
+                    "clarify_question": None,
+                    "selected_tools_or_skills": ["catalog_lookup"],
+                    "action_plan": [{"action": "catalog_lookup", "query": "库中有哪些论文", "produces": "paper_set", "params": {"limit": 20}}],
+                    "fallback": {"type": None, "reason": None},
+                },
+                default_query="库中有哪些论文",
+            )
             with (
                 patch("app.qa.ensure_indexes", return_value={}),
                 patch("app.qa.load_indexes_and_config", return_value=(None, None, None, config, [])),
@@ -258,6 +241,7 @@ class CapabilityPlannerIntegrationTests(unittest.TestCase):
                 patch("app.qa.expand_candidates_with_graph", side_effect=lambda cands, **_: (cands, {"expansion_budget": 0, "added_chunk_ids": []})),
                 patch("app.qa.rerank_candidates", return_value=rerank_outcome),
                 patch("app.qa.create_run_dir", return_value=run_dir),
+                patch("app.qa._resolve_primary_planner_result", return_value=(planner_result, None)),
             ):
                 run_qa(self._args(q="库中有哪些论文", session_id="s-new-topic", store=store, chunks=chunks))
 
@@ -272,7 +256,137 @@ class CapabilityPlannerIntegrationTests(unittest.TestCase):
             self.assertEqual(trace.get("final_interaction_authority"), "planner")
             self.assertEqual(trace.get("final_user_visible_posture"), "execute")
 
-    def test_planner_exception_falls_back_to_single_step_fact_qa(self) -> None:
+    def test_control_intent_trace_comes_from_planner_decision(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            chunks = base / "chunks_clean.jsonl"
+            chunks.write_text("", encoding="utf-8")
+            (base / "papers.json").write_text("[]", encoding="utf-8")
+            store = base / "session_store.json"
+            store.write_text(json.dumps({"sessions": {}}, ensure_ascii=False), encoding="utf-8")
+            config = PipelineConfig()
+            config.embedding.enabled = False
+            config.planner_enabled = True
+            config.intent_router_enabled = True
+            run_dir = base / "run_control"
+            run_dir.mkdir(parents=True, exist_ok=False)
+            rerank_outcome = type(
+                "R",
+                (),
+                {
+                    "candidates": self._candidate_seed(),
+                    "score_distribution": {"count": 1, "min": 0.9, "max": 0.9, "mean": 0.9, "p50": 0.9, "p90": 0.9},
+                    "warnings": [],
+                },
+            )()
+            planner_result = capability_planner.parse_planner_result(
+                {
+                    "decision_version": "planner-policy-v1",
+                    "planner_source": "llm",
+                    "planner_used": True,
+                    "planner_confidence": 0.93,
+                    "user_goal": "换成表格展示，并继续上一轮比较",
+                    "standalone_query": "换成表格展示，并继续上一轮比较",
+                    "is_new_topic": False,
+                    "should_clear_pending_clarify": False,
+                    "relation_to_previous": "followup_overlap",
+                    "primary_capability": "control",
+                    "strictness": "summary",
+                    "decision_result": "local_execute",
+                    "knowledge_route": "local",
+                    "research_mode": "none",
+                    "requires_clarification": False,
+                    "clarify_question": None,
+                    "selected_tools_or_skills": ["control"],
+                    "action_plan": [{"action": "control", "query": "换成表格展示，并继续上一轮比较"}],
+                    "fallback": {"type": None, "reason": None},
+                },
+                default_query="换成表格展示，并继续上一轮比较",
+            )
+
+            with (
+                patch("app.qa.ensure_indexes", return_value={}),
+                patch("app.qa.load_indexes_and_config", return_value=(None, None, None, config, [])),
+                patch("app.qa.retrieve_candidates", return_value=self._candidate_seed()),
+                patch("app.qa.expand_candidates_with_graph", side_effect=lambda cands, **_: (cands, {"expansion_budget": 0, "added_chunk_ids": []})),
+                patch("app.qa.rerank_candidates", return_value=rerank_outcome),
+                patch("app.qa.create_run_dir", return_value=run_dir),
+                patch("app.qa._resolve_primary_planner_result", return_value=(planner_result, None)),
+            ):
+                run_qa(self._args(q="换成表格展示，并继续上一轮比较", session_id="s-control", store=store, chunks=chunks))
+
+            trace = json.loads((run_dir / "run_trace.json").read_text(encoding="utf-8"))
+            self.assertEqual(trace.get("primary_capability"), "control")
+            self.assertEqual(trace.get("intent_route_source"), "planner_decision")
+            self.assertFalse(trace.get("intent_route_fallback"))
+            self.assertEqual(trace.get("intent_type"), "continuation_control")
+
+    def test_tail_constraints_do_not_mark_posture_override_forbidden(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            chunks = base / "chunks_clean.jsonl"
+            chunks.write_text("", encoding="utf-8")
+            (base / "papers.json").write_text("[]", encoding="utf-8")
+            store = base / "session_store.json"
+            store.write_text(json.dumps({"sessions": {}}, ensure_ascii=False), encoding="utf-8")
+            config = PipelineConfig()
+            config.embedding.enabled = False
+            config.planner_enabled = True
+            config.evidence_policy_enforced = True
+            run_dir = base / "run_posture"
+            run_dir.mkdir(parents=True, exist_ok=False)
+            rerank_outcome = type(
+                "R",
+                (),
+                {
+                    "candidates": self._candidate_seed(),
+                    "score_distribution": {"count": 1, "min": 0.9, "max": 0.9, "mean": 0.9, "p50": 0.9, "p90": 0.9},
+                    "warnings": [],
+                },
+            )()
+
+            with (
+                patch("app.qa.ensure_indexes", return_value={}),
+                patch("app.qa.load_indexes_and_config", return_value=(None, None, None, config, [])),
+                patch("app.qa.retrieve_candidates", return_value=self._candidate_seed()),
+                patch("app.qa.expand_candidates_with_graph", side_effect=lambda cands, **_: (cands, {"expansion_budget": 0, "added_chunk_ids": []})),
+                patch("app.qa.rerank_candidates", return_value=rerank_outcome),
+                patch("app.qa.create_run_dir", return_value=run_dir),
+                patch(
+                    "app.qa._apply_evidence_policy_gate",
+                    return_value=(
+                        "",
+                        [],
+                        {
+                            "enabled": True,
+                            "triggered": True,
+                            "constraints_envelope": {
+                                "constraint_type": "citation_legality",
+                                "reason_code": "evidence_policy_gate_claim_not_supported",
+                                "severity": "warning",
+                                "retryable": True,
+                                "blocking_scope": "response",
+                                "user_safe_summary": "关键结论缺少可追溯证据。",
+                                "evidence_snapshot": {},
+                                "citation_status": "missing",
+                                "suggested_next_actions": [],
+                                "guardrail_blocked": False,
+                                "allows_partial_answer": False,
+                                "clarify_questions": [],
+                            },
+                        },
+                    ),
+                ),
+            ):
+                run_qa(self._args(q="这篇论文讲了什么", session_id="s-posture", store=store, chunks=chunks))
+
+            trace = json.loads((run_dir / "run_trace.json").read_text(encoding="utf-8"))
+            self.assertFalse(trace.get("posture_override_forbidden"))
+            self.assertNotIn("legacy_posture_override_attempts", trace)
+            self.assertEqual(trace.get("final_interaction_authority"), "planner_policy")
+            self.assertTrue(str(trace.get("interaction_decision_source") or "").startswith("planner_policy:"))
+
+    def test_primary_planner_exception_enters_controlled_terminate(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             base = Path(tmp)
             chunks = base / "chunks_clean.jsonl"
@@ -295,12 +409,7 @@ class CapabilityPlannerIntegrationTests(unittest.TestCase):
                 },
             )()
 
-            planner_calls = {"count": 0}
-
             def fake_planner(**kwargs):
-                planner_calls["count"] += 1
-                if planner_calls["count"] == 1:
-                    return capability_planner.build_rule_based_plan(**kwargs)
                 raise RuntimeError("planner boom")
 
             with (
@@ -310,7 +419,7 @@ class CapabilityPlannerIntegrationTests(unittest.TestCase):
                 patch("app.qa.expand_candidates_with_graph", side_effect=lambda cands, **_: (cands, {"expansion_budget": 0, "added_chunk_ids": []})),
                 patch("app.qa.rerank_candidates", return_value=rerank_outcome),
                 patch("app.qa.create_run_dir", return_value=run_dir),
-                patch("app.qa.build_rule_based_plan", side_effect=fake_planner),
+                patch("app.qa._resolve_primary_planner_result", side_effect=fake_planner),
             ):
                 run_qa(self._args(q="这篇论文讲了什么", session_id="s-fallback", store=store, chunks=chunks))
 
@@ -320,7 +429,8 @@ class CapabilityPlannerIntegrationTests(unittest.TestCase):
             self.assertEqual(trace.get("planner_source"), "fallback")
             self.assertEqual(trace.get("primary_capability"), "fact_qa")
             self.assertEqual(trace.get("strictness"), "strict_fact")
-            self.assertEqual(trace.get("action_plan"), [{"action": "fact_qa", "query": "这篇论文讲了什么", "depends_on": [], "produces": None, "params": {}}])
+            self.assertEqual(trace.get("decision_result"), "controlled_terminate")
+            self.assertEqual(trace.get("action_plan"), [])
             self.assertEqual(trace.get("execution_trace"), [])
 
     def test_empty_catalog_short_circuits_followup_summary_step(self) -> None:
@@ -345,6 +455,33 @@ class CapabilityPlannerIntegrationTests(unittest.TestCase):
                     "warnings": [],
                 },
             )()
+            planner_result = parse_planner_result(
+                {
+                    "decision_version": "planner-policy-v1",
+                    "planner_source": "llm",
+                    "planner_used": True,
+                    "planner_confidence": 0.94,
+                    "user_goal": "列出昨天上传的论文，并用表格对比方法差异",
+                    "standalone_query": "列出昨天上传的论文，并用表格对比方法差异",
+                    "is_new_topic": False,
+                    "should_clear_pending_clarify": False,
+                    "relation_to_previous": "same_topic_or_no_pending",
+                    "primary_capability": "cross_doc_summary",
+                    "strictness": "summary",
+                    "decision_result": "local_execute",
+                    "knowledge_route": "local",
+                    "research_mode": "none",
+                    "requires_clarification": False,
+                    "clarify_question": None,
+                    "selected_tools_or_skills": ["catalog_lookup", "cross_doc_summary"],
+                    "action_plan": [
+                        {"action": "catalog_lookup", "query": "列出昨天上传的论文，并用表格对比方法差异", "produces": "paper_set", "params": {"limit": 20}},
+                        {"action": "cross_doc_summary", "query": "列出昨天上传的论文，并用表格对比方法差异", "depends_on": ["paper_set"], "params": {"format": "table"}},
+                    ],
+                    "fallback": {"type": None, "reason": None},
+                },
+                default_query="列出昨天上传的论文，并用表格对比方法差异",
+            )
             with (
                 patch("app.qa.ensure_indexes", return_value={}),
                 patch("app.qa.load_indexes_and_config", return_value=(None, None, None, config, [])),
@@ -352,6 +489,7 @@ class CapabilityPlannerIntegrationTests(unittest.TestCase):
                 patch("app.qa.expand_candidates_with_graph", side_effect=lambda cands, **_: (cands, {"expansion_budget": 0, "added_chunk_ids": []})),
                 patch("app.qa.rerank_candidates", return_value=rerank_outcome),
                 patch("app.qa.create_run_dir", return_value=run_dir),
+                patch("app.qa._resolve_primary_planner_result", return_value=(planner_result, None)),
             ):
                 run_qa(self._args(q="列出昨天上传的论文，并用表格对比方法差异", session_id="s-empty-catalog", store=store, chunks=chunks))
 

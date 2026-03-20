@@ -176,7 +176,7 @@ class AdminSavePipelineConfigRequest(BaseModel):
 
 class PlannerShadowReviewRequest(BaseModel):
     trace_id: str = Field(min_length=1)
-    label: Literal["llm_better", "rule_better", "tie", "both_bad"]
+    label: Literal["accepted", "needs_followup", "incorrect", "blocked"]
     reviewer: str | None = None
     notes: str | None = None
     planner_source_mode: str | None = None
@@ -785,7 +785,7 @@ def _planner_runtime_route_executor(
         "planner_runtime_backend": "langgraph" if HAS_LANGGRAPH else "fallback",
         "planner_runtime_fallback": runtime_fallback,
         "planner_runtime_fallback_reason": runtime_fallback_reason,
-        "planner_runtime_passthrough": selected_path.endswith("_passthrough") or selected_path == "legacy_fallback",
+        "planner_runtime_passthrough": selected_path.endswith("_passthrough"),
         "runtime_contract_version": "agent-first-v1",
         "capability_registry": None,
         "tool_registry_entries": None,
@@ -901,11 +901,11 @@ def _build_agent_execution_stream_events(
                 "mode": mode,
                 "timestamp": _agent_event_timestamp(),
                 "phase": "planning",
-                "decisionResult": str(planner.get("decision_result") or "legacy_fallback"),
-                "selectedPath": str(observation.get("selected_path") or "legacy_fallback"),
+                "decisionResult": str(planner.get("decision_result") or "controlled_terminate"),
+                "selectedPath": str(observation.get("selected_path") or "controlled_terminate"),
                 "selectedToolsOrSkills": selected_tools,
                 "plannerSource": str(planner.get("planner_source") or "fallback"),
-                "plannerSourceMode": str(observation.get("planner_source_mode") or "rule_only"),
+                "plannerSourceMode": str(observation.get("planner_source_mode") or "llm_primary"),
                 "executionSource": str(observation.get("planner_execution_source") or planner.get("planner_source") or "fallback"),
             },
         }
@@ -1017,12 +1017,14 @@ def _build_agent_execution_stream_events(
     elif bool(observation.get("tool_fallback", False)):
         fallback_scope = "tool"
         fallback_reason = str(observation.get("tool_fallback_reason") or "tool_fallback").strip()
-    elif str(planner.get("decision_result") or "").strip() == "legacy_fallback":
-        fallback_scope = "legacy"
+    elif str(planner.get("decision_result") or "").strip() == "controlled_terminate":
+        fallback_scope = "planner"
         fallback_reason = str(
-            planner.get("planner_fallback_reason")
+            dict(observation.get("controlled_termination") or {}).get("reason")
+            or observation.get("planner_runtime_fallback_reason")
+            or planner.get("planner_fallback_reason")
             or planner.get("decision_result")
-            or "legacy_fallback"
+            or "controlled_terminate"
         ).strip()
 
     if fallback_scope and fallback_reason:
@@ -1044,30 +1046,8 @@ def _build_agent_execution_stream_events(
                     "fallbackScope": fallback_scope,
                     "reasonCode": fallback_reason,
                     "failedTool": str(failed_tool).strip() if failed_tool else None,
-                    "continues": True,
+                    "continues": str(observation.get("selected_path") or "").strip() not in {"controlled_terminate", "planner_runtime_clarify"},
                     "message": fallback_message or None,
-                },
-            }
-        )
-    elif (
-        str(observation.get("planner_source_mode") or "") == "llm_primary_with_rule_fallback"
-        and str(observation.get("planner_execution_source") or "") == "rule"
-        and isinstance(observation.get("planner_validation"), dict)
-        and str(observation["planner_validation"].get("status") or "") == "reject"
-    ):
-        events.append(
-            {
-                "event": "fallback",
-                "data": {
-                    "type": "fallback",
-                    "traceId": trace_id,
-                    "mode": mode,
-                    "timestamp": _agent_event_timestamp(),
-                    "fallbackScope": "planner",
-                    "reasonCode": "llm_decision_rejected_rule_fallback",
-                    "failedTool": None,
-                    "continues": True,
-                    "message": None,
                 },
             }
         )

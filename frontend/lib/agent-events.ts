@@ -15,7 +15,7 @@ export type PlanningEvent = {
   selectedPath?: string;
   selectedToolsOrSkills?: string[];
   plannerSource?: 'rule' | 'llm' | 'fallback';
-  plannerSourceMode?: 'rule_only' | 'shadow_compare' | 'llm_primary_with_rule_fallback';
+  plannerSourceMode?: 'llm_primary' | 'shadow_compare';
   executionSource?: 'rule' | 'llm' | 'fallback';
 };
 
@@ -56,7 +56,7 @@ export type FallbackEvent = {
   traceId: string;
   mode: AgentChatMode;
   timestamp: string;
-  fallbackScope: 'planner' | 'tool' | 'legacy';
+  fallbackScope: 'planner' | 'tool';
   reasonCode: string;
   failedTool?: string;
   continues: boolean;

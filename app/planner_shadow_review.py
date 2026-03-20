@@ -9,7 +9,7 @@ from app.fs_utils import atomic_text_writer, file_lock
 from app.paths import RUNS_DIR
 
 
-ALLOWED_SHADOW_REVIEW_LABELS = ("llm_better", "rule_better", "tie", "both_bad")
+ALLOWED_SHADOW_REVIEW_LABELS = ("accepted", "needs_followup", "incorrect", "blocked")
 SHADOW_REVIEW_DIRNAME = "planner_shadow_reviews"
 SHADOW_REVIEW_HISTORY_FILENAME = "reviews.jsonl"
 

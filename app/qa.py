@@ -14,9 +14,10 @@ import yaml
 
 from app.capability_planner import (
     build_planner_fallback,
-    build_rule_based_plan,
     compose_catalog_answer,
+    detect_new_topic,
     execute_catalog_lookup,
+    parse_planner_result,
 )
 from app.context_budget import ContextAssemblyResult, assemble_prompt_with_budget
 from app.config import load_and_validate_config
@@ -51,6 +52,12 @@ from app.planner_policy import (
     build_constraint_envelope,
     prefer_assistant_mode_clarify,
     resolve_final_interaction_decision,
+)
+from app.planner_runtime import (
+    _build_planner_llm_candidate,
+    _planner_policy_flags,
+    _serialize_capability_registry,
+    _validate_llm_planner_decision,
 )
 from app.session_state import (
     append_turn_record,
@@ -325,11 +332,6 @@ CONTINUATION_CONTROL_PATTERNS = (
 
 def _normalize_spaces(text: str) -> str:
     return " ".join((text or "").split())
-
-
-def classify_intent_type(user_text: str) -> str:
-    intent_type, _, _ = classify_intent_type_with_confidence(user_text)
-    return intent_type
 
 
 def _semantic_route_score(text: str, exemplar: str) -> float:
@@ -2309,6 +2311,120 @@ def _build_planner_policy_trace(
     }
 
 
+def _derive_intent_from_planner_decision(
+    *,
+    standalone_query: str,
+    planner_result: Any,
+) -> tuple[str, float, str | None, str, bool, dict[str, Any], str | None]:
+    primary_capability = str(getattr(planner_result, "primary_capability", "") or "").strip()
+    planner_confidence = float(getattr(planner_result, "planner_confidence", 1.0) or 1.0)
+    if primary_capability != "control":
+        return "retrieval_query", planner_confidence, None, "planner_decision", False, {}, None
+
+    intent_type, intent_confidence, intent_rule_matched = classify_intent_type_with_confidence(standalone_query)
+    if intent_type == "retrieval_query":
+        normalized = _normalize_spaces(standalone_query).lower()
+        if any(token in normalized for token in ("继续", "接着", "上一个", "上一轮", "刚才")):
+            intent_type = "continuation_control"
+        elif any(token in normalized for token in ("表格", "table", "json", "markdown", "列表", "要点", "bullet")):
+            intent_type = "format_control"
+        else:
+            intent_type = "style_control"
+    intent_params = _extract_intent_params(standalone_query, intent_type)
+    return intent_type, max(planner_confidence, intent_confidence), intent_rule_matched, "planner_decision", False, intent_params, None
+
+
+def _resolve_primary_planner_result(
+    *,
+    user_input: str,
+    standalone_query: str,
+    dialog_state: str,
+    history_topic_anchors: list[str],
+    pending_clarify: dict[str, Any] | None,
+    history_window: list[dict[str, Any]],
+    config: Any,
+    config_path: str,
+) -> tuple[Any, str | None]:
+    request = {
+        "query": standalone_query,
+        "mode": "local",
+        "traceId": None,
+        "configPath": config_path,
+        "history": [],
+    }
+    planner_input_context = {
+        "request": {
+            "query": standalone_query,
+            "mode": "local",
+            "trace_id": None,
+        },
+        "conversation_context": {
+            "history_size": len(history_window),
+            "last_user_turn": None,
+            "recent_topic_anchors": list(history_topic_anchors),
+            "pending_clarify": pending_clarify,
+            "previous_planner": None,
+        },
+        "capability_registry": _serialize_capability_registry(),
+        "policy_flags": _planner_policy_flags(config),
+    }
+    try:
+        llm_candidate_payload, llm_diagnostics = _build_planner_llm_candidate(
+            request=request,
+            planner_input_context=planner_input_context,
+        )
+    except Exception as exc:
+        return (
+            build_planner_fallback(
+                user_input=user_input,
+                standalone_query=standalone_query,
+                reason="planner_exception",
+                rejection_layer="runtime",
+            ),
+            str(exc),
+        )
+
+    if llm_candidate_payload is None:
+        return (
+            build_planner_fallback(
+                user_input=user_input,
+                standalone_query=standalone_query,
+                reason=str(llm_diagnostics.get("reason") or "planner_llm_unavailable"),
+                rejection_layer="llm_call",
+            ),
+            None,
+        )
+
+    validation = _validate_llm_planner_decision(
+        llm_candidate_payload,
+        policy_flags=dict(planner_input_context.get("policy_flags") or {}),
+    )
+    if validation.get("status") == "reject":
+        rejected_layers = [str(item).strip() for item in list(validation.get("rejected_layers") or []) if str(item).strip()]
+        return (
+            build_planner_fallback(
+                user_input=user_input,
+                standalone_query=standalone_query,
+                reason=str(validation.get("reason_code") or "planner_llm_invalid_schema"),
+                rejection_layer=(rejected_layers[0] if rejected_layers else "validation"),
+            ),
+            None,
+        )
+
+    try:
+        return parse_planner_result(llm_candidate_payload, default_query=standalone_query), None
+    except (TypeError, ValueError) as exc:
+        return (
+            build_planner_fallback(
+                user_input=user_input,
+                standalone_query=standalone_query,
+                reason="planner_llm_invalid_schema",
+                rejection_layer="parse",
+            ),
+            str(exc),
+        )
+
+
 def _append_constraint_envelope(
     envelopes: list[dict[str, Any]],
     envelope: dict[str, Any] | None,
@@ -2391,16 +2507,12 @@ def run_qa(args: argparse.Namespace) -> int:
     if open_summary_intent and transient_constraints:
         history_constraint_dropped = True
         dropped_constraints = list(transient_constraints)
-    preplanner = build_rule_based_plan(
+    _, preplanner_should_clear_pending, _ = detect_new_topic(
         user_input=args.q,
-        standalone_query=args.q,
         dialog_state=dialog_state,
         history_topic_anchors=history_topic_anchors,
         pending_clarify=pending_clarify,
-        max_steps=1,
-        catalog_limit=1,
     )
-    preplanner_should_clear_pending = preplanner.should_clear_pending_clarify
     should_merge_pending = ((not open_summary_intent) or dialog_state in {"need_clarify", "waiting_followup"}) and not preplanner_should_clear_pending
     effective_input, merged_from_clarify = merge_with_pending_clarify(
         session_id,
@@ -2460,20 +2572,31 @@ def run_qa(args: argparse.Namespace) -> int:
     planner_error: str | None = None
     if bool(getattr(config, "planner_enabled", True)):
         try:
-            planner_result = build_rule_based_plan(
+            planner_result, planner_error = _resolve_primary_planner_result(
                 user_input=args.q,
                 standalone_query=standalone_query,
                 dialog_state=dialog_state,
                 history_topic_anchors=history_topic_anchors,
                 pending_clarify=pending_clarify,
-                max_steps=int(getattr(config, "planner_max_steps", 3)),
-                catalog_limit=int(getattr(config, "planner_max_papers", 20)),
+                history_window=history_window,
+                config=config,
+                config_path=args.config,
             )
         except Exception as exc:
             planner_error = str(exc)
-            planner_result = build_planner_fallback(user_input=args.q, standalone_query=standalone_query, reason="planner_exception")
+            planner_result = build_planner_fallback(
+                user_input=args.q,
+                standalone_query=standalone_query,
+                reason="planner_exception",
+                rejection_layer="runtime",
+            )
     else:
-        planner_result = build_planner_fallback(user_input=args.q, standalone_query=standalone_query, reason="planner_disabled")
+        planner_result = build_planner_fallback(
+            user_input=args.q,
+            standalone_query=standalone_query,
+            reason="planner_disabled",
+            rejection_layer="config",
+        )
     standalone_query = planner_result.standalone_query or standalone_query
     open_summary_intent = open_summary_intent or planner_result.strictness == "summary"
     planner_primary_capability = planner_result.primary_capability
@@ -2548,15 +2671,20 @@ def run_qa(args: argparse.Namespace) -> int:
         clarify_streak_before_turn = 0
 
     intent_router_enabled = bool(getattr(config, "intent_router_enabled", False))
-    intent_type = "retrieval_query"
-    intent_confidence = 1.0
-    intent_rule_matched: str | None = None
-    intent_fallback_reason: str | None = None
-    intent_route_source = "router_disabled"
-    intent_route_fallback = False
-    intent_params: dict[str, Any] = {}
+    (
+        intent_type,
+        intent_confidence,
+        intent_rule_matched,
+        intent_route_source,
+        intent_route_fallback,
+        intent_params,
+        intent_fallback_reason,
+    ) = _derive_intent_from_planner_decision(
+        standalone_query=standalone_query,
+        planner_result=planner_result,
+    )
     pre_output_warnings: list[str] = []
-    if intent_router_enabled:
+    if intent_router_enabled and str(planner_result.primary_capability or "") != "control":
         semantic_enabled = bool(getattr(config, "intent_router_semantic_enabled", True))
         if semantic_enabled:
             detected_intent, intent_confidence, intent_route_source, intent_params = semantic_route_intent(standalone_query)
@@ -3018,7 +3146,6 @@ def run_qa(args: argparse.Namespace) -> int:
     clarify_limit = max(1, int(getattr(config, "assistant_mode_clarify_limit", 2)))
     force_partial_answer_on_limit = bool(getattr(config, "assistant_mode_force_partial_answer_on_limit", True))
     constraint_envelopes: list[dict[str, Any]] = []
-    legacy_posture_override_attempts: list[str] = []
     planner_catalog_short_circuit = bool(
         planner_short_circuit
         and bool(planner_short_circuit.get("triggered"))
@@ -3183,7 +3310,6 @@ def run_qa(args: argparse.Namespace) -> int:
     answer_guardrail_requires_replan = False
     answer_guardrail_reason = ""
     answer_guardrail_clarify_questions: list[str] = []
-    posture_override_forbidden = False
     if decision == "answer":
         if planner_strictness == "catalog" or planner_catalog_short_circuit:
             answer = compose_catalog_answer(catalog_result or {})
@@ -3226,7 +3352,6 @@ def run_qa(args: argparse.Namespace) -> int:
                     answer_guardrail_requires_replan = True
                     answer_guardrail_reason = "可追溯主题不足 3 条，先最小澄清以补齐方向。"
                     answer_guardrail_clarify_questions = ["你最关心哪一类主题（方法、实验结果、应用场景）？"]
-                    legacy_posture_override_attempts.append("assistant_summary_insufficient_topics")
                     answer = ""
                     answer_citations = []
                     answer_llm_used = False
@@ -3291,7 +3416,6 @@ def run_qa(args: argparse.Namespace) -> int:
                     answer_guardrail_requires_replan = True
                     answer_guardrail_reason = policy_override.decision_reason
                     answer_guardrail_clarify_questions = list(policy_override.clarify_questions)
-                    legacy_posture_override_attempts.append("evidence_policy_gate_downgrade_to_clarify")
                     answer = ""
                     answer_citations = []
                     final_refuse_source = policy_override.final_refuse_source
@@ -3299,7 +3423,6 @@ def run_qa(args: argparse.Namespace) -> int:
                     answer_guardrail_requires_replan = True
                     answer_guardrail_reason = "关键结论缺少可追溯证据，触发证据门控拒答。"
                     answer_guardrail_clarify_questions = []
-                    legacy_posture_override_attempts.append("evidence_policy_gate_refuse")
                     final_refuse_source = "evidence_policy_gate"
         elif decision == "answer":
             evidence_policy_gate = {"enabled": bool(config.evidence_policy_enforced), "skipped": "forced_partial_answer"}
@@ -3368,7 +3491,6 @@ def run_qa(args: argparse.Namespace) -> int:
             answer_guardrail_requires_replan = True
             answer_guardrail_reason = policy_override.decision_reason
             answer_guardrail_clarify_questions = list(policy_override.clarify_questions)
-            legacy_posture_override_attempts.append("citation_mapping_incomplete_clarify")
             answer = ""
             answer_citations = []
             final_refuse_source = policy_override.final_refuse_source
@@ -3381,8 +3503,6 @@ def run_qa(args: argparse.Namespace) -> int:
             decision = "clarify"
             clarify_questions = list(answer_guardrail_clarify_questions or clarify_questions or ["请提供论文标题、作者、年份或会议等线索。"])[:1]
         decision_reason = answer_guardrail_reason or decision_reason
-    posture_override_forbidden = bool(legacy_posture_override_attempts)
-
     final_interaction = resolve_final_interaction_decision(
         planner_result=planner_result,
         proposed_decision=decision,
@@ -3391,7 +3511,7 @@ def run_qa(args: argparse.Namespace) -> int:
         final_refuse_source=final_refuse_source,
         constraint_envelopes=constraint_envelopes,
         forced_partial_answer=forced_partial_answer,
-        posture_override_forbidden=posture_override_forbidden,
+        posture_override_forbidden=False,
     )
     decision = final_interaction.decision
     decision_reason = final_interaction.decision_reason
@@ -3620,7 +3740,6 @@ def run_qa(args: argparse.Namespace) -> int:
         "guardrail_blocked": final_interaction.guardrail_blocked,
         "posture_override_forbidden": final_interaction.posture_override_forbidden,
         "constraints_envelope": constraint_envelopes,
-        "legacy_posture_override_attempts": legacy_posture_override_attempts,
         "assistant_mode_enabled": assistant_mode_enabled,
         "assistant_mode_used": assistant_mode_used,
         "assistant_summary_suggestions": assistant_summary_suggestions,
@@ -3843,7 +3962,6 @@ def run_qa(args: argparse.Namespace) -> int:
         "guardrail_blocked": final_interaction.guardrail_blocked,
         "posture_override_forbidden": final_interaction.posture_override_forbidden,
         "constraints_envelope": constraint_envelopes,
-        "legacy_posture_override_attempts": legacy_posture_override_attempts,
         "assistant_mode_enabled": assistant_mode_enabled,
         "assistant_mode_used": assistant_mode_used,
         "assistant_summary_suggestions": assistant_summary_suggestions,

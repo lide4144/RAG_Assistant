@@ -18,14 +18,13 @@ from app.capability_planner import (
     PlannerResult,
     build_planner_fallback,
     parse_planner_result,
-    build_rule_based_plan,
     compose_catalog_answer,
     execute_catalog_lookup,
     normalize_planner_source,
     paper_assistant_clarification,
     serialize_planner_result,
+    PLANNER_SOURCE_FALLBACK,
     PLANNER_SOURCE_LLM,
-    PLANNER_SOURCE_RULE,
 )
 from app.config import load_and_validate_config
 from app.llm_client import call_chat_completion
@@ -50,7 +49,7 @@ PlannerRuntimeRoute = Literal[
     "research_assistant",
     "web_delegate",
     "clarify",
-    "legacy_fallback",
+    "controlled_terminate",
 ]
 
 RUNTIME_CONTRACT_VERSION = "agent-first-v1"
@@ -72,15 +71,14 @@ RUNTIME_ENVELOPE_FIELDS = (
 )
 MAX_RUNTIME_TOOL_STEPS = 3
 PLANNER_SOURCE_MODE_ENV = "PLANNER_SOURCE_MODE"
-DEFAULT_PLANNER_SOURCE_MODE = "rule_only"
+DEFAULT_PLANNER_SOURCE_MODE = "llm_primary"
 PLANNER_SOURCE_MODES = {
-    "rule_only",
+    "llm_primary",
     "shadow_compare",
-    "llm_primary_with_rule_fallback",
 }
 PLANNER_VALIDATION_STATUSES = {"accept", "accept_with_warnings", "reject"}
 PLANNER_DECISION_ENUMS = {
-    "decision_result": {"clarify", "local_execute", "delegate_web", "delegate_research_assistant", "legacy_fallback"},
+    "decision_result": {"clarify", "local_execute", "delegate_web", "delegate_research_assistant", "controlled_terminate"},
     "strictness": {"strict_fact", "summary", "catalog"},
     "knowledge_route": {"local", "web"},
     "research_mode": {"none", "paper_assistant"},
@@ -126,6 +124,7 @@ class PlannerRuntimeState(TypedDict, total=False):
     execution_trace: list[dict[str, Any]]
     short_circuit: dict[str, Any]
     truncated: bool
+    controlled_termination: dict[str, Any]
     planner_runtime_backend: str
     planner_runtime_passthrough: bool
 
@@ -304,7 +303,7 @@ def _planner_source_mode() -> str:
     return DEFAULT_PLANNER_SOURCE_MODE
 
 
-def _build_planner_llm_prompt(*, planner_input_context: dict[str, Any], rule_result: PlannerResult) -> str:
+def _build_planner_llm_prompt(*, planner_input_context: dict[str, Any]) -> str:
     payload = {
         "task": "Generate an independent planner decision for the request.",
         "output_contract": {
@@ -319,7 +318,7 @@ def _build_planner_llm_prompt(*, planner_input_context: dict[str, Any], rule_res
             "relation_to_previous": "string",
             "primary_capability": "string",
             "strictness": "strict_fact|summary|catalog",
-            "decision_result": "clarify|local_execute|delegate_web|delegate_research_assistant|legacy_fallback",
+            "decision_result": "clarify|local_execute|delegate_web|delegate_research_assistant|controlled_terminate",
             "knowledge_route": "local|web",
             "research_mode": "none|paper_assistant",
             "requires_clarification": "bool",
@@ -336,11 +335,7 @@ def _build_planner_llm_prompt(*, planner_input_context: dict[str, Any], rule_res
             "params": "object",
         },
         "planner_input": planner_input_context,
-        "rule_candidate_reference": _serialize_planner_result(rule_result),
-        "instruction": (
-            "Reason independently from planner_input. "
-            "The rule candidate is only a reference baseline for comparison, not a template to copy."
-        ),
+        "instruction": "Reason independently from planner_input and return the formal planner decision only.",
     }
     return json.dumps(payload, ensure_ascii=False)
 
@@ -381,7 +376,6 @@ def _build_planner_llm_candidate(
     *,
     request: dict[str, Any],
     planner_input_context: dict[str, Any],
-    rule_result: PlannerResult,
 ) -> tuple[dict[str, Any] | None, dict[str, Any]]:
     diagnostics: dict[str, Any] = {
         "attempted": False,
@@ -441,7 +435,7 @@ def _build_planner_llm_candidate(
         api_key=api_key,
         api_base=(api_base or None),
         system_prompt=PLANNER_LLM_SYSTEM_PROMPT,
-        user_prompt=_build_planner_llm_prompt(planner_input_context=planner_input_context, rule_result=rule_result),
+        user_prompt=_build_planner_llm_prompt(planner_input_context=planner_input_context),
         timeout_ms=timeout_ms,
         max_retries=max(0, int(getattr(cfg, "llm_max_retries", 0))),
         temperature=0.0,
@@ -555,8 +549,14 @@ def _validate_semantics(planner: dict[str, Any]) -> dict[str, Any]:
         reason_codes.append("delegate_web_missing_selected_capability")
     if decision_result == "delegate_research_assistant" and "paper_assistant" not in selected_tools:
         reason_codes.append("delegate_research_assistant_missing_selected_capability")
-    if decision_result == "legacy_fallback" and not bool(dict(planner.get("fallback") or {}).get("reason")):
-        warnings.append("legacy_fallback_without_reason")
+    if decision_result == "controlled_terminate":
+        fallback = dict(planner.get("fallback") or {})
+        if action_plan:
+            reason_codes.append("controlled_terminate_with_action_plan")
+        if not bool(fallback.get("reason")):
+            reason_codes.append("controlled_terminate_missing_reason")
+        if requires_clarification and not clarify_question:
+            reason_codes.append("controlled_terminate_missing_clarify_question")
 
     action_names: list[str] = []
     for raw_step in action_plan:
@@ -650,16 +650,6 @@ def _validate_llm_planner_decision(planner: dict[str, Any], *, policy_flags: dic
         "reason_code": all_reason_codes[0] if all_reason_codes else None,
         "layers": layers,
     }
-
-
-def _build_shadow_diff(rule_planner: dict[str, Any], llm_planner: dict[str, Any]) -> list[dict[str, Any]]:
-    diffs: list[dict[str, Any]] = []
-    for field in SHADOW_DIFF_FIELDS:
-        rule_value = rule_planner.get(field)
-        llm_value = llm_planner.get(field)
-        if rule_value != llm_value:
-            diffs.append({"field": field, "rule": rule_value, "llm": llm_value})
-    return diffs
 
 
 def _load_runtime_planner_config(request: dict[str, Any]) -> Any:
@@ -765,7 +755,7 @@ def _tool_specific_sources(tool_name: str, response: Any) -> list[dict[str, Any]
 
 
 def _selected_path_for_tool(tool_call: dict[str, Any]) -> str:
-    route = str(tool_call.get("route") or "legacy_fallback")
+    route = str(tool_call.get("route") or "controlled_terminate")
     return route if not bool(tool_call.get("passthrough")) else f"{route}_passthrough"
 
 
@@ -859,6 +849,62 @@ def _build_runtime_clarify_response(payload: Any, question: str) -> Any:
     return KernelChatResponse(traceId=trace_id, answer=answer, sources=[])
 
 
+def _build_controlled_termination(state: PlannerRuntimeState) -> dict[str, Any]:
+    planner = dict(state.get("planner") or {})
+    runtime = dict(state.get("runtime") or {})
+    fallback = dict(state.get("fallback") or {})
+    planner_fallback = dict(planner.get("fallback") or {})
+    validation = dict(runtime.get("planner_validation") or {})
+    rejection_layers = [str(item).strip() for item in list(validation.get("rejected_layers") or []) if str(item).strip()]
+    rejection_layer = (
+        str(planner_fallback.get("rejection_layer") or "").strip()
+        or (rejection_layers[0] if rejection_layers else None)
+    )
+    reason = (
+        str(fallback.get("reason") or "").strip()
+        or str(planner_fallback.get("reason") or "").strip()
+        or str(validation.get("reason_code") or "").strip()
+        or "controlled_terminate"
+    )
+    clarify_question = str(planner.get("clarify_question") or "").strip() or None
+    posture = str(planner_fallback.get("user_visible_posture") or "").strip()
+    if posture not in {"clarify", "refuse"}:
+        posture = "clarify" if clarify_question else "refuse"
+    termination_type = "controlled_terminate"
+    if str(validation.get("status") or "") == "reject":
+        termination_type = "planner_reject"
+    elif fallback.get("type") == "tool":
+        termination_type = "tool_or_constraint_failure"
+    elif reason in {"planner_runtime_exception", "route_fallback"}:
+        termination_type = "runtime_exception"
+    elif fallback.get("type") == "planner":
+        termination_type = "planner_reject"
+    message = "当前请求未通过执行安全检查，请换一种更明确的表述后重试。"
+    if posture == "clarify" and clarify_question:
+        message = "为继续处理该请求，请先澄清以下问题：\n1. " + clarify_question
+    elif termination_type == "tool_or_constraint_failure":
+        message = "当前无法继续执行所选能力，请补充更具体的范围或稍后重试。"
+    elif termination_type == "runtime_exception":
+        message = "当前系统暂时无法完成该请求，请稍后重试。"
+    return {
+        "type": termination_type,
+        "reason": reason,
+        "rejection_reason": str(validation.get("reason_code") or reason),
+        "rejection_layer": rejection_layer,
+        "source": str(fallback.get("type") or planner.get("planner_source") or "planner"),
+        "user_visible_posture": posture,
+        "clarify_question": clarify_question,
+        "message": message,
+    }
+
+
+def _build_controlled_terminate_response(payload: Any, termination: dict[str, Any]) -> Any:
+    from app.kernel_api import KernelChatResponse
+
+    trace_id = getattr(payload, "traceId", None) or f"trace_{getattr(payload, 'sessionId', 'runtime')}"
+    return KernelChatResponse(traceId=trace_id, answer=str(termination.get("message") or "").strip(), sources=[])
+
+
 def _paper_assistant_missing_prerequisites(tool_call: dict[str, Any]) -> tuple[list[str], str | None]:
     if str(tool_call.get("tool_name") or "") != "paper_assistant":
         return [], None
@@ -893,80 +939,79 @@ def _plan_chat_request(state: PlannerRuntimeState) -> PlannerRuntimeState:
     runtime["planner_input_context"] = planner_input_context
     runtime["planner_source_mode"] = _planner_source_mode()
     next_state["runtime"] = runtime
-    rule_result = build_rule_based_plan(
-        user_input=query,
-        standalone_query=query,
-        dialog_state="answering",
-        history_topic_anchors=list(planner_input_context.get("conversation_context", {}).get("recent_topic_anchors") or []),
-        pending_clarify=planner_input_context.get("conversation_context", {}).get("pending_clarify"),
-        max_steps=max(1, int(getattr(planner_config, "planner_max_steps", MAX_RUNTIME_TOOL_STEPS))),
-        catalog_limit=max(1, int(getattr(planner_config, "planner_max_papers", 20))),
-        capability_registry=list(planner_input_context.get("capability_registry") or []),
-        policy_flags=dict(planner_input_context.get("policy_flags") or {}),
-    )
     policy_flags = dict(planner_input_context.get("policy_flags") or {})
     planner_source_mode = str(runtime.get("planner_source_mode") or DEFAULT_PLANNER_SOURCE_MODE)
     llm_result: PlannerResult | None = None
     llm_candidate_payload: dict[str, Any] | None = None
     llm_diagnostics: dict[str, Any] = {"attempted": False, "status": "skipped", "reason": None}
     llm_validation: dict[str, Any] | None = None
-    planner_execution_source = PLANNER_SOURCE_RULE
-    planner = _serialize_planner_result(rule_result)
-
-    if planner_source_mode in {"shadow_compare", "llm_primary_with_rule_fallback"}:
-        llm_candidate_payload, llm_diagnostics = _build_planner_llm_candidate(
-            request=request,
-            planner_input_context=planner_input_context,
-            rule_result=rule_result,
+    planner_execution_source = PLANNER_SOURCE_FALLBACK
+    planner = _serialize_planner_result(
+        build_planner_fallback(
+            user_input=query,
+            standalone_query=query,
+            reason="planner_llm_unavailable",
+            fallback_type="planner_reject",
+            rejection_layer="llm_call",
         )
-        if llm_candidate_payload is None:
-            llm_validation = {
-                "status": "reject",
-                "reason_codes": [str(llm_diagnostics.get("reason") or "planner_llm_unavailable")],
-                "warnings": [],
-                "rejected_layers": ["llm_call"],
-                "reason_code": str(llm_diagnostics.get("reason") or "planner_llm_unavailable"),
-                "layers": {},
-            }
-        else:
-            llm_validation = _validate_llm_planner_decision(llm_candidate_payload, policy_flags=policy_flags)
-            if llm_validation["status"] == "reject":
-                planner["planner_fallback"] = True
-                planner["planner_fallback_reason"] = llm_validation.get("reason_code")
-            else:
-                try:
-                    llm_result = parse_planner_result(llm_candidate_payload, default_query=query)
-                    llm_result = PlannerResult(**{**asdict(llm_result), "planner_source": PLANNER_SOURCE_LLM})
-                except (TypeError, ValueError):
-                    llm_validation = {
-                        "status": "reject",
-                        "reason_codes": ["planner_llm_invalid_schema"],
-                        "warnings": [],
-                        "rejected_layers": ["parse"],
-                        "reason_code": "planner_llm_invalid_schema",
-                        "layers": {},
-                    }
-                    planner["planner_fallback"] = True
-                    planner["planner_fallback_reason"] = "planner_llm_invalid_schema"
-            if planner_source_mode == "llm_primary_with_rule_fallback" and llm_validation["status"] != "reject" and llm_result is not None:
-                planner = _serialize_planner_result(llm_result)
-                planner_execution_source = PLANNER_SOURCE_LLM
+    )
+
+    llm_candidate_payload, llm_diagnostics = _build_planner_llm_candidate(
+        request=request,
+        planner_input_context=planner_input_context,
+    )
+    if llm_candidate_payload is None:
+        llm_validation = {
+            "status": "reject",
+            "reason_codes": [str(llm_diagnostics.get("reason") or "planner_llm_unavailable")],
+            "warnings": [],
+            "rejected_layers": ["llm_call"],
+            "reason_code": str(llm_diagnostics.get("reason") or "planner_llm_unavailable"),
+            "layers": {},
+        }
+    else:
+        llm_validation = _validate_llm_planner_decision(llm_candidate_payload, policy_flags=policy_flags)
+        if llm_validation["status"] != "reject":
+            try:
+                llm_result = parse_planner_result(llm_candidate_payload, default_query=query)
+                llm_result = PlannerResult(**{**asdict(llm_result), "planner_source": PLANNER_SOURCE_LLM})
+            except (TypeError, ValueError):
+                llm_validation = {
+                    "status": "reject",
+                    "reason_codes": ["planner_llm_invalid_schema"],
+                    "warnings": [],
+                    "rejected_layers": ["parse"],
+                    "reason_code": "planner_llm_invalid_schema",
+                    "layers": {},
+                }
+        if llm_validation["status"] == "reject":
+            planner = _serialize_planner_result(
+                build_planner_fallback(
+                    user_input=query,
+                    standalone_query=query,
+                    reason=str(llm_validation.get("reason_code") or "planner_llm_invalid_schema"),
+                    fallback_type="planner_reject",
+                    rejection_layer=(
+                        [str(item).strip() for item in list(llm_validation.get("rejected_layers") or []) if str(item).strip()] or [None]
+                    )[0],
+                )
+            )
+        elif llm_result is not None:
+            planner = _serialize_planner_result(llm_result)
+            planner_execution_source = PLANNER_SOURCE_LLM
     shadow_record = None
     if llm_candidate_payload is not None:
         shadow_record = {
-            "rule_decision": _serialize_planner_result(rule_result),
             "llm_decision": dict(llm_candidate_payload),
             "validation": dict(llm_validation or {}),
-            "diff": _build_shadow_diff(_serialize_planner_result(rule_result), dict(llm_candidate_payload)),
             "actual_execution_source": planner_execution_source,
-            "review": {"label": None, "allowed_labels": ["llm_better", "rule_better", "tie", "both_bad"]},
+            "review": {"label": None, "allowed_labels": ["accepted", "needs_followup", "incorrect", "blocked"]},
         }
     runtime["planner_validation"] = dict(llm_validation or {})
     runtime["planner_llm_diagnostics"] = dict(llm_diagnostics or {})
     runtime["shadow_compare"] = shadow_record
     runtime["planner_execution_source"] = planner_execution_source
     runtime["planner_candidates"] = {
-        "rule": _serialize_planner_result(rule_result),
         "llm": dict(llm_candidate_payload) if llm_candidate_payload is not None else None,
     }
     next_state["runtime"] = runtime
@@ -982,7 +1027,7 @@ def _plan_chat_request(state: PlannerRuntimeState) -> PlannerRuntimeState:
             "selected_decision_result": planner.get("decision_result"),
             "validation_status": (llm_validation or {}).get("status"),
             "validation_reason_codes": list((llm_validation or {}).get("reason_codes") or []),
-            "shadow_diff_fields": [row["field"] for row in list((shadow_record or {}).get("diff") or [])],
+            "shadow_diff_fields": [],
         }
     )
     return next_state
@@ -1040,17 +1085,17 @@ def _normalize_tool_call(raw: dict[str, Any], *, index: int) -> dict[str, Any] |
 def _prepare_tool_calls(state: PlannerRuntimeState) -> PlannerRuntimeState:
     next_state = dict(state)
     planner = dict(next_state.get("planner") or {})
-    decision_result = str(planner.get("decision_result") or "legacy_fallback")
+    decision_result = str(planner.get("decision_result") or "controlled_terminate")
     if decision_result not in {
         "clarify",
         "local_execute",
         "delegate_web",
         "delegate_research_assistant",
-        "legacy_fallback",
+        "controlled_terminate",
     }:
         return _set_fallback(next_state, fallback_type="planner", reason=f"unsupported_decision_result:{decision_result}")
     raw_plan = list(planner.get("action_plan") or [])
-    if decision_result in {"clarify", "delegate_web", "legacy_fallback"} and not raw_plan:
+    if decision_result in {"clarify", "delegate_web", "controlled_terminate"} and not raw_plan:
         next_state["tool_calls"] = []
         return next_state
     if not raw_plan:
@@ -1070,7 +1115,7 @@ def _prepare_tool_calls(state: PlannerRuntimeState) -> PlannerRuntimeState:
                 "depends_on": [str(item).strip() for item in list(raw.get("depends_on") or []) if str(item).strip()],
                 "produces": [],
                 "params": dict(raw.get("params") or {}),
-                "route": "legacy_fallback",
+                "route": "controlled_terminate",
                 "passthrough": True,
                 "status": "failed",
             }
@@ -1162,18 +1207,18 @@ def _build_route_state(state: PlannerRuntimeState, route: PlannerRuntimeRoute, *
 
 def _route_capability(state: PlannerRuntimeState) -> PlannerRuntimeState:
     planner = dict(state.get("planner") or {})
-    decision_result = str(planner.get("decision_result") or "legacy_fallback")
+    decision_result = str(planner.get("decision_result") or "controlled_terminate")
     tool_calls = list(state.get("tool_calls") or [])
     fallback = dict(state.get("fallback") or {})
     if fallback.get("type") == "planner":
         fallback_state = dict(state)
         fallback_state.setdefault("tool_calls", [])
-        return _build_route_state(fallback_state, "legacy_fallback", passthrough=True)
+        return _build_route_state(fallback_state, "controlled_terminate", passthrough=False)
     if fallback.get("type") == "tool":
         fallback_state = dict(state)
-        return _build_route_state(fallback_state, "legacy_fallback", passthrough=True)
-    if decision_result == "legacy_fallback":
-        return _build_route_state(dict(state), "legacy_fallback", passthrough=True)
+        return _build_route_state(fallback_state, "controlled_terminate", passthrough=False)
+    if decision_result == "controlled_terminate":
+        return _build_route_state(dict(state), "controlled_terminate", passthrough=False)
     if decision_result == "delegate_web":
         return _build_route_state(dict(state), "web_delegate", passthrough=True)
     if decision_result == "clarify":
@@ -1182,7 +1227,7 @@ def _route_capability(state: PlannerRuntimeState) -> PlannerRuntimeState:
         return _build_route_state(clarify_state, "clarify", passthrough=False)
     if not tool_calls:
         fallback_state = _set_fallback(dict(state), fallback_type="planner", reason="missing_tool_calls")
-        return _build_route_state(fallback_state, "legacy_fallback", passthrough=True)
+        return _build_route_state(fallback_state, "controlled_terminate", passthrough=False)
     paper_assistant_tool = next((tool for tool in tool_calls if str(tool.get("tool_name") or "") == "paper_assistant"), tool_calls[0])
     missing_prerequisites, clarify_question = _paper_assistant_missing_prerequisites(paper_assistant_tool)
     if missing_prerequisites and clarify_question:
@@ -1254,7 +1299,7 @@ def _run_route(
         next_state["tool_calls"] = []
         next_state["response"] = executor(
             payload,
-            selected_path=str(next_state.get("selected_path") or "legacy_fallback"),
+            selected_path=str(next_state.get("selected_path") or "controlled_terminate"),
             on_stream_delta=on_stream_delta,
             runtime_fallback=bool(fallback.get("type")),
             runtime_fallback_reason=(str(fallback.get("reason")) if fallback.get("reason") is not None else None),
@@ -1351,7 +1396,7 @@ def _run_route(
 
 
 def _route_next(state: PlannerRuntimeState) -> str:
-    route = str(state.get("route") or "legacy_fallback")
+    route = str(state.get("route") or "controlled_terminate")
     if route == "clarify":
         return "run_runtime_clarify"
     if route == "fact_qa":
@@ -1360,7 +1405,7 @@ def _route_next(state: PlannerRuntimeState) -> str:
         return "run_compat_path"
     if route == "web_delegate":
         return "run_web_delegate_path"
-    return "fallback_to_legacy_qa"
+    return "run_controlled_terminate"
 
 
 def _build_graph(
@@ -1379,22 +1424,25 @@ def _build_graph(
     def _run_web_delegate(state: PlannerRuntimeState) -> PlannerRuntimeState:
         return _run_route(state, executor=legacy_executor, on_stream_delta=on_stream_delta)
 
-    def _run_legacy(state: PlannerRuntimeState) -> PlannerRuntimeState:
-        fallback_state = dict(state)
-        fallback = dict(fallback_state.get("fallback") or {})
-        if fallback.get("type") is None:
-            fallback_state = _set_fallback(fallback_state, fallback_type="planner", reason="route_fallback")
-        fallback_state["selected_path"] = "legacy_fallback"
-        fallback_state["route"] = "legacy_fallback"
-        fallback_state["planner_runtime_passthrough"] = True
-        return _run_route(fallback_state, executor=legacy_executor, on_stream_delta=on_stream_delta)
-
     def _run_runtime_clarify(state: PlannerRuntimeState) -> PlannerRuntimeState:
         next_state = dict(state)
         question = str(next_state.get("clarify_question") or "请先说明你希望我聚焦的论文或研究主题。").strip()
         next_state["selected_path"] = "planner_runtime_clarify"
         next_state["response"] = _build_runtime_clarify_response(next_state.get("payload"), question)
         next_state["planner_runtime_passthrough"] = False
+        return next_state
+
+    def _run_controlled_terminate(state: PlannerRuntimeState) -> PlannerRuntimeState:
+        next_state = dict(state)
+        fallback = dict(next_state.get("fallback") or {})
+        planner = dict(next_state.get("planner") or {})
+        if fallback.get("type") is None and str(planner.get("decision_result") or "") != "controlled_terminate":
+            next_state = _set_fallback(next_state, fallback_type="planner", reason="route_fallback")
+        next_state["selected_path"] = "controlled_terminate"
+        next_state["route"] = "controlled_terminate"
+        next_state["planner_runtime_passthrough"] = False
+        next_state["controlled_termination"] = _build_controlled_termination(next_state)
+        next_state["response"] = _build_controlled_terminate_response(next_state.get("payload"), next_state["controlled_termination"])
         return next_state
 
     if not HAS_LANGGRAPH or StateGraph is None:
@@ -1407,7 +1455,7 @@ def _build_graph(
             "run_compat_path": _run_compat,
             "run_web_delegate_path": _run_web_delegate,
             "run_runtime_clarify": _run_runtime_clarify,
-            "fallback_to_legacy_qa": _run_legacy,
+            "run_controlled_terminate": _run_controlled_terminate,
         }
 
     graph = StateGraph(PlannerRuntimeState)
@@ -1419,7 +1467,7 @@ def _build_graph(
     graph.add_node("run_compat_path", _run_compat)
     graph.add_node("run_web_delegate_path", _run_web_delegate)
     graph.add_node("run_runtime_clarify", _run_runtime_clarify)
-    graph.add_node("fallback_to_legacy_qa", _run_legacy)
+    graph.add_node("run_controlled_terminate", _run_controlled_terminate)
     graph.set_entry_point("load_request_context")
     graph.add_edge("load_request_context", "plan_chat_request")
     graph.add_edge("plan_chat_request", "prepare_tool_calls")
@@ -1432,14 +1480,14 @@ def _build_graph(
             "run_compat_path": "run_compat_path",
             "run_web_delegate_path": "run_web_delegate_path",
             "run_runtime_clarify": "run_runtime_clarify",
-            "fallback_to_legacy_qa": "fallback_to_legacy_qa",
+            "run_controlled_terminate": "run_controlled_terminate",
         },
     )
     graph.add_edge("run_fact_qa_path", END)
     graph.add_edge("run_compat_path", END)
     graph.add_edge("run_web_delegate_path", END)
     graph.add_edge("run_runtime_clarify", END)
-    graph.add_edge("fallback_to_legacy_qa", END)
+    graph.add_edge("run_controlled_terminate", END)
     return graph.compile(), None
 
 
@@ -1491,38 +1539,49 @@ def run_planner_runtime(
             standalone_query=str(getattr(payload, "query", "")),
             reason="planner_runtime_exception",
         )
-        response = legacy_executor(
-            payload,
-            selected_path="legacy_fallback",
-            on_stream_delta=on_stream_delta,
-            runtime_fallback=True,
-            runtime_fallback_reason=str(exc),
-            planner_result=planner_result,
-            tool_calls=[],
+        planner_data = _serialize_planner_result(
+            build_planner_fallback(
+                user_input=str(getattr(payload, "query", "")),
+                standalone_query=str(getattr(payload, "query", "")),
+                reason="planner_runtime_exception",
+                fallback_type="runtime_exception",
+            )
         )
+        controlled_termination = {
+            "type": "runtime_exception",
+            "reason": "planner_runtime_exception",
+            "rejection_reason": "planner_runtime_exception",
+            "rejection_layer": "runtime",
+            "source": "planner",
+            "user_visible_posture": "refuse",
+            "clarify_question": None,
+            "message": "当前系统暂时无法完成该请求，请稍后重试。",
+        }
+        response = _build_controlled_terminate_response(payload, controlled_termination)
         final_state = {
-            "planner": _serialize_planner_result(planner_result),
+            "planner": planner_data,
             "runtime": _default_runtime_contract(),
             "tool_calls": [],
             "tool_results": [],
             "fallback": {"type": "planner", "reason": str(exc), "failed_tool": None},
             "response": response,
-            "selected_path": "legacy_fallback",
+            "selected_path": "controlled_terminate",
             "execution_trace": [
                 {
                     "step": "planner_runtime_route",
                     "state": "selected",
-                    "selected_path": "legacy_fallback",
+                    "selected_path": "controlled_terminate",
                     "primary_capability": planner_result.primary_capability,
                     "strictness": planner_result.strictness,
                     "tool_name": None,
-                    "passthrough": True,
+                    "passthrough": False,
                 }
             ],
             "short_circuit": {"triggered": False, "reason": None, "step": None},
             "truncated": False,
             "planner_runtime_backend": "langgraph" if HAS_LANGGRAPH else "fallback",
-            "planner_runtime_passthrough": True,
+            "planner_runtime_passthrough": False,
+            "controlled_termination": controlled_termination,
         }
     if not final_state.get("tool_results"):
         fallback = dict(final_state.get("fallback") or {})
@@ -1556,19 +1615,46 @@ def run_planner_runtime(
             ]
 
     fallback = dict(final_state.get("fallback") or {})
+    controlled_termination = (
+        dict(final_state.get("controlled_termination") or {})
+        if str(final_state.get("selected_path") or "") == "controlled_terminate"
+        else None
+    )
+    planner_runtime_fallback = bool(fallback.get("type") == "planner")
+    planner_runtime_fallback_reason = fallback.get("reason") if fallback.get("type") == "planner" else None
+    if controlled_termination and not planner_runtime_fallback:
+        planner_runtime_fallback = str(controlled_termination.get("type") or "") in {"planner_reject", "runtime_exception"}
+        if planner_runtime_fallback:
+            planner_runtime_fallback_reason = controlled_termination.get("reason")
+    planner_data = dict(final_state.get("planner") or {})
+    decision_result = str(planner_data.get("decision_result") or "").strip()
+    interaction_decision_source = "planner:execute"
+    final_interaction_authority = "planner"
+    final_user_visible_posture = "execute"
+    posture_override_forbidden = False
+    if decision_result == "clarify":
+        interaction_decision_source = "planner:clarify"
+        final_user_visible_posture = "clarify"
+    elif decision_result in {"delegate_web", "delegate_research_assistant"}:
+        interaction_decision_source = f"planner:{decision_result}"
+        final_user_visible_posture = "delegate"
+    elif controlled_termination:
+        interaction_decision_source = f"planner_policy:{controlled_termination.get('type') or 'controlled_terminate'}"
+        final_interaction_authority = "planner_policy"
+        final_user_visible_posture = str(controlled_termination.get("user_visible_posture") or "refuse")
     observation = {
         "planner_runtime_used": True,
         "planner_runtime_backend": final_state.get("planner_runtime_backend", "fallback"),
-        "planner_runtime_fallback": bool(fallback.get("type") == "planner"),
-        "planner_runtime_fallback_reason": fallback.get("reason") if fallback.get("type") == "planner" else None,
+        "planner_runtime_fallback": planner_runtime_fallback,
+        "planner_runtime_fallback_reason": planner_runtime_fallback_reason,
         "planner_runtime_passthrough": bool(final_state.get("planner_runtime_passthrough", False)),
         "planner_shell_used": True,
         "planner_shell_backend": final_state.get("planner_runtime_backend", "fallback"),
-        "planner_shell_fallback": bool(fallback.get("type") == "planner"),
-        "planner_shell_fallback_reason": fallback.get("reason") if fallback.get("type") == "planner" else None,
+        "planner_shell_fallback": planner_runtime_fallback,
+        "planner_shell_fallback_reason": planner_runtime_fallback_reason,
         "planner_shell_passthrough": bool(final_state.get("planner_runtime_passthrough", False)),
-        "selected_path": str(final_state.get("selected_path") or "legacy_fallback"),
-        "planner": dict(final_state.get("planner") or {}),
+        "selected_path": str(final_state.get("selected_path") or "controlled_terminate"),
+        "planner": planner_data,
         "runtime_contract_version": final_state.get("runtime", {}).get("version", RUNTIME_CONTRACT_VERSION),
         "runtime_stable_fields": list(final_state.get("runtime", {}).get("stable_fields", list(RUNTIME_STABLE_FIELDS))),
         "runtime_envelope_fields": list(final_state.get("runtime", {}).get("envelope_fields", list(RUNTIME_ENVELOPE_FIELDS))),
@@ -1589,6 +1675,22 @@ def run_planner_runtime(
         "execution_trace": list(final_state.get("execution_trace") or []),
         "short_circuit": dict(final_state.get("short_circuit") or {"triggered": False, "reason": None, "step": None}),
         "truncated": bool(final_state.get("truncated", False)),
+        "controlled_termination": controlled_termination,
+        "rejection_reason": (
+            (controlled_termination or {}).get("rejection_reason")
+            or dict(final_state.get("runtime", {}).get("planner_validation", {}) or {}).get("reason_code")
+        ),
+        "rejection_layer": (
+            (controlled_termination or {}).get("rejection_layer")
+            or (
+                [str(item).strip() for item in list(dict(final_state.get("runtime", {}).get("planner_validation", {}) or {}).get("rejected_layers") or []) if str(item).strip()] or [None]
+            )[0]
+        ),
+        "failure_settlement_source": (controlled_termination or {}).get("type"),
+        "interaction_decision_source": interaction_decision_source,
+        "final_interaction_authority": final_interaction_authority,
+        "final_user_visible_posture": final_user_visible_posture,
+        "posture_override_forbidden": posture_override_forbidden,
     }
     return {"response": final_state["response"], "observation": observation}
 

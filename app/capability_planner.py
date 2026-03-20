@@ -90,16 +90,15 @@ READY_STATUSES = {"ready", "completed", "active"}
 DEFAULT_PLANNER_DECISION_VERSION = "planner-policy-v1"
 DEFAULT_LOCAL_CAPABILITIES = {"fact_qa", "catalog_lookup", "cross_doc_summary", "control", "paper_assistant"}
 DEFAULT_WEB_CAPABILITIES = {"web_research"}
-PLANNER_SOURCE_RULE = "rule"
 PLANNER_SOURCE_LLM = "llm"
 PLANNER_SOURCE_FALLBACK = "fallback"
-PLANNER_SOURCES = {PLANNER_SOURCE_RULE, PLANNER_SOURCE_LLM, PLANNER_SOURCE_FALLBACK}
+PLANNER_SOURCES = {PLANNER_SOURCE_LLM, PLANNER_SOURCE_FALLBACK}
 PLANNER_DECISION_RESULTS = {
     "clarify",
     "local_execute",
     "delegate_web",
     "delegate_research_assistant",
-    "legacy_fallback",
+    "controlled_terminate",
 }
 
 
@@ -225,8 +224,6 @@ def _wants_web_delegation(text: str, *, allow_web_delegation: bool) -> bool:
 
 def normalize_planner_source(value: str | None) -> str:
     normalized = _normalize_spaces(str(value or "")).lower()
-    if normalized in {"rule_based", PLANNER_SOURCE_RULE}:
-        return PLANNER_SOURCE_RULE
     if normalized in {"llm_based", PLANNER_SOURCE_LLM}:
         return PLANNER_SOURCE_LLM
     return PLANNER_SOURCE_FALLBACK
@@ -274,7 +271,7 @@ def parse_planner_result(payload: dict[str, Any], *, default_query: str = "") ->
         standalone_query=query,
         primary_capability=str(payload.get("primary_capability") or "fact_qa"),
         strictness=str(payload.get("strictness") or "strict_fact"),
-        decision_result=str(payload.get("decision_result") or "legacy_fallback"),
+        decision_result=str(payload.get("decision_result") or "controlled_terminate"),
         knowledge_route=str(payload.get("knowledge_route") or "local"),
         research_mode=str(payload.get("research_mode") or "none"),
         requires_clarification=bool(payload.get("requires_clarification", False)),
@@ -327,195 +324,16 @@ def paper_assistant_clarification(query: str, *, depends_on: list[str] | None = 
     return [], None
 
 
-def build_rule_based_plan(
+def build_planner_fallback(
     *,
     user_input: str,
     standalone_query: str,
-    dialog_state: str,
-    history_topic_anchors: list[str],
-    pending_clarify: dict[str, Any] | None,
-    max_steps: int = 3,
-    catalog_limit: int = 20,
-    capability_registry: list[dict[str, Any]] | None = None,
-    policy_flags: dict[str, Any] | None = None,
+    reason: str,
+    fallback_type: str = "controlled_terminate",
+    rejection_layer: str | None = None,
+    user_visible_posture: str = "refuse",
+    clarify_question: str | None = None,
 ) -> PlannerResult:
-    is_new_topic, should_clear, relation = detect_new_topic(
-        user_input=user_input,
-        dialog_state=dialog_state,
-        history_topic_anchors=history_topic_anchors,
-        pending_clarify=pending_clarify,
-    )
-    normalized_query = _normalize_spaces(standalone_query or user_input)
-    available_capabilities = _registered_capabilities(capability_registry)
-    flags = dict(policy_flags or {})
-    allow_web_delegation = bool(flags.get("allow_web_delegation", False))
-    allow_research_assistant = bool(flags.get("allow_research_assistant", True))
-    wants_catalog = _contains_any(normalized_query, CATALOG_TERMS)
-    wants_summary = _contains_any(normalized_query, SUMMARY_TERMS)
-    wants_paper_assistant = _contains_any(normalized_query, PAPER_ASSISTANT_TERMS)
-    strict_fact = _strict_fact_signal(normalized_query)
-    wants_web = _wants_web_delegation(normalized_query, allow_web_delegation=allow_web_delegation)
-    limit = _extract_limit(normalized_query, catalog_limit)
-    steps: list[PlannerStep] = []
-    primary_capability = "fact_qa"
-    strictness = "strict_fact"
-    confidence = 0.7
-    decision_result = "local_execute"
-    knowledge_route = "local"
-    research_mode = "none"
-    requires_clarification = False
-    selected_tools_or_skills: list[str] = []
-    clarify_question: str | None = None
-    fallback = {"type": None, "reason": None}
-
-    if wants_web and "web_research" in available_capabilities:
-        decision_result = "delegate_web"
-        knowledge_route = "web"
-        primary_capability = "web_research"
-        strictness = "strict_fact" if strict_fact else ("summary" if wants_summary else "strict_fact")
-        selected_tools_or_skills = ["web_research"]
-        confidence = 0.76
-    elif wants_web:
-        return build_planner_fallback(
-            user_input=user_input,
-            standalone_query=normalized_query,
-            reason="capability_unavailable:web_research",
-        )
-    elif wants_catalog:
-        catalog_step = PlannerStep(
-            action="catalog_lookup",
-            query=normalized_query,
-            produces="paper_set",
-            params={"limit": limit},
-        )
-        steps.append(catalog_step)
-        confidence = 0.82
-        if wants_paper_assistant and not strict_fact and allow_research_assistant:
-            primary_capability = "paper_assistant"
-            strictness = "summary"
-            decision_result = "delegate_research_assistant"
-            research_mode = "paper_assistant"
-            steps.append(
-                PlannerStep(
-                    action="paper_assistant",
-                    query=normalized_query,
-                    depends_on=["paper_set"],
-                    params={"style": "research_assistant"},
-                )
-            )
-            confidence = 0.91
-        elif wants_paper_assistant and not strict_fact:
-            return build_planner_fallback(
-                user_input=user_input,
-                standalone_query=normalized_query,
-                reason="capability_unavailable:paper_assistant",
-            )
-        elif wants_summary and not strict_fact:
-            primary_capability = "cross_doc_summary"
-            strictness = "summary"
-            steps.append(
-                PlannerStep(
-                    action="cross_doc_summary",
-                    query=normalized_query,
-                    depends_on=["paper_set"],
-                    params={"format": ("table" if "表格" in normalized_query or "table" in normalized_query.lower() else "bullet")},
-                )
-            )
-            confidence = 0.9
-        elif strict_fact:
-            primary_capability = "fact_qa"
-            strictness = "strict_fact"
-            steps.append(PlannerStep(action="fact_qa", query=normalized_query, depends_on=["paper_set"]))
-            confidence = 0.9
-        else:
-            primary_capability = "catalog_lookup"
-            strictness = "catalog"
-    elif wants_paper_assistant and not strict_fact and allow_research_assistant:
-        primary_capability = "paper_assistant"
-        strictness = "summary"
-        missing_prerequisites, clarify_question = paper_assistant_clarification(normalized_query)
-        if missing_prerequisites and clarify_question:
-            decision_result = "clarify"
-            requires_clarification = True
-            confidence = 0.83
-        else:
-            decision_result = "delegate_research_assistant"
-            research_mode = "paper_assistant"
-            steps.append(
-                PlannerStep(
-                    action="paper_assistant",
-                    query=normalized_query,
-                    params={"style": "research_assistant"},
-                )
-            )
-            confidence = 0.8
-    elif wants_paper_assistant and not strict_fact:
-        return build_planner_fallback(
-            user_input=user_input,
-            standalone_query=normalized_query,
-            reason="capability_unavailable:paper_assistant",
-        )
-    elif wants_summary and not strict_fact:
-        primary_capability = "cross_doc_summary"
-        strictness = "summary"
-        steps.append(PlannerStep(action="cross_doc_summary", query=normalized_query))
-        confidence = 0.78
-    elif _contains_any(normalized_query, ("表格", "markdown", "json", "继续")) and not wants_catalog:
-        primary_capability = "control"
-        strictness = "summary" if wants_summary else "strict_fact"
-        steps.append(PlannerStep(action="control", query=normalized_query))
-        confidence = 0.72
-    else:
-        steps.append(PlannerStep(action="fact_qa", query=normalized_query))
-
-    if strict_fact and steps and steps[-1].action == "cross_doc_summary":
-        steps[-1] = PlannerStep(action="fact_qa", query=normalized_query, depends_on=list(steps[-1].depends_on))
-        primary_capability = "fact_qa"
-        strictness = "strict_fact"
-        confidence = max(confidence, 0.88)
-
-    for step in steps:
-        if step.action not in available_capabilities:
-            return build_planner_fallback(
-                user_input=user_input,
-                standalone_query=normalized_query,
-                reason=f"capability_unavailable:{step.action}",
-            )
-
-    limited_steps = steps[: max(1, int(max_steps))]
-    if not selected_tools_or_skills:
-        ordered_names: list[str] = []
-        for step in limited_steps:
-            if step.action not in ordered_names:
-                ordered_names.append(step.action)
-        selected_tools_or_skills = ordered_names
-
-    return PlannerResult(
-        decision_version=DEFAULT_PLANNER_DECISION_VERSION,
-        user_goal=normalized_query,
-        planner_used=True,
-        planner_source=PLANNER_SOURCE_RULE,
-        planner_fallback=False,
-        planner_fallback_reason=None,
-        planner_confidence=round(confidence, 4),
-        is_new_topic=is_new_topic,
-        should_clear_pending_clarify=should_clear,
-        relation_to_previous=relation,
-        standalone_query=normalized_query,
-        primary_capability=primary_capability,
-        strictness=strictness,
-        decision_result=decision_result,
-        knowledge_route=knowledge_route,
-        research_mode=research_mode,
-        requires_clarification=requires_clarification,
-        selected_tools_or_skills=selected_tools_or_skills,
-        fallback=fallback,
-        clarify_question=clarify_question,
-        action_plan=[asdict(step) for step in limited_steps],
-    )
-
-
-def build_planner_fallback(*, user_input: str, standalone_query: str, reason: str) -> PlannerResult:
     query = _normalize_spaces(standalone_query or user_input)
     return PlannerResult(
         decision_version=DEFAULT_PLANNER_DECISION_VERSION,
@@ -531,14 +349,19 @@ def build_planner_fallback(*, user_input: str, standalone_query: str, reason: st
         standalone_query=query,
         primary_capability="fact_qa",
         strictness="strict_fact",
-        decision_result="legacy_fallback",
+        decision_result="controlled_terminate",
         knowledge_route="local",
         research_mode="none",
-        requires_clarification=False,
-        selected_tools_or_skills=["fact_qa"],
-        fallback={"type": "planner", "reason": reason},
-        clarify_question=None,
-        action_plan=[asdict(PlannerStep(action="fact_qa", query=query))],
+        requires_clarification=bool(clarify_question),
+        selected_tools_or_skills=[],
+        fallback={
+            "type": fallback_type,
+            "reason": reason,
+            "rejection_layer": rejection_layer,
+            "user_visible_posture": user_visible_posture,
+        },
+        clarify_question=clarify_question,
+        action_plan=[],
     )
 
 
