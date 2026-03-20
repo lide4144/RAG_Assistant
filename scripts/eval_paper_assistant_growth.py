@@ -161,7 +161,12 @@ def _latest_new_run_dir(runs_dir: Path, before: set[str]) -> Path | None:
 
 
 def decision_from_report(report: dict[str, Any]) -> str:
-    # Release scoring uses qa_report.decision as the only decision source.
+    # Prefer final user-visible posture; fall back to legacy decision field for compatibility.
+    posture = str(report.get("final_user_visible_posture") or "").strip()
+    if posture in {"execute", "partial_answer", "delegate"}:
+        return "answer"
+    if posture in {"clarify", "refuse"}:
+        return posture
     return str(report.get("decision") or "")
 
 

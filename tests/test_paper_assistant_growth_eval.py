@@ -17,9 +17,18 @@ from scripts.eval_paper_assistant_growth import (
 
 
 class PaperAssistantGrowthEvalTests(unittest.TestCase):
-    def test_decision_source_uses_decision_field_only(self) -> None:
-        report = {"decision": "clarify", "final_decision": "answer_with_evidence"}
+    def test_decision_source_prefers_final_user_visible_posture(self) -> None:
+        report = {"decision": "clarify", "final_decision": "answer_with_evidence", "final_user_visible_posture": "execute"}
+        self.assertEqual(decision_from_report(report), "answer")
+
+        report = {"decision": "answer", "final_user_visible_posture": "partial_answer"}
+        self.assertEqual(decision_from_report(report), "answer")
+
+        report = {"decision": "answer", "final_user_visible_posture": "clarify"}
         self.assertEqual(decision_from_report(report), "clarify")
+
+        report = {"decision": "refuse", "final_decision": "answer_with_evidence"}
+        self.assertEqual(decision_from_report(report), "refuse")
 
     def test_config_comparable_allows_only_legacy_toggle(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
