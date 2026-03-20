@@ -127,12 +127,6 @@ venv/bin/python -m app.qa --q "这篇论文的主要贡献是什么？" --mode h
 
 ### 6) M8.5 可视化调试 UI（Streamlit）
 
-详细使用说明见：[UI_USAGE.md](UI_USAGE.md)
-
-```bash
-streamlit run app/ui.py
-```
-
 UI 功能：
 - 对话区：多轮聊天、Assistant 回答渲染、引用编号 `[1] [2]` 点击审查
 - 开发者审查面板：Query 演变、`intent_type` / `anchor_query` / `topic_query_source`、`evidence_grouped`（含 `score_retrieval` / `score_rerank` / `source`）、Sufficiency Gate 降级告警

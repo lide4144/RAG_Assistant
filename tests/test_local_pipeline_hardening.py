@@ -121,12 +121,11 @@ class IngestLockTests(unittest.TestCase):
 class PathAnchoringTests(unittest.TestCase):
     def test_default_paths_are_anchored(self) -> None:
         import app.library as library
-        import app.ui as ui
 
         self.assertTrue(RUNS_DIR.is_absolute())
         self.assertTrue(DATA_DIR.is_absolute())
-        self.assertTrue(Path(ui.DEFAULT_CHUNKS).is_absolute())
-        self.assertTrue(Path(ui.DEFAULT_CONFIG).is_absolute())
+        self.assertTrue(Path(DATA_DIR / "processed" / "chunks_clean.jsonl").is_absolute())
+        self.assertTrue(Path(CONFIGS_DIR / "default.yaml").is_absolute())
         self.assertTrue(library.DEFAULT_PROCESSED_DIR.is_absolute())
 
 
@@ -138,7 +137,7 @@ class ImportProgressTests(unittest.TestCase):
             base = Path(tmp)
             pdf = base / "demo.pdf"
             pdf.write_bytes(b"%PDF-1.4\n%fake\n")
-            progress_calls: list[tuple[int, int, str]] = []
+            progress_calls: list[dict[str, object]] = []
 
             with (
                 patch("app.library.run_ingest", return_value=0),
@@ -150,12 +149,13 @@ class ImportProgressTests(unittest.TestCase):
                     uploaded_files=[pdf],
                     topic="",
                     config_path=str(CONFIGS_DIR / "default.yaml"),
-                    progress_callback=lambda s, t, m: progress_calls.append((s, t, m)),
+                    progress_callback=lambda event: progress_calls.append(event),
                 )
 
             self.assertTrue(result["ok"])
             self.assertTrue(progress_calls)
-            self.assertEqual(progress_calls[-1][0], 6)
+            self.assertEqual(int(progress_calls[-1].get("processed", -1)), 1)
+            self.assertEqual(int(progress_calls[-1].get("total", -1)), 1)
 
     def test_run_import_workflow_returns_conflict_message_when_ingest_locked(self) -> None:
         from app.library import run_import_workflow
