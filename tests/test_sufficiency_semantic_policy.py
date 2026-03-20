@@ -5,6 +5,7 @@ import unittest
 from unittest.mock import patch
 
 from app.config import PipelineConfig
+from app.evidence_judge import judge_semantic_evidence
 from app.sufficiency import run_sufficiency_gate
 
 
@@ -15,73 +16,113 @@ class SufficiencySemanticPolicyTests(unittest.TestCase):
                 "paper_id": "p1",
                 "paper_title": "Transformer",
                 "evidence": [
-                    {"quote": "General literature review and related work section.", "content_type": "body"},
-                    {"quote": "Background discussion without concrete method details.", "content_type": "body"},
+                    {"chunk_id": "p1:1", "quote": "Transformer background discussion.", "content_type": "body"},
+                    {"chunk_id": "p1:2", "quote": "General architecture review without metric details.", "content_type": "body"},
                 ],
             }
         ]
 
-    def test_policy_threshold_switches_decision(self) -> None:
-        cfg_strict = PipelineConfig()
-        cfg_strict.embedding.enabled = False
-        cfg_strict.sufficiency_topic_match_threshold = 0.95
-        cfg_strict.sufficiency_semantic_policy = "strict"
-        cfg_strict.sufficiency_semantic_threshold_strict = 0.75
-        cfg_strict.sufficiency_semantic_threshold_balanced = 0.2
-        cfg_strict.sufficiency_semantic_threshold_explore = 0.1
-
-        strict_report = run_sufficiency_gate(
-            question="这篇论文是什么",
-            query_used="这篇论文是什么",
-            scope_mode="normal",
-            evidence_grouped=self._evidence(),
-            config=cfg_strict,
-        )
-        self.assertEqual(strict_report.get("semantic_policy"), "strict")
-        self.assertIn(strict_report.get("decision"), {"refuse", "clarify"})
-
-        cfg_explore = PipelineConfig()
-        cfg_explore.embedding.enabled = False
-        cfg_explore.sufficiency_topic_match_threshold = 0.95
-        cfg_explore.sufficiency_semantic_policy = "explore"
-        cfg_explore.sufficiency_semantic_threshold_strict = 0.75
-        cfg_explore.sufficiency_semantic_threshold_balanced = 0.2
-        cfg_explore.sufficiency_semantic_threshold_explore = 0.0
-
-        explore_report = run_sufficiency_gate(
-            question="这篇论文是什么",
-            query_used="这篇论文是什么",
-            scope_mode="normal",
-            evidence_grouped=self._evidence(),
-            config=cfg_explore,
-        )
-        self.assertEqual(explore_report.get("semantic_policy"), "explore")
-        self.assertEqual(explore_report.get("decision"), "answer")
-
-    def test_embedding_semantic_path_used_when_enabled(self) -> None:
+    def test_policy_threshold_is_exposed_from_llm_judge_output(self) -> None:
         cfg = PipelineConfig()
-        cfg.embedding.enabled = True
-        cfg.embedding.api_key_env = "SILICONFLOW_API_KEY"
-        cfg.embedding.base_url = "https://api.siliconflow.cn/v1"
-        cfg.embedding.model = "BAAI/bge-large-zh-v1.5"
-        cfg.sufficiency_topic_match_threshold = 0.95
         cfg.sufficiency_semantic_policy = "explore"
         cfg.sufficiency_semantic_threshold_explore = 0.0
+        cfg.sufficiency_judge_use_llm = True
+        cfg.sufficiency_judge_llm_api_key_env = "SILICONFLOW_API_KEY"
 
         with patch.dict(os.environ, {"SILICONFLOW_API_KEY": "fake-key"}):
             with patch(
-                "app.sufficiency.fetch_embeddings",
-                return_value=[[1.0, 0.0], [1.0, 0.0], [1.0, 0.0]],
-            ) as mocked_fetch:
+                "app.evidence_judge.call_chat_completion",
+                return_value=type(
+                    "Result",
+                    (),
+                    {
+                        "ok": True,
+                        "content": '{"decision_hint":"answer","missing_aspects":[],"covered_aspects":["方法"],"topic_aligned":true,"allows_partial_answer":false,"confidence":"high"}',
+                    },
+                )(),
+            ):
                 report = run_sufficiency_gate(
-                    question="这篇论文是什么",
-                    query_used="这篇论文是什么",
+                    question="Transformer deployment boundary",
+                    query_used="Transformer deployment boundary",
                     scope_mode="normal",
                     evidence_grouped=self._evidence(),
                     config=cfg,
                 )
-        mocked_fetch.assert_called_once()
-        self.assertGreater(float(report.get("semantic_similarity_score") or 0.0), 0.0)
+        self.assertEqual(report.get("semantic_policy"), "explore")
+        self.assertEqual(float(report.get("semantic_threshold")), 0.0)
+        self.assertEqual(report.get("judge_source"), "semantic_evidence_judge_llm_v1")
+
+    def test_judge_prefers_llm_path_when_available(self) -> None:
+        cfg = PipelineConfig()
+        cfg.sufficiency_judge_use_llm = True
+        cfg.sufficiency_judge_llm_api_key_env = "SILICONFLOW_API_KEY"
+
+        with patch.dict(os.environ, {"SILICONFLOW_API_KEY": "fake-key"}):
+            with patch(
+                "app.evidence_judge.call_chat_completion",
+                return_value=type(
+                    "Result",
+                    (),
+                    {
+                        "ok": True,
+                        "content": '{"decision_hint":"partial","missing_aspects":["实验结果"],"covered_aspects":["方法"],"topic_aligned":true,"allows_partial_answer":true,"confidence":"high"}',
+                    },
+                )(),
+            ) as mocked_call:
+                report = judge_semantic_evidence(
+                    question="请总结方法和实验结果",
+                    topic_query_text="方法 实验结果",
+                    evidence_grouped=self._evidence(),
+                    config=cfg,
+                )
+        mocked_call.assert_called_once()
+        self.assertEqual(report.get("judge_source"), "semantic_evidence_judge_llm_v1")
+        self.assertEqual(report.get("decision_hint"), "partial")
+        self.assertTrue(report.get("allows_partial_answer"))
+
+    def test_judge_returns_error_when_llm_fails(self) -> None:
+        cfg = PipelineConfig()
+        cfg.sufficiency_judge_use_llm = True
+        cfg.sufficiency_judge_llm_api_key_env = "SILICONFLOW_API_KEY"
+
+        with patch.dict(os.environ, {"SILICONFLOW_API_KEY": "fake-key"}):
+            with patch(
+                "app.evidence_judge.call_chat_completion",
+                return_value=type("Result", (), {"ok": False, "content": None})(),
+            ):
+                report = judge_semantic_evidence(
+                    question="Transformer architecture",
+                    topic_query_text="Transformer architecture",
+                    evidence_grouped=self._evidence(),
+                    config=cfg,
+                )
+        self.assertEqual(report.get("judge_source"), "semantic_evidence_judge_llm_v1")
+        self.assertEqual(report.get("judge_status"), "error")
+        self.assertEqual(report.get("decision_hint"), "uncertain")
+        self.assertIn("judge_llm_call_failed", report.get("output_warnings", []))
+
+    def test_sufficiency_gate_blocks_on_judge_system_error(self) -> None:
+        cfg = PipelineConfig()
+        cfg.sufficiency_judge_use_llm = True
+        cfg.sufficiency_judge_llm_api_key_env = "SILICONFLOW_API_KEY"
+
+        with patch.dict(os.environ, {"SILICONFLOW_API_KEY": "fake-key"}):
+            with patch(
+                "app.evidence_judge.call_chat_completion",
+                return_value=type("Result", (), {"ok": False, "content": None})(),
+            ):
+                report = run_sufficiency_gate(
+                    question="Transformer architecture",
+                    query_used="Transformer architecture",
+                    scope_mode="normal",
+                    evidence_grouped=self._evidence(),
+                    config=cfg,
+                )
+        self.assertEqual(report.get("decision"), "refuse")
+        self.assertEqual(report.get("reason_code"), "judge_system_error")
+        self.assertEqual(report.get("judge_status"), "error")
+        self.assertIn("judge_llm_call_failed", report.get("output_warnings", []))
+        self.assertIn("judge_system_error", report.get("output_warnings", []))
 
 
 if __name__ == "__main__":

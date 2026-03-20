@@ -188,117 +188,6 @@ CLAIM_STOPWORDS = {
     "可以",
     "一个",
 }
-KEY_ELEMENT_NUMERIC_TERMS = (
-    "多少",
-    "几",
-    "数值",
-    "比例",
-    "准确率",
-    "召回率",
-    "f1",
-    "f-1",
-    "precision",
-    "recall",
-    "rate",
-    "score",
-    "percent",
-    "%",
-    "number",
-)
-KEY_ELEMENT_METHOD_TERMS = (
-    "方法",
-    "机制",
-    "流程",
-    "步骤",
-    "算法",
-    "原理",
-    "how",
-    "method",
-    "mechanism",
-    "approach",
-    "pipeline",
-)
-KEY_ELEMENT_SCOPE_TERMS = (
-    "哪篇",
-    "哪个",
-    "标题",
-    "谁",
-    "作者",
-    "年份",
-    "会议",
-    "title",
-    "author",
-    "year",
-    "conference",
-)
-KEY_ELEMENT_EXPERIMENT_CONDITION_TERMS = (
-    "实验条件",
-    "实验设置",
-    "评测设置",
-    "设置下",
-    "条件下",
-    "condition",
-    "setting",
-    "under what",
-    "under which",
-    "benchmark setting",
-)
-KEY_ELEMENT_SUBJECT_CONSTRAINT_TERMS = (
-    "主体",
-    "对象",
-    "受试者",
-    "样本",
-    "人群",
-    "患者",
-    "学生",
-    "用户",
-    "participant",
-    "subject",
-    "cohort",
-    "population",
-    "group",
-)
-QUESTION_TYPE_DEFINITION_TERMS = (
-    "what is",
-    "what does",
-    "定义",
-    "含义",
-    "是什么",
-    "是指",
-)
-QUESTION_TYPE_NUMERIC_TERMS = (
-    "how much",
-    "how many",
-    "to what extent",
-    "提升了多少",
-    "提高了多少",
-    "幅度",
-)
-QUESTION_TYPE_METHOD_TERMS = (
-    "how does",
-    "how do",
-    "workflow",
-    "procedure",
-    "principle",
-    "如何",
-    "怎么",
-    "机制",
-)
-QUESTION_TYPE_FACT_CHECK_TERMS = (
-    "is it true",
-    "true or false",
-    "fact check",
-    "是否",
-    "是不是",
-    "是否成立",
-    "真实吗",
-)
-QUESTION_TYPE_REQUIRED_SLOTS: dict[str, set[str]] = {
-    "definition": set(),
-    "numeric": {"numeric"},
-    "method": {"method"},
-    "fact_check": {"scope"},
-}
 OPEN_SUMMARY_TERMS = (
     "总结",
     "概览",
@@ -1360,30 +1249,6 @@ def _collect_evidence_text(evidence_grouped: list[dict[str, Any]]) -> str:
     return " ".join(segments)
 
 
-def _topic_match_score(question: str, evidence_grouped: list[dict[str, Any]]) -> float:
-    q_tokens = _tokenize_for_matching(question)
-    if not q_tokens:
-        return 1.0
-    e_tokens = _tokenize_for_matching(_collect_evidence_text(evidence_grouped))
-    if not e_tokens:
-        return 0.0
-    return len(q_tokens.intersection(e_tokens)) / max(1, len(q_tokens))
-
-
-def _classify_question_types(question: str) -> set[str]:
-    lowered = (question or "").lower()
-    q_types: set[str] = set()
-    if any(term in lowered for term in QUESTION_TYPE_DEFINITION_TERMS):
-        q_types.add("definition")
-    if any(term in lowered for term in QUESTION_TYPE_NUMERIC_TERMS):
-        q_types.add("numeric")
-    if any(term in lowered for term in QUESTION_TYPE_METHOD_TERMS):
-        q_types.add("method")
-    if any(term in lowered for term in QUESTION_TYPE_FACT_CHECK_TERMS) or re.search(r"\bis\s+.+\btrue\b", lowered):
-        q_types.add("fact_check")
-    return q_types
-
-
 def is_open_summary_intent(question: str) -> bool:
     lowered = (question or "").lower()
     if not lowered.strip():
@@ -1461,61 +1326,6 @@ def _compute_same_topic_clarify_streak(
             continue
         break
     return streak, topic_switched
-
-
-def _required_key_elements(question: str, *, open_summary_intent: bool = False) -> set[str]:
-    lowered = (question or "").lower()
-    required: set[str] = set()
-    for q_type in _classify_question_types(question):
-        required.update(QUESTION_TYPE_REQUIRED_SLOTS.get(q_type, set()))
-    if not open_summary_intent and (
-        re.search(r"\b\d+(?:\.\d+)?\b", lowered) or any(term in lowered for term in KEY_ELEMENT_NUMERIC_TERMS)
-    ):
-        required.add("numeric")
-    if any(term in lowered for term in KEY_ELEMENT_METHOD_TERMS):
-        required.add("method")
-    if any(term in lowered for term in KEY_ELEMENT_SCOPE_TERMS):
-        required.add("scope")
-    if any(term in lowered for term in KEY_ELEMENT_EXPERIMENT_CONDITION_TERMS):
-        required.add("experiment_condition")
-    if any(term in lowered for term in KEY_ELEMENT_SUBJECT_CONSTRAINT_TERMS):
-        required.add("subject_constraint")
-    return required
-
-
-def _covered_key_elements(evidence_grouped: list[dict[str, Any]]) -> set[str]:
-    evidence_text = _collect_evidence_text(evidence_grouped)
-    lowered = evidence_text.lower()
-    covered: set[str] = set()
-    if _extract_numbers(evidence_text):
-        covered.add("numeric")
-    if any(term in lowered for term in KEY_ELEMENT_METHOD_TERMS):
-        covered.add("method")
-    if any(term in lowered for term in KEY_ELEMENT_SCOPE_TERMS):
-        covered.add("scope")
-    if any(term in lowered for term in KEY_ELEMENT_EXPERIMENT_CONDITION_TERMS):
-        covered.add("experiment_condition")
-    if any(term in lowered for term in KEY_ELEMENT_SUBJECT_CONSTRAINT_TERMS):
-        covered.add("subject_constraint")
-    return covered
-
-
-def _build_clarify_questions(question: str, missing_elements: list[str]) -> list[str]:
-    prompts: list[str] = []
-    for element in missing_elements:
-        if element == "numeric":
-            prompts.append("您希望我回答哪项具体数值或指标（例如准确率、召回率、F1）？")
-        elif element == "method":
-            prompts.append("您更关注方法的哪部分细节（流程、关键步骤或机制）？")
-        elif element == "scope":
-            prompts.append("请指定论文线索（标题、作者、年份或会议）以便定位证据。")
-        elif element == "experiment_condition":
-            prompts.append("请说明您关心的实验条件（如数据集、评测设置或对比基线）。")
-        elif element == "subject_constraint":
-            prompts.append("请说明您关注的主体限定（如人群、样本范围或特定对象）。")
-    if not prompts:
-        prompts.append(f"请补充问题“{question}”所需的论文或实验线索。")
-    return prompts[:1]
 
 
 def _build_assistant_summary_answer(
@@ -2921,7 +2731,6 @@ def run_qa(args: argparse.Namespace) -> int:
             "section_route_used": False,
             "structure_route_fallback": None,
             "structure_parse_reasons": [],
-            "semantic_similarity_score": None,
             "semantic_strategy_tier": "balanced",
         }
         summary_candidates = recall_papers_by_summary(
@@ -3114,7 +2923,6 @@ def run_qa(args: argparse.Namespace) -> int:
             "section_route_used": False,
             "structure_route_fallback": None,
             "structure_parse_reasons": [],
-            "semantic_similarity_score": None,
             "semantic_strategy_tier": "balanced",
         }
         retrieval_candidates = list(candidates)
@@ -3162,9 +2970,13 @@ def run_qa(args: argparse.Namespace) -> int:
             "severity": "info",
             "triggered_rules": [str(planner_short_circuit.get("reason") or "planner_short_circuit")],
             "clarify_questions": [],
+            "output_warnings": [],
             "clarify_limit_hit": False,
             "forced_partial_answer": False,
-            "missing_key_elements": [],
+            "missing_aspects": [],
+            "coverage_summary": {},
+            "judge_source": "planner_short_circuit",
+            "validator_source": "deterministic_validator_v1",
             "semantic_policy": planner_strictness,
             "constraints_envelope": None,
         }
@@ -3178,9 +2990,13 @@ def run_qa(args: argparse.Namespace) -> int:
             "severity": "info",
             "triggered_rules": ["catalog_route"],
             "clarify_questions": [],
+            "output_warnings": [],
             "clarify_limit_hit": False,
             "forced_partial_answer": False,
-            "missing_key_elements": [],
+            "missing_aspects": [],
+            "coverage_summary": {},
+            "judge_source": "catalog_route_bypass",
+            "validator_source": "deterministic_validator_v1",
             "semantic_policy": "catalog",
             "constraints_envelope": None,
         }
@@ -3203,7 +3019,6 @@ def run_qa(args: argparse.Namespace) -> int:
         decision = str(sufficiency_gate.get("decision", "answer"))
         decision_reason = str(sufficiency_gate.get("reason", "")).strip()
     _append_constraint_envelope(constraint_envelopes, sufficiency_gate.get("constraints_envelope"))
-    retrieval_metrics["semantic_similarity_score"] = sufficiency_gate.get("semantic_similarity_score")
     retrieval_metrics["semantic_strategy_tier"] = sufficiency_gate.get("semantic_policy", planner_strictness)
     if force_clarify_due_to_anchor:
         decision_reason = force_clarify_reason
@@ -3594,7 +3409,7 @@ def run_qa(args: argparse.Namespace) -> int:
             )
         )
     )
-    next_transient_constraints = [str(x).strip() for x in sufficiency_gate.get("missing_key_elements", []) if str(x).strip()]
+    next_transient_constraints = [str(x).strip() for x in sufficiency_gate.get("missing_aspects", []) if str(x).strip()]
     if not need_scope_clarification:
         next_transient_constraints = []
     clarify_count = (0 if planner_result.is_new_topic else clarify_streak_before_turn) + (1 if final_interaction.user_visible_posture == "clarify" else 0)
@@ -3837,7 +3652,6 @@ def run_qa(args: argparse.Namespace) -> int:
         "structure_route_fallback": retrieval_metrics["structure_route_fallback"],
         "structure_coverage_limited": bool(structure_coverage_notice),
         "structure_coverage_notice": structure_coverage_notice,
-        "semantic_similarity_score": retrieval_metrics["semantic_similarity_score"],
         "semantic_strategy_tier": retrieval_metrics["semantic_strategy_tier"],
     }
     trace["expansion_added_chunks"] = [
@@ -4043,7 +3857,6 @@ def run_qa(args: argparse.Namespace) -> int:
         "structure_route_fallback": retrieval_metrics["structure_route_fallback"],
         "structure_coverage_limited": bool(structure_coverage_notice),
         "structure_coverage_notice": structure_coverage_notice,
-        "semantic_similarity_score": retrieval_metrics["semantic_similarity_score"],
         "semantic_strategy_tier": retrieval_metrics["semantic_strategy_tier"],
         "papers_ranked": papers_ranked,
         "evidence_grouped": evidence_grouped,

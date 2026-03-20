@@ -121,6 +121,12 @@ sufficiency_semantic_threshold_strict: 0.35
 sufficiency_semantic_threshold_balanced: 0.25
 sufficiency_semantic_threshold_explore: 0.15
 sufficiency_key_element_min_coverage: 1.0
+sufficiency_judge_use_llm: true
+sufficiency_judge_llm_provider: siliconflow
+sufficiency_judge_llm_model: Qwen/Qwen2.5-7B-Instruct
+sufficiency_judge_llm_api_base: https://api.siliconflow.cn/v1
+sufficiency_judge_llm_api_key_env: SILICONFLOW_API_KEY
+sufficiency_judge_llm_timeout_ms: 6000
 assistant_mode_enabled: true
 assistant_mode_force_legacy_gate: false
 assistant_mode_clarify_limit: 2

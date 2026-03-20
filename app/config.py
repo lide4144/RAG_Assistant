@@ -136,6 +136,12 @@ class PipelineConfig:
     sufficiency_semantic_threshold_balanced: float = 0.25
     sufficiency_semantic_threshold_explore: float = 0.15
     sufficiency_key_element_min_coverage: float = 1.0
+    sufficiency_judge_use_llm: bool = True
+    sufficiency_judge_llm_provider: str = "siliconflow"
+    sufficiency_judge_llm_model: str = "Qwen/Qwen2.5-7B-Instruct"
+    sufficiency_judge_llm_api_base: str = "https://api.siliconflow.cn/v1"
+    sufficiency_judge_llm_api_key_env: str = "SILICONFLOW_API_KEY"
+    sufficiency_judge_llm_timeout_ms: int = 6000
     assistant_mode_enabled: bool = True
     assistant_mode_force_legacy_gate: bool = False
     assistant_mode_clarify_limit: int = 2
@@ -781,6 +787,24 @@ def validate_config(config: PipelineConfig) -> tuple[PipelineConfig, list[str]]:
             f"fallback to {defaults.sufficiency_key_element_min_coverage} (must satisfy 0 <= value <= 1)."
         )
         validated.sufficiency_key_element_min_coverage = defaults.sufficiency_key_element_min_coverage
+    if not isinstance(validated.sufficiency_judge_llm_provider, str) or not validated.sufficiency_judge_llm_provider.strip():
+        warnings.append("Invalid sufficiency_judge_llm_provider; fallback to defaults.")
+        validated.sufficiency_judge_llm_provider = defaults.sufficiency_judge_llm_provider
+    if not isinstance(validated.sufficiency_judge_llm_model, str) or not validated.sufficiency_judge_llm_model.strip():
+        warnings.append("Invalid sufficiency_judge_llm_model; fallback to defaults.")
+        validated.sufficiency_judge_llm_model = defaults.sufficiency_judge_llm_model
+    if not isinstance(validated.sufficiency_judge_llm_api_base, str) or not validated.sufficiency_judge_llm_api_base.strip():
+        warnings.append("Invalid sufficiency_judge_llm_api_base; fallback to defaults.")
+        validated.sufficiency_judge_llm_api_base = defaults.sufficiency_judge_llm_api_base
+    if not isinstance(validated.sufficiency_judge_llm_api_key_env, str) or not validated.sufficiency_judge_llm_api_key_env.strip():
+        warnings.append("Invalid sufficiency_judge_llm_api_key_env; fallback to defaults.")
+        validated.sufficiency_judge_llm_api_key_env = defaults.sufficiency_judge_llm_api_key_env
+    if validated.sufficiency_judge_llm_timeout_ms <= 0:
+        warnings.append(
+            f"Invalid sufficiency_judge_llm_timeout_ms={validated.sufficiency_judge_llm_timeout_ms}; "
+            f"fallback to {defaults.sufficiency_judge_llm_timeout_ms} (must be > 0)."
+        )
+        validated.sufficiency_judge_llm_timeout_ms = defaults.sufficiency_judge_llm_timeout_ms
 
     if validated.dense_backend not in {"embedding", "tfidf"}:
         warnings.append(

@@ -255,12 +255,20 @@ class ConfigTests(unittest.TestCase):
         invalid = PipelineConfig(
             sufficiency_topic_match_threshold=1.5,
             sufficiency_key_element_min_coverage=-0.2,
+            sufficiency_judge_llm_provider="",
+            sufficiency_judge_llm_model="",
+            sufficiency_judge_llm_api_base="",
+            sufficiency_judge_llm_api_key_env="",
+            sufficiency_judge_llm_timeout_ms=0,
         )
         validated, warnings = validate_config(invalid)
         self.assertEqual(validated.sufficiency_topic_match_threshold, 0.15)
         self.assertEqual(validated.sufficiency_key_element_min_coverage, 1.0)
+        self.assertEqual(validated.sufficiency_judge_llm_provider, "siliconflow")
+        self.assertEqual(validated.sufficiency_judge_llm_timeout_ms, 6000)
         self.assertTrue(any("sufficiency_topic_match_threshold" in w for w in warnings))
         self.assertTrue(any("sufficiency_key_element_min_coverage" in w for w in warnings))
+        self.assertTrue(any("sufficiency_judge_llm_provider" in w for w in warnings))
 
     def test_validate_config_intent_control_min_confidence_range(self) -> None:
         invalid = PipelineConfig(intent_control_min_confidence=1.5)
