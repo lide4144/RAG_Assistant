@@ -202,13 +202,6 @@ def validate_trace_schema(trace: dict[str, Any]) -> tuple[bool, list[str]]:
             ):
                 if required_key not in item:
                     errors.append(f"constraints_envelope[{i}] missing key: {required_key}")
-    legacy_posture_override_attempts = trace.get("legacy_posture_override_attempts")
-    if legacy_posture_override_attempts is not None and not isinstance(legacy_posture_override_attempts, list):
-        errors.append("legacy_posture_override_attempts must be list or null")
-    if isinstance(legacy_posture_override_attempts, list):
-        for i, item in enumerate(legacy_posture_override_attempts):
-            if not isinstance(item, str):
-                errors.append(f"legacy_posture_override_attempts[{i}] must be string")
     final_refuse_source = trace.get("final_refuse_source")
     if final_refuse_source is not None and not isinstance(final_refuse_source, str):
         errors.append("final_refuse_source must be string or null")

@@ -10,7 +10,7 @@ from app.planner_shadow_review import save_shadow_review
 
 class PlannerShadowReviewTests(unittest.TestCase):
     def test_save_shadow_review_persists_all_allowed_labels(self) -> None:
-        labels = ("llm_better", "rule_better", "tie", "both_bad")
+        labels = ("accepted", "needs_followup", "incorrect", "blocked")
 
         with tempfile.TemporaryDirectory() as tmp:
             base_dir = Path(tmp)

@@ -214,7 +214,7 @@ class KernelApiContractTests(unittest.TestCase):
             save_planner_shadow_review(
                 PlannerShadowReviewRequest(
                     trace_id="!!!",
-                    label="tie",
+                    label="accepted",
                 )
             )
 
