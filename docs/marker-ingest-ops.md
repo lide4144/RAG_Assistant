@@ -40,7 +40,7 @@ marker_enabled: false
 - `table_rec_batch_size`
 - `model_dtype`
 
-并支持环境变量覆盖（优先级：`ENV > runtime config > default`）：
+并支持显式注册字段的环境变量覆盖（优先级：`ENV > runtime config > default`）：
 
 - `RECOGNITION_BATCH_SIZE`
 - `DETECTOR_BATCH_SIZE`
@@ -90,7 +90,7 @@ marker_enabled: false
 - `marker.services.openai.OpenAIService`：`openai_api_key`、`openai_model`
 - `marker.services.azure_openai.AzureOpenAIService`：`azure_endpoint`、`azure_api_key`、`deployment_name`
 
-读取配置时，接口会返回脱敏后的 `marker_llm` 摘要和 `effective_source`；保存时若 secret 字段留空，后端会保留已有密钥而不是清空。
+读取配置时，接口会返回脱敏后的 `marker_llm` 摘要和 `effective_source`；保存时若 secret 字段留空，后端会保留已有密钥而不是清空。字段 owner、页面边界与统一来源语义见 `docs/config-governance.md`。
 
 ## 3. 观测字段
 
@@ -150,7 +150,7 @@ marker_enabled: false
 4. Marker 明明识别了表格/公式但检索里没有体现：检查 `chunks*.jsonl` 的 `content_type/block_type/structure_provenance`，以及 ingest report 中的 `block_semantics_preserved`。
 5. markdown 只有标题首行被使用：这是当前预期，`markdown_consumption_status=partial` 用于明确区分“存在但未完全消费”和“本身不存在”。
 6. OOM 或吞吐骤降：优先将 `recognition/detector/layout` 调回 `2`，`ocr_error/table_rec` 调回 `1`，`model_dtype=float16`。
-7. `effective_source` 长期为 `default`：说明 runtime 配置或环境变量存在缺失/非法值，检查 `/api/admin/runtime-overview` 的 `status.reasons`。
+7. `effective_source` 长期为 `default`：说明 runtime 配置未保存，或对应环境变量为空/非法，检查 `/api/admin/runtime-overview` 的 `status.reasons`。
 8. 保存 Marker LLM service 时提示 provider 字段缺失：检查 `/api/admin/pipeline-config` 返回的 `field_errors`，例如 Vertex 需要 `vertex_project_id`，OpenAI 需要 `openai_api_key` + `openai_model`。
 
 ## 4.2 前端排查接口

@@ -28,6 +28,7 @@ class RuntimeLLMConfig:
     rerank: RuntimeStageConfig
     rewrite: RuntimeStageConfig
     graph_entity: RuntimeStageConfig
+    sufficiency_judge: RuntimeStageConfig
     updated_at: str
 
 
@@ -71,12 +72,13 @@ def _parse_runtime_payload(payload: Any) -> RuntimeLLMConfig:
             raise ValueError(f"{stage_name}.model is required")
         return RuntimeStageConfig(provider=provider, api_base=api_base, api_key=api_key, model=model)
 
-    if any(stage in payload for stage in ("answer", "embedding", "rerank", "rewrite", "graph_entity")):
+    if any(stage in payload for stage in ("answer", "embedding", "rerank", "rewrite", "graph_entity", "sufficiency_judge")):
         answer = _parse_stage(payload.get("answer"), stage_name="answer", default_provider="openai")
         embedding = _parse_stage(payload.get("embedding"), stage_name="embedding", default_provider="siliconflow")
         rerank = _parse_stage(payload.get("rerank"), stage_name="rerank", default_provider="siliconflow")
         rewrite_payload = payload.get("rewrite")
         graph_entity_payload = payload.get("graph_entity")
+        sufficiency_judge_payload = payload.get("sufficiency_judge")
         rewrite = (
             _parse_stage(rewrite_payload, stage_name="rewrite", default_provider="siliconflow")
             if rewrite_payload is not None
@@ -90,6 +92,16 @@ def _parse_runtime_payload(payload: Any) -> RuntimeLLMConfig:
         graph_entity = (
             _parse_stage(graph_entity_payload, stage_name="graph_entity", default_provider="siliconflow")
             if graph_entity_payload is not None
+            else RuntimeStageConfig(
+                provider=answer.provider,
+                api_base=answer.api_base,
+                api_key=answer.api_key,
+                model=answer.model,
+            )
+        )
+        sufficiency_judge = (
+            _parse_stage(sufficiency_judge_payload, stage_name="sufficiency_judge", default_provider="siliconflow")
+            if sufficiency_judge_payload is not None
             else RuntimeStageConfig(
                 provider=answer.provider,
                 api_base=answer.api_base,
@@ -111,6 +123,7 @@ def _parse_runtime_payload(payload: Any) -> RuntimeLLMConfig:
         rerank = RuntimeStageConfig(provider="siliconflow", api_base=api_base, api_key=api_key, model=model)
         rewrite = RuntimeStageConfig(provider="siliconflow", api_base=api_base, api_key=api_key, model=model)
         graph_entity = RuntimeStageConfig(provider="siliconflow", api_base=api_base, api_key=api_key, model=model)
+        sufficiency_judge = RuntimeStageConfig(provider="siliconflow", api_base=api_base, api_key=api_key, model=model)
 
     updated_at = str(payload.get("updated_at", "")).strip() or _utc_now_iso()
     return RuntimeLLMConfig(
@@ -119,6 +132,7 @@ def _parse_runtime_payload(payload: Any) -> RuntimeLLMConfig:
         rerank=rerank,
         rewrite=rewrite,
         graph_entity=graph_entity,
+        sufficiency_judge=sufficiency_judge,
         updated_at=updated_at,
     )
 
@@ -133,16 +147,18 @@ def save_runtime_llm_config(
     rerank: dict[str, str] | None = None,
     rewrite: dict[str, str] | None = None,
     graph_entity: dict[str, str] | None = None,
+    sufficiency_judge: dict[str, str] | None = None,
     path: Path | None = None,
 ) -> RuntimeLLMConfig:
     target = path or RUNTIME_LLM_CONFIG_PATH
-    if answer is not None or embedding is not None or rerank is not None or rewrite is not None or graph_entity is not None:
+    if answer is not None or embedding is not None or rerank is not None or rewrite is not None or graph_entity is not None or sufficiency_judge is not None:
         payload: dict[str, Any] = {
             "answer": answer or {},
             "embedding": embedding or {},
             "rerank": rerank or {},
             "rewrite": rewrite or {},
             "graph_entity": graph_entity or {},
+            "sufficiency_judge": sufficiency_judge or {},
             "updated_at": _utc_now_iso(),
         }
     else:

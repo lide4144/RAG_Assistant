@@ -8,6 +8,8 @@ from typing import Any
 import yaml
 
 from app.admin_llm_config import load_runtime_llm_config
+from app.config_governance import resolve_effective_llm_stages
+from app.planner_runtime_config import load_planner_runtime_config, resolve_effective_planner_runtime
 
 DEFAULT_CONFIG_PATH = Path("configs/default.yaml")
 RUNTIME_LLM_API_KEY_ENV = "RAG_RUNTIME_LLM_API_KEY"
@@ -1082,42 +1084,65 @@ def load_and_validate_config(path: str | Path = DEFAULT_CONFIG_PATH) -> tuple[Pi
     runtime_cfg, runtime_err = load_runtime_llm_config()
     if runtime_err:
         warnings.append(f"Runtime LLM config ignored: {runtime_err}. Falling back to static config.")
-    elif runtime_cfg is not None:
-        answer_env = f"{RUNTIME_LLM_API_KEY_ENV}_ANSWER"
-        embedding_env = f"{RUNTIME_LLM_API_KEY_ENV}_EMBEDDING"
-        rerank_env = f"{RUNTIME_LLM_API_KEY_ENV}_RERANK"
-        rewrite_env = f"{RUNTIME_LLM_API_KEY_ENV}_REWRITE"
-        graph_entity_env = f"{RUNTIME_LLM_API_KEY_ENV}_GRAPH_ENTITY"
-        os.environ[answer_env] = runtime_cfg.answer.api_key
-        os.environ[embedding_env] = runtime_cfg.embedding.api_key
-        os.environ[rerank_env] = runtime_cfg.rerank.api_key
-        os.environ[rewrite_env] = runtime_cfg.rewrite.api_key
-        os.environ[graph_entity_env] = runtime_cfg.graph_entity.api_key
+    planner_runtime_cfg, planner_runtime_err = load_planner_runtime_config()
+    if planner_runtime_err:
+        warnings.append(f"Planner runtime config ignored: {planner_runtime_err}. Falling back to static config.")
+    effective_stages = resolve_effective_llm_stages(
+        raw_data=raw_data,
+        runtime_cfg=runtime_cfg if runtime_err is None else None,
+        runtime_api_key_env_prefix=RUNTIME_LLM_API_KEY_ENV,
+    )
+    warnings.extend(effective_stages.warnings)
 
-        merged.answer_llm_provider = runtime_cfg.answer.provider
-        merged.answer_llm_api_base = runtime_cfg.answer.api_base
-        merged.answer_llm_model = runtime_cfg.answer.model
-        merged.answer_llm_api_key_env = answer_env
+    answer_stage = effective_stages.stages["answer"].values
+    merged.answer_llm_provider = answer_stage.provider
+    merged.answer_llm_api_base = answer_stage.api_base
+    merged.answer_llm_model = answer_stage.model
+    merged.answer_llm_api_key_env = answer_stage.api_key_env
 
-        merged.embedding_provider = runtime_cfg.embedding.provider
-        merged.embedding_api_base = runtime_cfg.embedding.api_base
-        merged.embedding_model = runtime_cfg.embedding.model
-        merged.embedding_api_key_env = embedding_env
+    embedding_stage = effective_stages.stages["embedding"].values
+    merged.embedding_provider = embedding_stage.provider
+    merged.embedding_api_base = embedding_stage.api_base
+    merged.embedding_model = embedding_stage.model
+    merged.embedding_api_key_env = embedding_stage.api_key_env
 
-        merged.rerank_provider = runtime_cfg.rerank.provider
-        merged.rerank_api_base = runtime_cfg.rerank.api_base
-        merged.rerank_model = runtime_cfg.rerank.model
-        merged.rerank_api_key_env = rerank_env
+    rerank_stage = effective_stages.stages["rerank"].values
+    merged.rerank_provider = rerank_stage.provider
+    merged.rerank_api_base = rerank_stage.api_base
+    merged.rerank_model = rerank_stage.model
+    merged.rerank_api_key_env = rerank_stage.api_key_env
 
-        merged.rewrite_llm_provider = runtime_cfg.rewrite.provider
-        merged.rewrite_llm_api_base = runtime_cfg.rewrite.api_base
-        merged.rewrite_llm_model = runtime_cfg.rewrite.model
-        merged.rewrite_llm_api_key_env = rewrite_env
+    rewrite_stage = effective_stages.stages["rewrite"].values
+    merged.rewrite_llm_provider = rewrite_stage.provider
+    merged.rewrite_llm_api_base = rewrite_stage.api_base
+    merged.rewrite_llm_model = rewrite_stage.model
+    merged.rewrite_llm_api_key_env = rewrite_stage.api_key_env
 
-        merged.graph_entity_llm_provider = runtime_cfg.graph_entity.provider
-        merged.graph_entity_llm_base_url = runtime_cfg.graph_entity.api_base
-        merged.graph_entity_llm_api_key_env = graph_entity_env
-        merged.graph_entity_llm_model = runtime_cfg.graph_entity.model
+    graph_stage = effective_stages.stages["graph_entity"].values
+    merged.graph_entity_llm_provider = graph_stage.provider
+    merged.graph_entity_llm_base_url = graph_stage.api_base
+    merged.graph_entity_llm_api_key_env = graph_stage.api_key_env
+    merged.graph_entity_llm_model = graph_stage.model
+
+    sufficiency_stage = effective_stages.stages["sufficiency_judge"].values
+    merged.sufficiency_judge_llm_provider = sufficiency_stage.provider
+    merged.sufficiency_judge_llm_api_base = sufficiency_stage.api_base
+    merged.sufficiency_judge_llm_api_key_env = sufficiency_stage.api_key_env
+    merged.sufficiency_judge_llm_model = sufficiency_stage.model
+
+    planner_effective, _planner_source, planner_warnings = resolve_effective_planner_runtime(
+        raw_data=raw_data,
+        runtime_cfg=planner_runtime_cfg if planner_runtime_err is None else None,
+    )
+    warnings.extend(planner_warnings)
+    merged.planner_use_llm = planner_effective.use_llm
+    merged.planner_provider = planner_effective.provider
+    merged.planner_api_base = planner_effective.api_base
+    merged.planner_api_key_env = "PLANNER_RUNTIME_API_KEY" if planner_effective.api_key else merged.planner_api_key_env
+    if planner_effective.api_key:
+        os.environ["PLANNER_RUNTIME_API_KEY"] = planner_effective.api_key
+    merged.planner_model = planner_effective.model
+    merged.planner_timeout_ms = planner_effective.timeout_ms
 
     validated, rule_warnings = validate_config(merged)
     warnings.extend(rule_warnings)

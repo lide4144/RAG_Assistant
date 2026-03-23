@@ -1,7 +1,7 @@
 import { expect, test, type Page } from '@playwright/test';
 import type { MarkerLlmSummaryField, RuntimeOverview, RuntimeSource } from '../lib/types';
 
-type StageKey = 'answer' | 'embedding' | 'rerank' | 'rewrite' | 'graph_entity';
+type StageKey = 'answer' | 'embedding' | 'rerank' | 'rewrite' | 'graph_entity' | 'sufficiency_judge';
 
 type StagePayload = { provider: string; api_base: string; api_key: string; model: string };
 
@@ -35,7 +35,7 @@ type PipelineConfigState = {
   };
 };
 
-const allStages: StageKey[] = ['answer', 'embedding', 'rerank', 'rewrite', 'graph_entity'];
+const allStages: StageKey[] = ['answer', 'embedding', 'rerank', 'rewrite', 'graph_entity', 'sufficiency_judge'];
 
 async function mockRuntimePanels(page: Page) {
   await page.route('**/api/admin/pipeline-config', async (route) => {
@@ -86,7 +86,17 @@ async function mockRuntimePanels(page: Page) {
           embedding: { provider: 'siliconflow', model: 'bge-m3', configured: true },
           rerank: { provider: 'siliconflow', model: 'Qwen/Qwen3-Reranker-8B', configured: true },
           rewrite: { provider: 'ollama', model: 'qwen2.5:3b', configured: true },
-          graph_entity: { provider: 'siliconflow', model: 'Pro/deepseek-ai/DeepSeek-V3.2', configured: true }
+          graph_entity: { provider: 'siliconflow', model: 'Pro/deepseek-ai/DeepSeek-V3.2', configured: true },
+          sufficiency_judge: { provider: 'siliconflow', model: 'Qwen/Qwen2.5-7B-Instruct', configured: true }
+        },
+        planner: {
+          use_llm: false,
+          provider: 'siliconflow',
+          api_base: 'https://api.siliconflow.cn/v1',
+          model: 'Pro/deepseek-ai/DeepSeek-V3.2',
+          timeout_ms: 6000,
+          configured: true,
+          source: 'default'
         },
         pipeline: {
           marker_tuning: {
@@ -116,6 +126,13 @@ test('llm settings page stays usable when llm-config returns non-json html', asy
       status: 404,
       contentType: 'text/html',
       body: '<!DOCTYPE html><html><body>not found</body></html>'
+    });
+  });
+  await page.route('**/api/admin/planner-config', async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ configured: false })
     });
   });
 
@@ -179,6 +196,12 @@ test('llm settings panel can save and reload full-stage config', async ({ page }
             api_base: savedConfig.graph_entity.api_base,
             model: savedConfig.graph_entity.model,
             api_key_masked: 'ge***'
+          },
+          sufficiency_judge: {
+            provider: savedConfig.sufficiency_judge.provider,
+            api_base: savedConfig.sufficiency_judge.api_base,
+            model: savedConfig.sufficiency_judge.model,
+            api_key_masked: 'sj***'
           }
         })
       });
@@ -194,6 +217,13 @@ test('llm settings panel can save and reload full-stage config', async ({ page }
       status: 200,
       contentType: 'application/json',
       body: JSON.stringify({ ok: true, config: savedConfig })
+    });
+  });
+  await page.route('**/api/admin/planner-config', async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ configured: false })
     });
   });
 
@@ -241,6 +271,9 @@ test('llm settings panel can save and reload full-stage config', async ({ page }
 
   await page.getByTestId('llm-graph_entity-detect-btn').click();
   await expect(page.getByTestId('llm-graph_entity-model-select')).toHaveValue('Pro/deepseek-ai/DeepSeek-V3.2');
+  await page.getByTestId('llm-sufficiency_judge-api-key-input').fill('sk-sufficiency');
+  await page.getByTestId('llm-sufficiency_judge-detect-btn').click();
+  await expect(page.getByTestId('llm-sufficiency_judge-model-select')).toHaveValue('Qwen/Qwen2.5-7B-Instruct');
 
   await page.getByTestId('llm-save-btn').click();
   await expect(page.getByTestId('llm-status-text')).toContainText('配置已保存');
@@ -284,6 +317,13 @@ test('llm settings panel handles legacy three-stage payload and can still save f
       body: JSON.stringify({ ok: true, config: reqPayload })
     });
   });
+  await page.route('**/api/admin/planner-config', async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ configured: false })
+    });
+  });
 
   await page.goto('http://127.0.0.1:3000/settings');
   await expect(page.getByTestId('settings-shell-title')).toBeVisible();
@@ -293,18 +333,105 @@ test('llm settings panel handles legacy three-stage payload and can still save f
   await expect(page.getByTestId('llm-rerank-api-base-input')).toHaveValue('https://api.siliconflow.cn/v1');
   await expect(page.getByTestId('llm-rewrite-model-select')).toHaveValue('qwen2.5:3b');
   await expect(page.getByTestId('llm-graph_entity-model-select')).toHaveValue('Pro/deepseek-ai/DeepSeek-V3.2');
+  await expect(page.getByTestId('llm-sufficiency_judge-model-select')).toHaveValue('Qwen/Qwen2.5-7B-Instruct');
 
   await page.getByTestId('llm-answer-api-key-input').fill('sk-answer');
   await page.getByTestId('llm-embedding-api-key-input').fill('sk-embedding');
   await page.getByTestId('llm-rerank-api-key-input').fill('sk-rerank');
+  await page.getByTestId('llm-sufficiency_judge-api-key-input').fill('sk-sufficiency');
   await page.getByTestId('llm-save-btn').click();
 
   await expect(page.getByTestId('llm-status-text')).toContainText('配置已保存');
 });
 
+test('llm settings panel supports saving a single stage without persisting other unsaved changes', async ({ page }) => {
+  let savedPayload: FullPayload | null = null;
+  await mockRuntimePanels(page);
+
+  await page.route('**/api/admin/llm-config', async (route) => {
+    if (route.request().method() === 'GET') {
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          configured: true,
+          answer: { provider: 'openai', api_base: 'https://api.openai.com/v1', model: 'gpt-4o-mini', api_key_masked: 'ans***' },
+          embedding: {
+            provider: 'ollama',
+            api_base: 'http://127.0.0.1:11434/v1',
+            model: 'nomic-embed-text',
+            api_key_masked: 'emb***'
+          },
+          rerank: {
+            provider: 'siliconflow',
+            api_base: 'https://api.siliconflow.cn/v1',
+            model: 'Qwen/Qwen3-Reranker-8B',
+            api_key_masked: 'rr***'
+          },
+          rewrite: {
+            provider: 'ollama',
+            api_base: 'http://127.0.0.1:11434/v1',
+            model: 'qwen2.5:3b',
+            api_key_masked: 'rw***'
+          },
+          graph_entity: {
+            provider: 'siliconflow',
+            api_base: 'https://api.siliconflow.cn/v1',
+            model: 'Pro/deepseek-ai/DeepSeek-V3.2',
+            api_key_masked: 'ge***'
+          },
+          sufficiency_judge: {
+            provider: 'siliconflow',
+            api_base: 'https://api.siliconflow.cn/v1',
+            model: 'Qwen/Qwen2.5-7B-Instruct',
+            api_key_masked: 'sj***'
+          }
+        })
+      });
+      return;
+    }
+    savedPayload = route.request().postDataJSON() as FullPayload;
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ ok: true, config: savedPayload })
+    });
+  });
+  await page.route('**/api/admin/planner-config', async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ configured: false })
+    });
+  });
+
+  await page.goto('http://127.0.0.1:3000/settings');
+
+  await page.getByTestId('llm-answer-api-base-input').fill('https://answer.single-save.example.com/v1');
+  await page.getByTestId('llm-answer-api-key-input').fill('sk-answer');
+
+  await page.getByTestId('llm-embedding-api-base-input').fill('https://embedding-unsaved.example.com/v1');
+  await page.getByTestId('llm-embedding-api-key-input').fill('sk-embedding-unsaved');
+
+  await page.getByTestId('llm-answer-save-btn').click();
+
+  await expect.poll(() => savedPayload).not.toBeNull();
+  expect(savedPayload?.answer.api_base).toBe('https://answer.single-save.example.com/v1');
+  expect(savedPayload?.embedding.api_base).not.toBe('https://embedding-unsaved.example.com/v1');
+  await expect(page.getByTestId('llm-answer-api-base-input')).toHaveValue('https://answer.single-save.example.com/v1');
+  await expect(page.getByTestId('llm-embedding-api-base-input')).toHaveValue('https://embedding-unsaved.example.com/v1');
+});
+
 test('llm settings panel shows auth failed message when detect returns AUTH_FAILED', async ({ page }) => {
   await mockRuntimePanels(page);
   await page.route('**/api/admin/llm-config', async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ configured: false })
+    });
+  });
+  await page.route('**/api/admin/planner-config', async (route) => {
     await route.fulfill({
       status: 200,
       contentType: 'application/json',
@@ -378,6 +505,7 @@ test('llm settings panel shows stage-specific save error for rewrite and keeps o
   await page.getByTestId('llm-answer-detect-btn').click();
   await page.getByTestId('llm-embedding-api-key-input').fill('sk-embedding');
   await page.getByTestId('llm-rerank-api-key-input').fill('sk-rerank');
+  await page.getByTestId('llm-sufficiency_judge-api-key-input').fill('sk-sufficiency');
   await page.getByTestId('llm-save-btn').click();
 
   await expect(page.getByTestId('llm-rewrite-error')).toContainText('参数校验失败');
@@ -489,7 +617,17 @@ test('settings page supports marker tuning save and runtime overview panel', asy
           embedding: { provider: 'siliconflow', model: 'emb', configured: true },
           rerank: { provider: 'siliconflow', model: 'rerank', configured: true },
           rewrite: { provider: 'siliconflow', model: 'rewrite', configured: true },
-          graph_entity: { provider: 'siliconflow', model: 'graph', configured: true }
+          graph_entity: { provider: 'siliconflow', model: 'graph', configured: true },
+          sufficiency_judge: { provider: 'siliconflow', model: 'judge', configured: true }
+        },
+        planner: {
+          use_llm: false,
+          provider: 'siliconflow',
+          api_base: 'https://api.siliconflow.cn/v1',
+          model: 'Pro/deepseek-ai/DeepSeek-V3.2',
+          timeout_ms: 6000,
+          configured: true,
+          source: 'default'
         },
         pipeline: {
           marker_tuning: {
@@ -513,9 +651,16 @@ test('settings page supports marker tuning save and runtime overview panel', asy
       body: JSON.stringify({ configured: false })
     });
   });
+  await page.route('**/api/admin/planner-config', async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ configured: false })
+    });
+  });
 
   await page.goto('http://127.0.0.1:3000/settings');
-  await expect(page.getByTestId('runtime-overview-panel')).toContainText('核心模型选择');
+  await expect(page.getByTestId('runtime-overview-panel')).toContainText('运行时模型位点');
   await openAdvancedSettings(page);
   await page.getByTestId('pipeline-recognition_batch_size-input').fill('8');
   await page.getByTestId('pipeline-model-dtype-select').selectOption('float32');
@@ -536,6 +681,100 @@ test('settings page supports marker tuning save and runtime overview panel', asy
     table_rec_batch_size: 1,
     model_dtype: 'float16'
   });
+});
+
+test('settings page renders env source labels for runtime overview stage and planner', async ({ page }) => {
+  await page.route('**/api/admin/pipeline-config', async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        configured: true,
+        saved: {
+          marker_tuning: {
+            recognition_batch_size: 2,
+            detector_batch_size: 2,
+            layout_batch_size: 2,
+            ocr_error_batch_size: 1,
+            table_rec_batch_size: 1,
+            model_dtype: 'float16'
+          }
+        },
+        effective: {
+          marker_tuning: {
+            recognition_batch_size: 2,
+            detector_batch_size: 2,
+            layout_batch_size: 2,
+            ocr_error_batch_size: 1,
+            table_rec_batch_size: 1,
+            model_dtype: 'float16'
+          }
+        },
+        effective_source: { marker_tuning: {} }
+      })
+    });
+  });
+  await page.route('**/api/admin/runtime-overview', async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        llm: {
+          answer: {
+            provider: 'openai',
+            api_base: 'https://answer-env.example.com/v1',
+            model: 'gpt-4.1-mini',
+            configured: true,
+            source: 'env'
+          },
+          embedding: { provider: 'siliconflow', model: 'bge', configured: true, source: 'default' },
+          rerank: { provider: 'siliconflow', model: 'rerank', configured: true, source: 'default' },
+          rewrite: { provider: 'ollama', model: 'rewrite', configured: true, source: 'default' },
+          graph_entity: { provider: 'siliconflow', model: 'graph', configured: true, source: 'default' },
+          sufficiency_judge: { provider: 'siliconflow', model: 'judge', configured: true, source: 'default' }
+        },
+        planner: {
+          use_llm: true,
+          provider: 'openai',
+          api_base: 'https://planner-env.example.com/v1',
+          model: 'gpt-4.1-mini',
+          timeout_ms: 9000,
+          configured: true,
+          source: 'env'
+        },
+        pipeline: {
+          marker_tuning: {
+            recognition_batch_size: 2,
+            detector_batch_size: 2,
+            layout_batch_size: 2,
+            ocr_error_batch_size: 1,
+            table_rec_batch_size: 1,
+            model_dtype: 'float16'
+          },
+          effective_source: { marker_tuning: {} }
+        },
+        status: { level: 'READY', reasons: [] }
+      })
+    });
+  });
+  await page.route('**/api/admin/llm-config', async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ configured: false })
+    });
+  });
+  await page.route('**/api/admin/planner-config', async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ configured: false })
+    });
+  });
+
+  await page.goto('http://127.0.0.1:3000/settings');
+  await expect(page.getByTestId('core-model-card-answer')).toContainText('环境变量');
+  await expect(page.getByTestId('planner-runtime-overview')).toContainText('环境变量');
 });
 
 test('settings page keeps marker tuning inputs when backend returns field_errors', async ({ page }) => {
@@ -578,7 +817,17 @@ test('settings page keeps marker tuning inputs when backend returns field_errors
           embedding: { provider: 'siliconflow', model: 'emb', configured: true },
           rerank: { provider: 'siliconflow', model: 'rerank', configured: true },
           rewrite: { provider: 'siliconflow', model: 'rewrite', configured: true },
-          graph_entity: { provider: 'siliconflow', model: 'graph', configured: true }
+          graph_entity: { provider: 'siliconflow', model: 'graph', configured: true },
+          sufficiency_judge: { provider: 'siliconflow', model: 'judge', configured: true }
+        },
+        planner: {
+          use_llm: false,
+          provider: 'siliconflow',
+          api_base: 'https://api.siliconflow.cn/v1',
+          model: 'Pro/deepseek-ai/DeepSeek-V3.2',
+          timeout_ms: 6000,
+          configured: true,
+          source: 'default'
         },
         pipeline: {
           marker_tuning: {
@@ -596,6 +845,13 @@ test('settings page keeps marker tuning inputs when backend returns field_errors
     });
   });
   await page.route('**/api/admin/llm-config', async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ configured: false })
+    });
+  });
+  await page.route('**/api/admin/planner-config', async (route) => {
     await route.fulfill({
       status: 200,
       contentType: 'application/json',
@@ -622,6 +878,13 @@ test('settings page keeps marker tuning inputs when backend returns field_errors
 test('settings page shows unsaved badge and supports override toggle for inherited stages', async ({ page }) => {
   await mockRuntimePanels(page);
   await page.route('**/api/admin/llm-config', async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ configured: false })
+    });
+  });
+  await page.route('**/api/admin/planner-config', async (route) => {
     await route.fulfill({
       status: 200,
       contentType: 'application/json',
@@ -699,7 +962,17 @@ test('settings page saves marker llm service config and shows runtime summary', 
           embedding: { provider: 'siliconflow', model: 'bge', configured: true },
           rerank: { provider: 'siliconflow', model: 'rerank', configured: true },
           rewrite: { provider: 'ollama', model: 'rewrite', configured: true },
-          graph_entity: { provider: 'siliconflow', model: 'graph', configured: true }
+          graph_entity: { provider: 'siliconflow', model: 'graph', configured: true },
+          sufficiency_judge: { provider: 'siliconflow', model: 'judge', configured: true }
+        },
+        planner: {
+          use_llm: false,
+          provider: 'siliconflow',
+          api_base: 'https://api.siliconflow.cn/v1',
+          model: 'Pro/deepseek-ai/DeepSeek-V3.2',
+          timeout_ms: 6000,
+          configured: true,
+          source: 'default'
         },
         pipeline: {
           marker_tuning: {
@@ -792,7 +1065,17 @@ test('settings page posts marker llm config and refreshes runtime summary after 
       embedding: { provider: 'siliconflow', model: 'bge', configured: true },
       rerank: { provider: 'siliconflow', model: 'rerank', configured: true },
       rewrite: { provider: 'ollama', model: 'rewrite', configured: true },
-      graph_entity: { provider: 'siliconflow', model: 'graph', configured: true }
+      graph_entity: { provider: 'siliconflow', model: 'graph', configured: true },
+      sufficiency_judge: { provider: 'siliconflow', model: 'judge', configured: true }
+    },
+    planner: {
+      use_llm: false,
+      provider: 'siliconflow',
+      api_base: 'https://api.siliconflow.cn/v1',
+      model: 'Pro/deepseek-ai/DeepSeek-V3.2',
+      timeout_ms: 6000,
+      configured: true,
+      source: 'default'
     },
     pipeline: {
       marker_tuning: {
@@ -909,6 +1192,13 @@ test('settings page posts marker llm config and refreshes runtime summary after 
       body: JSON.stringify({ configured: false })
     });
   });
+  await page.route('**/api/admin/planner-config', async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ configured: false })
+    });
+  });
   await page.route('**/api/admin/detect-models', async (route) => {
     detectPayload = route.request().postDataJSON() as Record<string, unknown>;
     await route.fulfill({
@@ -1016,7 +1306,17 @@ test('settings page keeps marker llm inputs when backend returns field errors', 
           embedding: { provider: 'siliconflow', model: 'bge', configured: true },
           rerank: { provider: 'siliconflow', model: 'rerank', configured: true },
           rewrite: { provider: 'ollama', model: 'rewrite', configured: true },
-          graph_entity: { provider: 'siliconflow', model: 'graph', configured: true }
+          graph_entity: { provider: 'siliconflow', model: 'graph', configured: true },
+          sufficiency_judge: { provider: 'siliconflow', model: 'judge', configured: true }
+        },
+        planner: {
+          use_llm: false,
+          provider: 'siliconflow',
+          api_base: 'https://api.siliconflow.cn/v1',
+          model: 'Pro/deepseek-ai/DeepSeek-V3.2',
+          timeout_ms: 6000,
+          configured: true,
+          source: 'default'
         },
         pipeline: {
           marker_tuning: {
@@ -1054,6 +1354,13 @@ test('settings page keeps marker llm inputs when backend returns field errors', 
       body: JSON.stringify({ configured: false })
     });
   });
+  await page.route('**/api/admin/planner-config', async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ configured: false })
+    });
+  });
 
   await page.goto('http://127.0.0.1:3000/settings');
   await expect(page.getByTestId('llm-ready-text')).toBeVisible();
@@ -1071,4 +1378,115 @@ test('settings page keeps marker llm inputs when backend returns field errors', 
   await expect(page.getByTestId('pipeline-detector_batch_size-input')).toHaveValue('5');
   await expect(page.getByTestId('marker-llm-use-toggle')).toBeChecked();
   await expect(page.getByTestId('marker-llm-service-select')).toHaveValue('marker.services.vertex.GoogleVertexService');
+});
+
+test('settings page saves planner runtime config and refreshes runtime overview', async ({ page }) => {
+  let savedPlannerPayload: Record<string, unknown> | null = null;
+  await mockRuntimePanels(page);
+  await page.route('**/api/admin/llm-config', async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ configured: false })
+    });
+  });
+  let runtimeOverviewState: RuntimeOverview = {
+    llm: {
+      answer: { provider: 'openai', model: 'gpt-4o-mini', configured: true },
+      embedding: { provider: 'siliconflow', model: 'bge', configured: true },
+      rerank: { provider: 'siliconflow', model: 'rerank', configured: true },
+      rewrite: { provider: 'ollama', model: 'rewrite', configured: true },
+      graph_entity: { provider: 'siliconflow', model: 'graph', configured: true },
+      sufficiency_judge: { provider: 'siliconflow', model: 'judge', configured: true }
+    },
+    planner: {
+      use_llm: false,
+      provider: 'siliconflow',
+      api_base: 'https://api.siliconflow.cn/v1',
+      model: 'Pro/deepseek-ai/DeepSeek-V3.2',
+      timeout_ms: 6000,
+      configured: true,
+      source: 'default'
+    },
+    pipeline: {
+      marker_tuning: {
+        recognition_batch_size: 2,
+        detector_batch_size: 2,
+        layout_batch_size: 2,
+        ocr_error_batch_size: 1,
+        table_rec_batch_size: 1,
+        model_dtype: 'float16'
+      },
+      effective_source: { marker_tuning: {} }
+    },
+    status: { level: 'READY', reasons: [] }
+  };
+  await page.route('**/api/admin/runtime-overview', async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify(runtimeOverviewState)
+    });
+  });
+  await page.route('**/api/admin/planner-config', async (route) => {
+    if (route.request().method() === 'GET') {
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({ configured: false })
+      });
+      return;
+    }
+    savedPlannerPayload = route.request().postDataJSON() as Record<string, unknown>;
+    expect(savedPlannerPayload).toMatchObject({
+      use_llm: true,
+      provider: 'openai',
+      api_base: 'https://planner.example.com/v1',
+      api_key: 'sk-planner',
+      model: 'gpt-4.1-mini',
+      timeout_ms: 9000
+    });
+    runtimeOverviewState = {
+      ...runtimeOverviewState,
+      planner: {
+        use_llm: true,
+        provider: 'openai',
+        api_base: 'https://planner.example.com/v1',
+        model: 'gpt-4.1-mini',
+        timeout_ms: 9000,
+        configured: true,
+        source: 'runtime'
+      }
+    };
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        ok: true,
+        config: {
+          configured: true,
+          use_llm: true,
+          provider: 'openai',
+          api_base: 'https://planner.example.com/v1',
+          model: 'gpt-4.1-mini',
+          timeout_ms: 9000,
+          api_key_masked: 'sk-p***er'
+        }
+      })
+    });
+  });
+
+  await page.goto('http://127.0.0.1:3000/settings');
+  await page.getByTestId('planner-use-llm-toggle').check();
+  await page.getByTestId('planner-provider-select').selectOption('openai');
+  await page.getByTestId('planner-api-base-input').fill('https://planner.example.com/v1');
+  await page.getByTestId('planner-api-key-input').fill('sk-planner');
+  await page.getByTestId('planner-model-input').fill('gpt-4.1-mini');
+  await page.getByTestId('planner-timeout-input').fill('9000');
+  await page.getByTestId('planner-save-btn').click();
+
+  await expect.poll(() => savedPlannerPayload).not.toBeNull();
+  await expect(page.getByText('Planner Runtime 配置已保存并进入统一治理。')).toBeVisible();
+  await expect(page.getByTestId('planner-runtime-overview')).toContainText('openai');
+  await expect(page.getByTestId('planner-runtime-overview')).toContainText('gpt-4.1-mini');
 });

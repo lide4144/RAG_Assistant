@@ -89,8 +89,24 @@ export interface MarkerParserDiagnostic {
 
 export interface RuntimeStageSummary {
   provider: string;
+  api_base?: string;
   model: string;
   configured: boolean;
+  source?: RuntimeSource;
+  source_label?: string;
+  effective_source?: Partial<Record<'provider' | 'api_base' | 'model' | 'api_key', RuntimeSource>>;
+}
+
+export interface PlannerRuntimeSummary {
+  use_llm: boolean;
+  provider: string;
+  api_base?: string;
+  model: string;
+  timeout_ms: number;
+  configured: boolean;
+  source?: RuntimeSource;
+  source_label?: string;
+  effective_source?: Partial<Record<'use_llm' | 'provider' | 'api_base' | 'model' | 'api_key' | 'timeout_ms', RuntimeSource>>;
 }
 
 export interface RuntimeOverview {
@@ -100,7 +116,9 @@ export interface RuntimeOverview {
     rerank: RuntimeStageSummary;
     rewrite: RuntimeStageSummary;
     graph_entity: RuntimeStageSummary;
+    sufficiency_judge: RuntimeStageSummary;
   };
+  planner: PlannerRuntimeSummary;
   pipeline: {
     marker_tuning: MarkerTuning;
     effective_source?: {

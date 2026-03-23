@@ -1,31 +1,34 @@
 # LLM Runtime Config 运维说明
 
-本文档说明前端可视化 LLM 配置的生效路径、回滚步骤和安全注意事项。
+本文档说明前端可视化 LLM 配置的生效路径、治理边界、回滚步骤和安全注意事项。字段 owner 总表见 `docs/config-governance.md`。`planner` 顶层规划模型已改为独立运行时配置面，不再与下游六路 LLM stage 混在同一保存契约中。
 
 ## 生效路径
 
-1. 管理员在前端 `LLM Connection Settings` 分别填写 `answer`、`embedding`、`rerank`、`rewrite`、`graph_entity` 的 `provider`、`API Base`、`API Key` 并探测模型。
-2. 前端调用 `POST /api/admin/llm-config` 保存五路配置。
+1. 管理员在前端 `LLM Connection Settings` 分别填写 `answer`、`embedding`、`rerank`、`rewrite`、`graph_entity`、`sufficiency_judge` 的 `provider`、`API Base`、`API Key` 并探测模型。
+2. 前端可按单张卡片保存当前模型，也可一次保存全部；无论哪种入口，提交给后端的仍是统一六路结构的 `POST /api/admin/llm-config` 契约。
 3. 后端将配置持久化到 `configs/llm_runtime_config.json`。
-   - 新结构：`answer` / `embedding` / `rerank` / `rewrite` / `graph_entity`
-   - 兼容旧结构：`api_base` + `api_key` + `model`（自动映射到五路）
+   - 新结构：`answer` / `embedding` / `rerank` / `rewrite` / `graph_entity` / `sufficiency_judge`
+   - 兼容旧结构：`api_base` + `api_key` + `model`（自动映射到六路）
 4. `load_and_validate_config` 加载配置时，若该文件合法，则覆盖：
    - `answer`：`answer_llm_*`
    - `embedding`：`embedding_*`
    - `rerank`：`rerank_*`
    - `rewrite`：`rewrite_llm_*`（独立于 answer，不再隐式跟随）
    - `graph_entity`：`graph_entity_llm_*`
+   - `sufficiency_judge`：`sufficiency_judge_llm_*`
    - API key 分路注入环境变量：
      - `RAG_RUNTIME_LLM_API_KEY_ANSWER`
      - `RAG_RUNTIME_LLM_API_KEY_EMBEDDING`
      - `RAG_RUNTIME_LLM_API_KEY_RERANK`
      - `RAG_RUNTIME_LLM_API_KEY_REWRITE`
      - `RAG_RUNTIME_LLM_API_KEY_GRAPH_ENTITY`
-5. LiteLLM Router 在后续请求中优先使用该运行时配置。
+     - `RAG_RUNTIME_LLM_API_KEY_SUFFICIENCY_JUDGE`
+5. 若显式设置 `RAG_LLM_<STAGE>_PROVIDER/API_BASE/MODEL/API_KEY`，则对应字段会以环境变量为准，并在运行态概览中标记为 `env`。
+6. LiteLLM Router 在后续请求中优先使用最终合成后的生效配置。
 
 ## 管理接口契约
 
-### `POST /api/admin/llm-config`（推荐：五路结构）
+### `POST /api/admin/llm-config`（推荐：六路结构）
 
 ```json
 {
@@ -58,6 +61,12 @@
     "api_base": "https://api.siliconflow.cn/v1",
     "api_key": "sk-graph",
     "model": "Pro/deepseek-ai/DeepSeek-V3.2"
+  },
+  "sufficiency_judge": {
+    "provider": "siliconflow",
+    "api_base": "https://api.siliconflow.cn/v1",
+    "api_key": "sk-judge",
+    "model": "Qwen/Qwen2.5-7B-Instruct"
   }
 }
 ```
@@ -74,19 +83,22 @@
 
 ### `GET /api/admin/llm-config`
 
-返回五路摘要（`api_key_masked` 为脱敏值）。
+返回六路摘要（`api_key_masked` 为脱敏值）。
 
-## Stage 路由优先级（answer / embedding / rerank / rewrite / graph_entity）
+## Stage 路由优先级（answer / embedding / rerank / rewrite / graph_entity / sufficiency_judge）
 
 系统按以下优先级解析：
 
-1. 运行时配置（若存在并合法）
-2. stage 前缀字段（如 `embedding_provider`、`rerank_api_key_env`）
-3. 旧嵌套字段（如 `embedding.provider`、`rerank.base_url`）
-4. 默认值（`configs/default.yaml` / 代码默认）
+1. 显式环境变量覆盖（仅已注册的 `RAG_LLM_<STAGE>_*` 字段）
+2. 运行时配置（若存在并合法）
+3. stage 前缀字段（如 `embedding_provider`、`rerank_api_key_env`）
+4. 旧嵌套字段（如 `embedding.provider`、`rerank.base_url`）
+5. 默认值（`configs/default.yaml` / 代码默认）
 
 说明：
 - `rewrite` 与 `answer` 完全独立，可使用不同 provider/model。
+- `sufficiency_judge` 用于证据充分性判定，独立于 `answer` 与 `rewrite`。
+- 环境变量覆盖只在治理注册表中声明过的字段生效，禁止新增隐式覆盖逻辑。
 - 当某一路缺失 API Key 时，仅该 stage 进入降级，不影响其他 stage。
 
 ## 依赖健康检查

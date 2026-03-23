@@ -20,10 +20,12 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
+import yaml
 
 from app.agent_tools import build_tool_failure, build_tool_result_envelope
 from app.admin_llm_config import load_runtime_llm_config, mask_api_key, normalize_api_base, save_runtime_llm_config
 from app.config import load_and_validate_config
+from app.config_governance import resolve_effective_llm_stages, runtime_source_label
 from app.graph_build import run_graph_build
 from app.library import load_papers, run_import_workflow
 from app.llm_routing import build_stage_policy, get_last_stage_failure
@@ -39,6 +41,12 @@ from app.pipeline_runtime_config import (
     resolve_effective_marker_tuning,
 )
 from app.paths import CONFIGS_DIR, DATA_DIR, RUNS_DIR
+from app.planner_runtime_config import (
+    load_planner_runtime_config,
+    mask_planner_runtime_secrets,
+    resolve_effective_planner_runtime,
+    save_planner_runtime_config,
+)
 from app.planner_shadow_review import save_shadow_review
 from app.planner_runtime import HAS_LANGGRAPH, run_planner_runtime
 from app.index_vec import load_vec_index
@@ -120,6 +128,7 @@ class AdminSaveLLMConfigRequest(BaseModel):
     rerank: AdminStageConfigRequest | None = None
     rewrite: AdminStageConfigRequest | None = None
     graph_entity: AdminStageConfigRequest | None = None
+    sufficiency_judge: AdminStageConfigRequest | None = None
     # Legacy flat stage fields kept for backward compatibility.
     answer_provider: str | None = None
     answer_api_base: str | None = None
@@ -141,6 +150,10 @@ class AdminSaveLLMConfigRequest(BaseModel):
     graph_entity_api_base: str | None = None
     graph_entity_api_key: str | None = None
     graph_entity_model: str | None = None
+    sufficiency_judge_provider: str | None = None
+    sufficiency_judge_api_base: str | None = None
+    sufficiency_judge_api_key: str | None = None
+    sufficiency_judge_model: str | None = None
 
 
 class MarkerTuningPayload(BaseModel):
@@ -172,6 +185,15 @@ class MarkerLLMPayload(BaseModel):
 class AdminSavePipelineConfigRequest(BaseModel):
     marker_tuning: MarkerTuningPayload
     marker_llm: MarkerLLMPayload = Field(default_factory=MarkerLLMPayload)
+
+
+class AdminSavePlannerConfigRequest(BaseModel):
+    use_llm: bool = False
+    provider: str = Field(min_length=1)
+    api_base: str = Field(min_length=1)
+    api_key: str | None = None
+    model: str = Field(min_length=1)
+    timeout_ms: int = Field(ge=1000)
 
 
 class PlannerShadowReviewRequest(BaseModel):
@@ -1340,18 +1362,38 @@ def _build_stage_payload(
 
 def _extract_stage_from_error_message(message: str) -> str | None:
     normalized = str(message or "").strip().lower()
-    for stage in ("answer", "embedding", "rerank", "rewrite", "graph_entity"):
+    for stage in ("answer", "embedding", "rerank", "rewrite", "graph_entity", "sufficiency_judge"):
         if normalized.startswith(f"{stage}."):
             return stage
     return None
 
 
-def _runtime_stage_entry(raw: Any) -> dict[str, Any]:
+def _summarize_runtime_source(source_map: dict[str, str] | None) -> str:
+    if not isinstance(source_map, dict):
+        return "default"
+    ordered = ("provider", "api_base", "model", "api_key")
+    values = [str(source_map.get(key, "")).strip() for key in ordered if str(source_map.get(key, "")).strip()]
+    for preferred in ("env", "runtime", "default"):
+        if preferred in values:
+            return preferred
+    return "default"
+
+
+def _runtime_stage_entry(raw: Any, *, effective_source: dict[str, str] | None = None) -> dict[str, Any]:
     if not isinstance(raw, dict):
-        return {"provider": "", "model": "", "configured": False}
+        return {"provider": "", "model": "", "configured": False, "source": "default", "source_label": runtime_source_label("default")}
     provider = str(raw.get("provider", "")).strip()
     model = str(raw.get("model", "")).strip()
-    return {"provider": provider, "model": model, "configured": bool(provider and model)}
+    source = _summarize_runtime_source(effective_source)
+    return {
+        "provider": provider,
+        "api_base": str(raw.get("api_base", "")).strip(),
+        "model": model,
+        "configured": bool(provider and model),
+        "source": source,
+        "source_label": runtime_source_label(source),  # 中文文案统一在后端和前端共享同一语义。
+        "effective_source": effective_source or {},
+    }
 
 
 def _mask_value(field: str, value: Any) -> str:
@@ -2518,6 +2560,12 @@ def get_admin_llm_config() -> dict[str, Any]:
             "model": cfg.graph_entity.model,
             "api_key_masked": mask_api_key(cfg.graph_entity.api_key),
         },
+        "sufficiency_judge": {
+            "provider": cfg.sufficiency_judge.provider,
+            "api_base": cfg.sufficiency_judge.api_base,
+            "model": cfg.sufficiency_judge.model,
+            "api_key_masked": mask_api_key(cfg.sufficiency_judge.api_key),
+        },
         "updated_at": cfg.updated_at,
     }
 
@@ -2570,16 +2618,26 @@ def save_admin_llm_config(payload: AdminSaveLLMConfigRequest) -> dict[str, Any]:
             model=payload.graph_entity_model,
             default_provider="siliconflow",
         )
+        sufficiency_judge_stage = _build_stage_payload(
+            stage_name="sufficiency_judge",
+            stage_payload=payload.sufficiency_judge,
+            provider=payload.sufficiency_judge_provider,
+            api_base=payload.sufficiency_judge_api_base,
+            api_key=payload.sufficiency_judge_api_key,
+            model=payload.sufficiency_judge_model,
+            default_provider="siliconflow",
+        )
 
-        if any(stage is not None for stage in (answer_stage, embedding_stage, rerank_stage, rewrite_stage, graph_entity_stage)):
-            if any(stage is None for stage in (answer_stage, embedding_stage, rerank_stage, rewrite_stage, graph_entity_stage)):
-                raise ValueError("answer/embedding/rerank/rewrite/graph_entity stage payloads are all required")
+        if any(stage is not None for stage in (answer_stage, embedding_stage, rerank_stage, rewrite_stage, graph_entity_stage, sufficiency_judge_stage)):
+            if any(stage is None for stage in (answer_stage, embedding_stage, rerank_stage, rewrite_stage, graph_entity_stage, sufficiency_judge_stage)):
+                raise ValueError("answer/embedding/rerank/rewrite/graph_entity/sufficiency_judge stage payloads are all required")
             saved = save_runtime_llm_config(
                 answer=answer_stage,
                 embedding=embedding_stage,
                 rerank=rerank_stage,
                 rewrite=rewrite_stage,
                 graph_entity=graph_entity_stage,
+                sufficiency_judge=sufficiency_judge_stage,
             )
         else:
             api_base = _normalize_admin_api_base(str(payload.api_base or ""))
@@ -2631,6 +2689,12 @@ def save_admin_llm_config(payload: AdminSaveLLMConfigRequest) -> dict[str, Any]:
                 "model": saved.graph_entity.model,
                 "api_key_masked": mask_api_key(saved.graph_entity.api_key),
             },
+            "sufficiency_judge": {
+                "provider": saved.sufficiency_judge.provider,
+                "api_base": saved.sufficiency_judge.api_base,
+                "model": saved.sufficiency_judge.model,
+                "api_key_masked": mask_api_key(saved.sufficiency_judge.api_key),
+            },
             "updated_at": saved.updated_at,
         },
     }
@@ -2659,6 +2723,36 @@ def get_admin_pipeline_config() -> dict[str, Any]:
         "warnings": effective.warnings + effective_llm.warnings,
         "updated_at": saved.updated_at if saved is not None else None,
     }
+
+
+@app.get("/api/admin/planner-config")
+def get_admin_planner_config() -> dict[str, Any]:
+    cfg, err = load_planner_runtime_config()
+    if err:
+        raise HTTPException(status_code=500, detail={"code": "CONFIG_INVALID", "message": err})
+    if cfg is None:
+        return {"configured": False}
+    payload = mask_planner_runtime_secrets(cfg)
+    payload["configured"] = True
+    return payload
+
+
+@app.post("/api/admin/planner-config")
+def save_admin_planner_config(payload: AdminSavePlannerConfigRequest) -> dict[str, Any]:
+    try:
+        saved = save_planner_runtime_config(
+            use_llm=payload.use_llm,
+            provider=str(payload.provider or "").strip(),
+            api_base=_normalize_admin_api_base(str(payload.api_base or "")),
+            api_key=str(payload.api_key or ""),
+            model=str(payload.model or "").strip(),
+            timeout_ms=int(payload.timeout_ms),
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail={"code": "INVALID_PARAMS", "message": str(exc), "stage": "planner"}) from exc
+    except Exception as exc:  # pragma: no cover - defensive
+        raise HTTPException(status_code=500, detail={"code": "CONFIG_SAVE_FAILED", "message": str(exc)}) from exc
+    return {"ok": True, "config": {"configured": True, **mask_planner_runtime_secrets(saved)}}
 
 
 @app.post("/api/admin/pipeline-config")
@@ -2708,17 +2802,83 @@ def get_runtime_overview() -> dict[str, Any]:
     if llm_err:
         return {
             "llm": {},
+            "planner": {},
             "pipeline": {},
             "status": {"level": "ERROR", "reasons": [llm_err]},
             "updated_at": _iso_now(),
         }
+    planner_cfg, planner_err = load_planner_runtime_config()
+    if planner_err:
+        return {
+            "llm": {},
+            "planner": {},
+            "pipeline": {},
+            "status": {"level": "ERROR", "reasons": [planner_err]},
+            "updated_at": _iso_now(),
+        }
+
+    cfg, config_warnings = load_and_validate_config(CONFIGS_DIR / "default.yaml")
+    try:
+        raw_data = yaml.safe_load((CONFIGS_DIR / "default.yaml").read_text(encoding="utf-8")) or {}
+        if not isinstance(raw_data, dict):
+            raw_data = {}
+    except Exception as exc:
+        raw_data = {}
+        config_warnings = list(config_warnings) + [f"Failed to load default.yaml for runtime overview: {exc}"]
+    effective_stage_llm = resolve_effective_llm_stages(
+        raw_data=raw_data,
+        runtime_cfg=llm_cfg,
+        runtime_api_key_env_prefix="RAG_RUNTIME_LLM_API_KEY",
+    )
 
     llm = {
-        "answer": _runtime_stage_entry(asdict(llm_cfg.answer) if llm_cfg is not None else {}),
-        "embedding": _runtime_stage_entry(asdict(llm_cfg.embedding) if llm_cfg is not None else {}),
-        "rerank": _runtime_stage_entry(asdict(llm_cfg.rerank) if llm_cfg is not None else {}),
-        "rewrite": _runtime_stage_entry(asdict(llm_cfg.rewrite) if llm_cfg is not None else {}),
-        "graph_entity": _runtime_stage_entry(asdict(llm_cfg.graph_entity) if llm_cfg is not None else {}),
+        "answer": _runtime_stage_entry(
+            {"provider": cfg.answer_llm_provider, "api_base": cfg.answer_llm_api_base, "model": cfg.answer_llm_model},
+            effective_source=effective_stage_llm.stages["answer"].source,
+        ),
+        "embedding": _runtime_stage_entry(
+            {"provider": cfg.embedding_provider, "api_base": cfg.embedding_api_base, "model": cfg.embedding_model},
+            effective_source=effective_stage_llm.stages["embedding"].source,
+        ),
+        "rerank": _runtime_stage_entry(
+            {"provider": cfg.rerank_provider, "api_base": cfg.rerank_api_base, "model": cfg.rerank_model},
+            effective_source=effective_stage_llm.stages["rerank"].source,
+        ),
+        "rewrite": _runtime_stage_entry(
+            {"provider": cfg.rewrite_llm_provider, "api_base": cfg.rewrite_llm_api_base, "model": cfg.rewrite_llm_model},
+            effective_source=effective_stage_llm.stages["rewrite"].source,
+        ),
+        "graph_entity": _runtime_stage_entry(
+            {
+                "provider": cfg.graph_entity_llm_provider,
+                "api_base": cfg.graph_entity_llm_base_url,
+                "model": cfg.graph_entity_llm_model,
+            },
+            effective_source=effective_stage_llm.stages["graph_entity"].source,
+        ),
+        "sufficiency_judge": _runtime_stage_entry(
+            {
+                "provider": cfg.sufficiency_judge_llm_provider,
+                "api_base": cfg.sufficiency_judge_llm_api_base,
+                "model": cfg.sufficiency_judge_llm_model,
+            },
+            effective_source=effective_stage_llm.stages["sufficiency_judge"].source,
+        ),
+    }
+    effective_planner, planner_source, planner_warnings = resolve_effective_planner_runtime(
+        raw_data=raw_data,
+        runtime_cfg=planner_cfg,
+    )
+    planner = {
+        "use_llm": effective_planner.use_llm,
+        "provider": effective_planner.provider,
+        "api_base": effective_planner.api_base,
+        "model": effective_planner.model,
+        "timeout_ms": effective_planner.timeout_ms,
+        "configured": bool(effective_planner.model and effective_planner.api_base and (effective_planner.api_key or not effective_planner.use_llm)),
+        "source": planner_source.get("model", "default"),
+        "source_label": runtime_source_label(planner_source.get("model", "default")),
+        "effective_source": planner_source,
     }
     effective = resolve_effective_marker_tuning()
     effective_llm = resolve_effective_marker_llm()
@@ -2728,7 +2888,7 @@ def get_runtime_overview() -> dict[str, Any]:
     status_level, reasons = _build_runtime_status(
         llm=llm,
         marker_source=effective.source,
-        marker_warnings=effective.warnings,
+        marker_warnings=effective_stage_llm.warnings + planner_warnings + effective.warnings + effective_llm.warnings + config_warnings,
         marker_llm=marker_llm_entry,
         artifact_summary=artifact_summary,
         ingest_degradation={
@@ -2739,6 +2899,7 @@ def get_runtime_overview() -> dict[str, Any]:
     )
     return {
         "llm": llm,
+        "planner": planner,
         "pipeline": {
             "marker_tuning": asdict(effective.values),
             "effective_source": {"marker_tuning": effective.source},
