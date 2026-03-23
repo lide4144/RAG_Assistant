@@ -7,6 +7,7 @@ import os
 from pathlib import Path
 from typing import Any
 
+from app.config_governance import PIPELINE_RUNTIME_FIELD_GOVERNANCE
 from app.paths import CONFIGS_DIR
 
 
@@ -24,28 +25,14 @@ _ALLOWED_DTYPES = {"float16", "float32", "bfloat16"}
 _BATCH_MIN = 1
 _BATCH_MAX = 32
 _ENV_MAP = {
-    "recognition_batch_size": "RECOGNITION_BATCH_SIZE",
-    "detector_batch_size": "DETECTOR_BATCH_SIZE",
-    "layout_batch_size": "LAYOUT_BATCH_SIZE",
-    "ocr_error_batch_size": "OCR_ERROR_BATCH_SIZE",
-    "table_rec_batch_size": "TABLE_REC_BATCH_SIZE",
-    "model_dtype": "MODEL_DTYPE",
+    field: rule.env_var
+    for field, rule in PIPELINE_RUNTIME_FIELD_GOVERNANCE["marker_tuning"].items()
+    if rule.env_var
 }
 _MARKER_LLM_ENV_MAP = {
-    "use_llm": "MARKER_USE_LLM",
-    "llm_service": "MARKER_LLM_SERVICE",
-    "gemini_api_key": "GEMINI_API_KEY",
-    "vertex_project_id": "VERTEX_PROJECT_ID",
-    "ollama_base_url": "OLLAMA_BASE_URL",
-    "ollama_model": "OLLAMA_MODEL",
-    "claude_api_key": "CLAUDE_API_KEY",
-    "claude_model_name": "CLAUDE_MODEL_NAME",
-    "openai_api_key": "OPENAI_API_KEY",
-    "openai_model": "OPENAI_MODEL",
-    "openai_base_url": "OPENAI_BASE_URL",
-    "azure_endpoint": "AZURE_ENDPOINT",
-    "azure_api_key": "AZURE_API_KEY",
-    "deployment_name": "DEPLOYMENT_NAME",
+    field: rule.env_var
+    for field, rule in PIPELINE_RUNTIME_FIELD_GOVERNANCE["marker_llm"].items()
+    if rule.env_var
 }
 
 GEMINI_SERVICE = "gemini"

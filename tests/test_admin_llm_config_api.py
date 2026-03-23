@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import os
 import tempfile
 import unittest
 from pathlib import Path
@@ -118,6 +119,12 @@ class AdminLLMConfigApiTests(unittest.TestCase):
                             "api_key": "graph-secret",
                             "model": "Pro/deepseek-ai/DeepSeek-V3.2",
                         },
+                        sufficiency_judge={
+                            "provider": "siliconflow",
+                            "api_base": "https://judge.example.com/v1",
+                            "api_key": "judge-secret",
+                            "model": "Qwen/Qwen2.5-7B-Instruct",
+                        },
                     )
                 )
         self.assertTrue(payload["ok"])
@@ -126,6 +133,7 @@ class AdminLLMConfigApiTests(unittest.TestCase):
         self.assertEqual(payload["config"]["rerank"]["model"], "Qwen/Qwen3-Reranker-8B")
         self.assertEqual(payload["config"]["rewrite"]["model"], "qwen2.5:3b")
         self.assertEqual(payload["config"]["graph_entity"]["model"], "Pro/deepseek-ai/DeepSeek-V3.2")
+        self.assertEqual(payload["config"]["sufficiency_judge"]["model"], "Qwen/Qwen2.5-7B-Instruct")
         self.assertIn("***", payload["config"]["rerank"]["api_key_masked"])
 
     def test_save_admin_llm_config_rejects_partial_stage_payload(self) -> None:
@@ -179,6 +187,12 @@ class AdminLLMConfigApiTests(unittest.TestCase):
                         "api_key": "graph-secret",
                         "model": "Pro/deepseek-ai/DeepSeek-V3.2",
                     },
+                    sufficiency_judge={
+                        "provider": "siliconflow",
+                        "api_base": "https://judge.example.com/v1",
+                        "api_key": "judge-secret",
+                        "model": "Qwen/Qwen2.5-7B-Instruct",
+                    },
                 )
             )
         self.assertEqual(getattr(ctx.exception, "status_code", None), 400)
@@ -194,7 +208,8 @@ class AdminLLMConfigApiTests(unittest.TestCase):
                 '"embedding":{"provider":"siliconflow","api_base":"https://emb.example.com/v1","api_key":"ek","model":"e-model"},'
                 '"rerank":{"provider":"siliconflow","api_base":"https://rr.example.com/v1","api_key":"rk","model":"r-model"},'
                 '"rewrite":{"provider":"ollama","api_base":"http://127.0.0.1:11434/v1","api_key":"wk","model":"w-model"},'
-                '"graph_entity":{"provider":"siliconflow","api_base":"https://graph.example.com/v1","api_key":"gk","model":"g-model"}}',
+                '"graph_entity":{"provider":"siliconflow","api_base":"https://graph.example.com/v1","api_key":"gk","model":"g-model"},'
+                '"sufficiency_judge":{"provider":"siliconflow","api_base":"https://judge.example.com/v1","api_key":"jk","model":"judge-model"}}',
                 encoding="utf-8",
             )
             with patch("app.admin_llm_config.RUNTIME_LLM_CONFIG_PATH", runtime_path):
@@ -205,6 +220,7 @@ class AdminLLMConfigApiTests(unittest.TestCase):
         self.assertEqual(payload["rerank"]["provider"], "siliconflow")
         self.assertEqual(payload["rewrite"]["model"], "w-model")
         self.assertEqual(payload["graph_entity"]["model"], "g-model")
+        self.assertEqual(payload["sufficiency_judge"]["model"], "judge-model")
         self.assertIn("api_key_masked", payload["answer"])
 
 
@@ -257,7 +273,8 @@ class RuntimeLLMConfigPersistenceTests(unittest.TestCase):
                 '"embedding":{"provider":"siliconflow","api_base":"https://emb.example.com/v1","api_key":"ek","model":"e-model"},'
                 '"rerank":{"provider":"siliconflow","api_base":"https://rr.example.com/v1","api_key":"rk","model":"r-model"},'
                 '"rewrite":{"provider":"ollama","api_base":"http://127.0.0.1:11434/v1","api_key":"wk","model":"w-model"},'
-                '"graph_entity":{"provider":"siliconflow","api_base":"https://graph.example.com/v1","api_key":"gk","model":"g-model"}}',
+                '"graph_entity":{"provider":"siliconflow","api_base":"https://graph.example.com/v1","api_key":"gk","model":"g-model"},'
+                '"sufficiency_judge":{"provider":"siliconflow","api_base":"https://judge.example.com/v1","api_key":"jk","model":"judge-model"}}',
                 encoding="utf-8",
             )
             with patch("app.admin_llm_config.RUNTIME_LLM_CONFIG_PATH", runtime_path):
@@ -271,8 +288,32 @@ class RuntimeLLMConfigPersistenceTests(unittest.TestCase):
         self.assertEqual(loaded.graph_entity_llm_provider, "siliconflow")
         self.assertEqual(loaded.graph_entity_llm_base_url, "https://graph.example.com/v1")
         self.assertEqual(loaded.graph_entity_llm_model, "g-model")
+        self.assertEqual(loaded.sufficiency_judge_llm_api_base, "https://judge.example.com/v1")
+        self.assertEqual(loaded.sufficiency_judge_llm_model, "judge-model")
         self.assertEqual(loaded.answer_llm_model, "a-model")
         self.assertNotEqual(loaded.rewrite_llm_model, loaded.answer_llm_model)
+        self.assertEqual(warnings, [])
+
+    def test_explicit_env_override_wins_over_runtime_config(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            cfg_path = Path(tmp) / "default.yaml"
+            cfg_path.write_text("answer_llm_model: baseline-model\n", encoding="utf-8")
+            runtime_path = Path(tmp) / "llm_runtime_config.json"
+            runtime_path.write_text(
+                '{"answer":{"provider":"openai","api_base":"https://answer.example.com/v1","api_key":"ak","model":"runtime-model"},'
+                '"embedding":{"provider":"siliconflow","api_base":"https://emb.example.com/v1","api_key":"ek","model":"e-model"},'
+                '"rerank":{"provider":"siliconflow","api_base":"https://rr.example.com/v1","api_key":"rk","model":"r-model"},'
+                '"rewrite":{"provider":"ollama","api_base":"http://127.0.0.1:11434/v1","api_key":"wk","model":"w-model"},'
+                '"graph_entity":{"provider":"siliconflow","api_base":"https://graph.example.com/v1","api_key":"gk","model":"g-model"},'
+                '"sufficiency_judge":{"provider":"siliconflow","api_base":"https://judge.example.com/v1","api_key":"jk","model":"judge-model"}}',
+                encoding="utf-8",
+            )
+            with (
+                patch("app.admin_llm_config.RUNTIME_LLM_CONFIG_PATH", runtime_path),
+                patch.dict("os.environ", {"RAG_LLM_ANSWER_MODEL": "env-model"}, clear=False),
+            ):
+                loaded, warnings = load_and_validate_config(cfg_path)
+        self.assertEqual(loaded.answer_llm_model, "env-model")
         self.assertEqual(warnings, [])
 
     def test_runtime_config_invalid_falls_back_with_warning(self) -> None:

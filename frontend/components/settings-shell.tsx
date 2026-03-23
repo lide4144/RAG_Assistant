@@ -5,10 +5,10 @@ import { useEffect, useMemo, useState } from 'react';
 import { toast } from 'sonner';
 import { fetchAdminJson } from '../lib/admin-http';
 import { resolveAdminUrl } from '../lib/deployment-endpoints';
-import type { MarkerLlmRuntimeConfig, MarkerTuning, RuntimeOverview, RuntimeSource } from '../lib/types';
+import type { MarkerLlmRuntimeConfig, MarkerTuning, PlannerRuntimeSummary, RuntimeOverview, RuntimeSource } from '../lib/types';
 
 type AdminModel = { id: string; owned_by?: string | null };
-type StageKey = 'answer' | 'embedding' | 'rerank' | 'rewrite' | 'graph_entity';
+type StageKey = 'answer' | 'embedding' | 'rerank' | 'rewrite' | 'graph_entity' | 'sufficiency_judge';
 
 type StageConfig = {
   provider: string;
@@ -17,7 +17,9 @@ type StageConfig = {
   model: string;
   models: AdminModel[];
   detectLoading: boolean;
+  saveLoading: boolean;
   error: string;
+  status: string;
   showApiKey: boolean;
 };
 
@@ -71,6 +73,15 @@ type PipelineConfigPayload = {
   };
 };
 
+type PlannerConfigForm = {
+  use_llm: boolean;
+  provider: string;
+  apiBase: string;
+  apiKey: string;
+  model: string;
+  timeoutMs: number;
+};
+
 type ProviderPreset = {
   label: string;
   apiBase: string;
@@ -121,6 +132,13 @@ const stageMeta: StageMeta[] = [
     defaultProvider: 'siliconflow',
     defaultApiBase: 'https://api.siliconflow.cn/v1',
     defaultModel: 'Pro/deepseek-ai/DeepSeek-V3.2'
+  },
+  {
+    key: 'sufficiency_judge',
+    title: '证据判定模型',
+    defaultProvider: 'siliconflow',
+    defaultApiBase: 'https://api.siliconflow.cn/v1',
+    defaultModel: 'Qwen/Qwen2.5-7B-Instruct'
   }
 ];
 
@@ -134,7 +152,9 @@ const initialConfigs: Record<StageKey, StageConfig> = stageMeta.reduce(
       model: stage.defaultModel,
       models: stage.defaultModel ? [{ id: stage.defaultModel }] : [],
       detectLoading: false,
+      saveLoading: false,
       error: '',
+      status: '',
       showApiKey: false
     }
   }),
@@ -217,6 +237,25 @@ const markerLlmFieldOrder: Record<string, Array<Exclude<MarkerLlmField, 'use_llm
   'marker.services.azure_openai.AzureOpenAIService': ['azure_endpoint', 'azure_api_key', 'deployment_name']
 };
 
+const defaultPlannerConfig: PlannerConfigForm = {
+  use_llm: false,
+  provider: 'siliconflow',
+  apiBase: 'https://api.siliconflow.cn/v1',
+  apiKey: '',
+  model: 'Pro/deepseek-ai/DeepSeek-V3.2',
+  timeoutMs: 6000
+};
+
+function formatRuntimeSource(source?: RuntimeSource): string {
+  if (source === 'env') {
+    return '环境变量';
+  }
+  if (source === 'runtime') {
+    return '运行时保存';
+  }
+  return '静态基线';
+}
+
 function HintTip({
   text,
   open,
@@ -251,6 +290,7 @@ function HintTip({
 }
 
 export function SettingsShell() {
+  // 后续设置页继续沿用 magic-mcp 约束做现代化迭代，新增文案与注解保持中文语境。
   const draftStorageKey = 'settings-shell-draft-v2';
   const [configs, setConfigs] = useState<Record<StageKey, StageConfig>>(initialConfigs);
   const [overrides, setOverrides] = useState<OverridePayload>(initialOverrides);
@@ -271,10 +311,17 @@ export function SettingsShell() {
   const [pipelineGlobalError, setPipelineGlobalError] = useState('');
   const [pipelineConfig, setPipelineConfig] = useState<PipelineConfigPayload | null>(null);
   const [runtimeOverview, setRuntimeOverview] = useState<RuntimeOverview | null>(null);
+  const [plannerConfig, setPlannerConfig] = useState<PlannerConfigForm>(defaultPlannerConfig);
+  const [plannerPersisted, setPlannerPersisted] = useState<PlannerConfigForm>(defaultPlannerConfig);
+  const [plannerSaveLoading, setPlannerSaveLoading] = useState(false);
+  const [plannerDetectLoading, setPlannerDetectLoading] = useState(false);
+  const [plannerStatusText, setPlannerStatusText] = useState('');
+  const [plannerGlobalError, setPlannerGlobalError] = useState('');
   const [activeTooltipId, setActiveTooltipId] = useState<string | null>(null);
   const llmConfigUrl = useMemo(() => resolveAdminUrl('/api/admin/llm-config'), []);
   const detectModelsUrl = useMemo(() => resolveAdminUrl('/api/admin/detect-models'), []);
   const pipelineConfigUrl = useMemo(() => resolveAdminUrl('/api/admin/pipeline-config'), []);
+  const plannerConfigUrl = useMemo(() => resolveAdminUrl('/api/admin/planner-config'), []);
   const runtimeOverviewUrl = useMemo(() => resolveAdminUrl('/api/admin/runtime-overview'), []);
   const controlsDisabled = !draftHydrated;
   const visibleMarkerLlmFields = markerLlm.use_llm ? markerLlmFieldOrder[markerLlm.llm_service] ?? [] : [];
@@ -288,11 +335,23 @@ export function SettingsShell() {
     ['embedding', '向量模型', '决定向量检索质量'],
     ['rerank', '重排模型', '决定证据排序'],
     ['rewrite', '问题改写模型', '优化检索提问'],
-    ['graph_entity', '图谱实体模型', '支持图谱实体抽取']
+    ['graph_entity', '图谱实体模型', '支持图谱实体抽取'],
+    ['sufficiency_judge', '证据判定模型', '用于充分性与证据匹配判定']
   ];
+  const plannerDirty = useMemo(() => JSON.stringify(plannerConfig) !== JSON.stringify(plannerPersisted), [plannerConfig, plannerPersisted]);
 
   const setField = <K extends keyof StageConfig>(stage: StageKey, field: K, value: StageConfig[K]) => {
-    setConfigs((prev) => ({ ...prev, [stage]: { ...prev[stage], [field]: value } }));
+    setConfigs((prev) => ({
+      ...prev,
+      [stage]: {
+        ...prev[stage],
+        [field]: value,
+        status:
+          field === 'provider' || field === 'apiBase' || field === 'apiKey' || field === 'model'
+            ? ''
+            : prev[stage].status,
+      },
+    }));
   };
 
   const setMarkerField = <K extends keyof MarkerTuning>(field: K, value: MarkerTuning[K]) => {
@@ -303,6 +362,9 @@ export function SettingsShell() {
   const setMarkerLlmField = <K extends MarkerLlmField>(field: K, value: MarkerLlmForm[K]) => {
     setMarkerLlm((prev) => ({ ...prev, [field]: value }));
     setMarkerLlmFieldErrors((prev) => ({ ...prev, [field]: '' }));
+  };
+  const setPlannerField = <K extends keyof PlannerConfigForm>(field: K, value: PlannerConfigForm[K]) => {
+    setPlannerConfig((prev) => ({ ...prev, [field]: value }));
   };
 
   const mergeDetectedModels = (detected: AdminModel[], currentModel: string): AdminModel[] => {
@@ -375,7 +437,8 @@ export function SettingsShell() {
       embedding: {},
       rerank: {},
       rewrite: {},
-      graph_entity: {}
+      graph_entity: {},
+      sufficiency_judge: {}
     };
     for (const stage of stageMeta) {
       result[stage.key] = {
@@ -426,6 +489,7 @@ export function SettingsShell() {
           rerank?: { provider?: string; api_base?: string; model?: string };
           rewrite?: { provider?: string; api_base?: string; model?: string };
           graph_entity?: { provider?: string; api_base?: string; model?: string };
+          sufficiency_judge?: { provider?: string; api_base?: string; model?: string };
           api_base?: string;
           model?: string;
         }>(llmConfigUrl);
@@ -488,6 +552,44 @@ export function SettingsShell() {
 
   useEffect(() => {
     let mounted = true;
+    const loadPlannerConfig = async () => {
+      try {
+        const result = await fetchAdminJson<{
+          configured?: boolean;
+          use_llm?: boolean;
+          provider?: string;
+          api_base?: string;
+          model?: string;
+          timeout_ms?: number;
+        }>(plannerConfigUrl);
+        if (!mounted || !result.ok || !result.data.configured) {
+          return;
+        }
+        const nextConfig: PlannerConfigForm = {
+          use_llm: Boolean(result.data.use_llm),
+          provider: result.data.provider || defaultPlannerConfig.provider,
+          apiBase: result.data.api_base || defaultPlannerConfig.apiBase,
+          apiKey: '',
+          model: result.data.model || defaultPlannerConfig.model,
+          timeoutMs:
+            typeof result.data.timeout_ms === 'number' && Number.isFinite(result.data.timeout_ms)
+              ? result.data.timeout_ms
+              : defaultPlannerConfig.timeoutMs
+        };
+        setPlannerConfig(nextConfig);
+        setPlannerPersisted(nextConfig);
+      } catch {
+        // Planner 面板失败时保留静态默认值，不阻断其余设置页。
+      }
+    };
+    void loadPlannerConfig();
+    return () => {
+      mounted = false;
+    };
+  }, [plannerConfigUrl]);
+
+  useEffect(() => {
+    let mounted = true;
     const loadRuntimePanels = async () => {
       try {
         const [pipelineResult, overviewResult] = await Promise.all([
@@ -542,9 +644,10 @@ export function SettingsShell() {
   }, [configs, draftHydrated]);
 
   const isDirty = useMemo(() => !draftsEqual(toDraftPayload(configs), persistedDraft), [configs, persistedDraft]);
+  const hasUnsavedChanges = isDirty || plannerDirty;
 
   useEffect(() => {
-    if (!isDirty) {
+    if (!hasUnsavedChanges) {
       return;
     }
     const onBeforeUnload = (event: BeforeUnloadEvent) => {
@@ -553,10 +656,10 @@ export function SettingsShell() {
     };
     window.addEventListener('beforeunload', onBeforeUnload);
     return () => window.removeEventListener('beforeunload', onBeforeUnload);
-  }, [isDirty]);
+  }, [hasUnsavedChanges]);
 
   useEffect(() => {
-    if (!isDirty) {
+    if (!hasUnsavedChanges) {
       return;
     }
     const onDocumentClick = (event: MouseEvent) => {
@@ -581,7 +684,7 @@ export function SettingsShell() {
     };
     document.addEventListener('click', onDocumentClick, true);
     return () => document.removeEventListener('click', onDocumentClick, true);
-  }, [isDirty]);
+  }, [hasUnsavedChanges]);
 
   const handleProviderChange = (stage: StageKey, provider: string) => {
     const preset = providerPresets[provider];
@@ -591,7 +694,8 @@ export function SettingsShell() {
         ...prev[stage],
         provider,
         apiBase: preset?.apiBase ?? prev[stage].apiBase,
-        error: ''
+        error: '',
+        status: '',
       }
     }));
   };
@@ -722,6 +826,178 @@ export function SettingsShell() {
       toast.error('保存失败，请稍后重试。');
     } finally {
       setSaveLoading(false);
+    }
+  };
+
+  const buildStageSavePayload = (draft: DraftPayload) =>
+    stageMeta.reduce(
+      (acc, stage) => ({
+        ...acc,
+        [stage.key]: {
+          provider: draft[stage.key].provider.trim(),
+          api_base: (isInheritMode(stage.key) ? draft.answer.apiBase : draft[stage.key].apiBase).trim(),
+          api_key: (isInheritMode(stage.key) ? draft.answer.apiKey : draft[stage.key].apiKey).trim(),
+          model: draft[stage.key].model.trim()
+        }
+      }),
+      {}
+    );
+
+  const handleSaveStage = async (stageKey: StageKey) => {
+    if (controlsDisabled) {
+      return;
+    }
+    const currentDraft = toDraftPayload(configs);
+    const nextDraft: DraftPayload = {
+      ...persistedDraft,
+      [stageKey]: currentDraft[stageKey],
+      ...(stageKey === 'answer' ? { answer: currentDraft.answer } : {})
+    };
+    const current = configs[stageKey];
+    const inherited = isInheritMode(stageKey);
+    const apiBase = inherited ? nextDraft.answer.apiBase : current.apiBase;
+    const apiKey = inherited ? nextDraft.answer.apiKey : current.apiKey;
+    if (!current.provider.trim() || !apiBase.trim() || !apiKey.trim() || !current.model.trim()) {
+      setField(stageKey, 'error', `请先补全 ${stageMeta.find((item) => item.key === stageKey)?.title || '当前模型'} 的服务商、API Base、API Key 和模型。`);
+      return;
+    }
+
+    setField(stageKey, 'saveLoading', true);
+    setField(stageKey, 'error', '');
+    setField(stageKey, 'status', '');
+    setGlobalError('');
+    setStatusText('');
+
+    try {
+      const result = await fetchAdminJson<{ detail?: unknown }>(llmConfigUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(buildStageSavePayload(nextDraft))
+      });
+      if (!result.ok) {
+        if (!result.data) {
+          setField(stageKey, 'error', result.message);
+          toast.error('保存失败，请检查配置。');
+          return;
+        }
+        const parsed = parseAdminError(result.data);
+        const guidance = mapAdminErrorToGuidance(parsed, 'save');
+        setField(parsed.stage || stageKey, 'error', guidance);
+        toast.error('保存失败，请检查配置。');
+        return;
+      }
+
+      setPersistedDraft((prev) => ({
+        ...prev,
+        [stageKey]: currentDraft[stageKey],
+        ...(stageKey === 'answer' ? { answer: currentDraft.answer } : {})
+      }));
+      setField(stageKey, 'status', `${stageMeta.find((item) => item.key === stageKey)?.title || '当前模型'}已保存`);
+      toast.success(`${stageMeta.find((item) => item.key === stageKey)?.title || '当前模型'}保存成功`);
+    } catch (error) {
+      const message =
+        error instanceof TypeError ? networkErrorMessage('save') : error instanceof Error ? error.message : '保存失败';
+      setField(stageKey, 'error', message);
+      toast.error('保存失败，请稍后重试。');
+    } finally {
+      setField(stageKey, 'saveLoading', false);
+    }
+  };
+
+  const handleDetectPlannerModel = async () => {
+    if (controlsDisabled || plannerDetectLoading) {
+      return;
+    }
+    if (!plannerConfig.apiBase.trim() || !plannerConfig.apiKey.trim()) {
+      setPlannerGlobalError('请先填写规划模型的服务地址与密钥，再测试连接。');
+      return;
+    }
+    setPlannerDetectLoading(true);
+    setPlannerGlobalError('');
+    setPlannerStatusText('');
+    try {
+      const result = await fetchAdminJson<{ models?: AdminModel[]; detail?: unknown }>(detectModelsUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ api_base: plannerConfig.apiBase.trim(), api_key: plannerConfig.apiKey.trim() })
+      });
+      if (!result.ok) {
+        if (!result.data) {
+          throw new Error(result.message);
+        }
+        const parsed = parseAdminError(result.data);
+        throw new Error(mapAdminErrorToGuidance(parsed, 'detect'));
+      }
+      const detected = Array.isArray(result.data.models) ? result.data.models : [];
+      if (!detected.length) {
+        setPlannerGlobalError('未检测到可用模型：请确认服务地址和密钥有效。');
+        return;
+      }
+      setPlannerConfig((prev) => ({ ...prev, model: prev.model || detected[0]?.id || '' }));
+      setPlannerStatusText(`规划模型连接成功，已发现 ${detected.length} 个可选模型。`);
+      toast.success('规划模型连接成功');
+    } catch (error) {
+      const message =
+        error instanceof TypeError
+          ? networkErrorMessage('detect')
+          : error instanceof Error
+            ? error.message
+            : '探测失败';
+      setPlannerGlobalError(message);
+      toast.error('规划模型连接失败');
+    } finally {
+      setPlannerDetectLoading(false);
+    }
+  };
+
+  const handleSavePlanner = async () => {
+    if (controlsDisabled || plannerSaveLoading) {
+      return;
+    }
+    if (!plannerConfig.provider.trim() || !plannerConfig.apiBase.trim() || !plannerConfig.model.trim()) {
+      setPlannerGlobalError('请先补全规划模型的服务商、服务地址和模型。');
+      return;
+    }
+    if (plannerConfig.use_llm && !plannerConfig.apiKey.trim()) {
+      setPlannerGlobalError('启用规划模型时必须填写密钥。');
+      return;
+    }
+    setPlannerSaveLoading(true);
+    setPlannerStatusText('');
+    setPlannerGlobalError('');
+    try {
+      const result = await fetchAdminJson<{ detail?: unknown; config?: PlannerRuntimeSummary }>(plannerConfigUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          use_llm: plannerConfig.use_llm,
+          provider: plannerConfig.provider.trim(),
+          api_base: plannerConfig.apiBase.trim(),
+          api_key: plannerConfig.apiKey.trim(),
+          model: plannerConfig.model.trim(),
+          timeout_ms: Number(plannerConfig.timeoutMs)
+        })
+      });
+      if (!result.ok) {
+        const parsed = parseAdminError(result.data);
+        setPlannerGlobalError(mapAdminErrorToGuidance(parsed, 'save'));
+        toast.error('规划模型保存失败');
+        return;
+      }
+      const persisted = { ...plannerConfig, apiKey: '' };
+      setPlannerConfig(persisted);
+      setPlannerPersisted(persisted);
+      setPlannerStatusText('Planner Runtime 配置已保存并进入统一治理。');
+      toast.success('规划模型保存成功');
+      const overviewResult = await fetchAdminJson<RuntimeOverview>(runtimeOverviewUrl);
+      if (overviewResult.ok) {
+        setRuntimeOverview(overviewResult.data);
+      }
+    } catch {
+      setPlannerGlobalError('网络请求失败：请确认内核服务在线后重试保存。');
+      toast.error('规划模型保存失败');
+    } finally {
+      setPlannerSaveLoading(false);
     }
   };
 
@@ -881,10 +1157,10 @@ export function SettingsShell() {
       <header className="mb-6">
         <p className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-500">模型设置</p>
         <h2 data-testid="settings-shell-title" className="mt-2 text-[32px] font-semibold tracking-tight text-slate-950">
-          更易懂的模型选择与高级调优
+          运行时模型设置与导入调优
         </h2>
         <p className="mt-2 max-w-3xl text-sm leading-6 text-slate-600">
-          基础用户先看“核心模型选择”，高级参数统一收纳进折叠面板，避免一进页面就被底层批处理配置淹没。
+          本页只管理运行时可调整配置，不覆盖 `default.yaml` 中的系统基线策略。首屏优先展示实际生效来源，避免把前端保存值误判为全量系统配置。
         </p>
         {!draftHydrated ? (
           <p data-testid="llm-loading-text" className="mt-2 text-xs text-slate-500">
@@ -901,10 +1177,11 @@ export function SettingsShell() {
         <article data-testid="runtime-overview-panel" className="rounded-[28px] border border-slate-200 bg-[linear-gradient(135deg,#fffdfa,#ffffff_48%,#f3f8ff)] p-5 shadow-[0_18px_50px_rgba(15,23,42,0.05)]">
           <div className="flex flex-wrap items-start justify-between gap-4">
             <div>
-              <p className="text-xs font-semibold uppercase tracking-[0.14em] text-slate-500">核心模型选择</p>
-              <h3 className="mt-2 text-xl font-semibold text-slate-950">直接在这里切换会影响聊天体验的核心模型</h3>
+              <p className="text-xs font-semibold uppercase tracking-[0.14em] text-slate-500">当前实际使用的模型</p>
+              <p className="mt-1 text-[11px] text-slate-400">原“运行时模型位点”，现仅展示当前生效结果。</p>
+              <h3 className="mt-2 text-xl font-semibold text-slate-950">先看系统现在实际在用什么，再决定是否调整</h3>
               <p className="mt-2 text-sm leading-6 text-slate-600">
-                现在会同时展示回答、向量、重排、问题改写和图谱实体五个模型位点，让管理员首屏就能核对完整配置。
+                这里是只读摘要，只告诉你回答、向量、重排、问题改写、图谱实体和证据判定这几路当前实际生效的模型与来源。下面的卡片才是保存配置的地方。
               </p>
             </div>
             <div className="rounded-2xl border border-slate-200 bg-white/85 px-4 py-3 text-sm text-slate-700">
@@ -916,35 +1193,57 @@ export function SettingsShell() {
             </div>
           </div>
 
-          <div data-testid="core-model-overview" className="mt-5 grid gap-4 md:grid-cols-2 2xl:grid-cols-5">
+          <div data-testid="core-model-overview" className="mt-6 grid gap-5 lg:grid-cols-2 2xl:grid-cols-3">
             {coreModelCards.map(([stageKey, label, hint]) => {
               const stage = configs[stageKey];
               return (
-                <label key={stageKey} data-testid={`core-model-card-${stageKey}`} className="block min-w-0 rounded-[22px] border border-slate-200 bg-white/85 p-4">
+                <div
+                  key={stageKey}
+                  data-testid={`core-model-card-${stageKey}`}
+                  className="block min-w-0 rounded-[24px] border border-slate-200 bg-white/90 p-5"
+                >
                   <span className="text-sm font-semibold text-slate-900">{label}</span>
-                  <span className="mt-1 block text-xs text-slate-500">{hint}</span>
-                  <select
-                    value={stage.model}
-                    onChange={(event) => setField(stageKey, 'model', event.target.value)}
-                    disabled={controlsDisabled}
-                    className="mt-3 h-11 w-full rounded-2xl border border-slate-200 bg-slate-50 px-3 text-sm text-slate-800 outline-none ring-sky-300 transition focus:bg-white focus:ring-2"
-                  >
-                    <option value="">请选择模型</option>
-                    {stage.models.map((model) => (
-                      <option key={`${stageKey}-${model.id}`} value={model.id}>
-                        {model.id}
-                      </option>
-                    ))}
-                  </select>
-                  <div className="mt-3 rounded-2xl border border-slate-100 bg-slate-50/80 px-3 py-2.5">
-                    <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-400">来源</p>
+                  <span className="mt-1.5 block text-xs leading-5 text-slate-500">{hint}</span>
+                  <div className="mt-4 rounded-2xl border border-slate-100 bg-slate-50/80 px-3.5 py-3">
+                    <p className="text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-400">当前生效</p>
+                    <p className="mt-1 break-all text-sm font-medium leading-6 text-slate-900">
+                      {runtimeOverview?.llm?.[stageKey]?.model || stage.model || '未设置'}
+                    </p>
+                    <p className="mt-2 text-[11px] font-medium leading-5 text-slate-700">
+                      {formatRuntimeSource(runtimeOverview?.llm?.[stageKey]?.source)}
+                    </p>
+                    <p className="mt-1 text-[11px] leading-5 text-slate-600">
+                      服务商：{runtimeOverview?.llm?.[stageKey]?.provider || stage.provider || '未设置'}
+                    </p>
                     <p className="mt-1 break-all font-mono text-[11px] leading-5 text-slate-600">
-                      {(stage.provider || '未设置') + ' / ' + (stage.apiBase || '未填写地址')}
+                      地址：{runtimeOverview?.llm?.[stageKey]?.api_base || stage.apiBase || '未填写地址'}
                     </p>
                   </div>
-                </label>
+                </div>
               );
             })}
+          </div>
+
+          <div data-testid="planner-runtime-overview" className="mt-4 rounded-[22px] border border-amber-200 bg-amber-50/60 p-4 text-sm text-slate-700">
+            <div className="flex flex-wrap items-start justify-between gap-3">
+              <div>
+                <p className="text-xs font-semibold uppercase tracking-[0.14em] text-amber-700">规划模型</p>
+                <p className="mt-1 text-sm text-slate-700">
+                  这部分决定系统是直接回答、先澄清，还是切换到其他执行路径。它会额外产生模型调用成本，建议由管理员单独管理。
+                </p>
+              </div>
+              <div className="rounded-xl border border-amber-200 bg-white/90 px-3 py-2 text-xs text-slate-700">
+                <p>启用: {runtimeOverview?.planner?.use_llm ? '是' : '否'}</p>
+                <p>来源: {formatRuntimeSource(runtimeOverview?.planner?.source)}</p>
+              </div>
+            </div>
+            <p className="mt-3 break-all font-mono text-[11px] text-slate-700">
+              {(runtimeOverview?.planner?.provider || plannerConfig.provider || '未设置') +
+                ' / ' +
+                (runtimeOverview?.planner?.model || plannerConfig.model || '未设置') +
+                ' / ' +
+                (runtimeOverview?.planner?.api_base || plannerConfig.apiBase || '未设置')}
+            </p>
           </div>
 
           <div className="mt-4 rounded-[22px] border border-slate-200 bg-white/85 p-4 text-sm text-slate-700">
@@ -969,7 +1268,7 @@ export function SettingsShell() {
               <div>
                 <p className="text-xs font-semibold uppercase tracking-[0.14em] text-slate-500">高级设置概览</p>
                 <h3 className="mt-2 text-xl font-semibold text-slate-950">高级模型调优</h3>
-                <p className="mt-1 text-sm text-slate-600">默认折叠，避免普通用户直接看到晦涩的批处理参数。</p>
+                <p className="mt-1 text-sm text-slate-600">这里只放可在线调整的高级项，默认折叠，避免把系统基线策略和导入档位混在一起。</p>
               </div>
               <ChevronDown className="h-5 w-5 text-slate-400 transition group-open:rotate-180" />
             </summary>
@@ -1173,7 +1472,7 @@ export function SettingsShell() {
                       )}
                       {pipelineConfig?.effective_source?.marker_llm?.[field] ? (
                         <span className="mt-1 block text-[11px] text-slate-500">
-                          来源: {pipelineConfig.effective_source.marker_llm[field]}
+                          来源: {formatRuntimeSource(pipelineConfig.effective_source.marker_llm[field])}
                         </span>
                       ) : null}
                       {markerLlmFieldErrors[field] ? (
@@ -1195,7 +1494,8 @@ export function SettingsShell() {
               <ul className="mt-1 space-y-0.5">
                 {(runtimeOverview?.pipeline.marker_llm?.summary_fields ?? []).map((item) => (
                   <li key={item.field}>
-                    {item.field}: <span className="font-mono">{item.value}</span> <span className="text-slate-400">({item.source})</span>
+                    {item.field}: <span className="font-mono">{item.value}</span>{' '}
+                    <span className="text-slate-400">({formatRuntimeSource(item.source)})</span>
                   </li>
                 ))}
                 {!(runtimeOverview?.pipeline.marker_llm?.summary_fields ?? []).length ? <li>暂无额外字段摘要</li> : null}
@@ -1205,6 +1505,142 @@ export function SettingsShell() {
           {pipelineStatusText ? <p className="mt-2 text-xs text-emerald-700">{pipelineStatusText}</p> : null}
           {pipelineGlobalError ? <p className="mt-2 text-xs text-rose-600">{pipelineGlobalError}</p> : null}
         </article>
+
+        <article data-testid="planner-runtime-panel" className="xl:col-span-2 rounded-[28px] border border-amber-200 bg-[linear-gradient(135deg,#fff8ef,#ffffff_52%,#fff7d6)] p-6 shadow-[0_18px_50px_rgba(15,23,42,0.05)]">
+          <div className="flex items-start justify-between gap-3">
+            <div>
+              <p className="text-xs font-semibold uppercase tracking-[0.14em] text-amber-700">规划模型</p>
+              <h3 className="mt-2 text-xl font-semibold text-slate-950">对话如何组织，主要看这里</h3>
+              <p className="mt-2 text-sm leading-6 text-slate-600">
+                这块决定系统是否先做规划，再决定澄清、回退或继续执行。因为它会直接影响响应路径和模型开销，所以单独放一块，不和普通功能模型混在一起。
+              </p>
+            </div>
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                data-testid="planner-detect-btn"
+                onClick={() => void handleDetectPlannerModel()}
+                disabled={controlsDisabled || plannerDetectLoading || !plannerConfig.apiBase.trim() || !plannerConfig.apiKey.trim()}
+                className="rounded-lg border border-slate-200 px-3 py-1.5 text-xs font-medium text-slate-700 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                {plannerDetectLoading ? '检测中...' : '测试连接'}
+              </button>
+              <button
+                type="button"
+                data-testid="planner-save-btn"
+                onClick={() => void handleSavePlanner()}
+                disabled={controlsDisabled || plannerSaveLoading}
+                className="rounded-lg border border-amber-200 bg-amber-100 px-3 py-1.5 text-xs font-medium text-amber-900 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                {plannerSaveLoading ? '保存中...' : '保存规划模型'}
+              </button>
+            </div>
+          </div>
+
+          <div className="mt-4 rounded-2xl border border-amber-200/70 bg-white/80 p-4">
+            <p className="text-[11px] leading-5 text-slate-600">
+              中文说明：
+              开启后，系统会先用这一路模型判断是直接回答、先澄清，还是切换执行路径。若想压低开销，通常先从较小模型开始。
+            </p>
+          </div>
+
+          <div className="mt-4 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+            <label className="inline-flex items-center gap-2 rounded-xl border border-amber-200 bg-white/90 px-3 py-3 text-xs font-medium text-slate-700">
+              <input
+                data-testid="planner-use-llm-toggle"
+                type="checkbox"
+                checked={plannerConfig.use_llm}
+                onChange={(event) => setPlannerField('use_llm', event.target.checked)}
+              />
+              启用规划模型
+            </label>
+            <label className="block text-xs font-medium text-slate-600">
+              服务商
+              <select
+                data-testid="planner-provider-select"
+                value={plannerConfig.provider}
+                onChange={(event) => {
+                  const provider = event.target.value;
+                  setPlannerConfig((prev) => ({
+                    ...prev,
+                    provider,
+                    apiBase: providerPresets[provider]?.apiBase ?? prev.apiBase
+                  }));
+                }}
+                className="mt-1 h-10 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm text-slate-800 outline-none ring-amber-300 transition focus:ring-2"
+              >
+                {providerOptions.map((provider) => (
+                  <option key={`planner-${provider.value}`} value={provider.value}>
+                    {provider.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="block text-xs font-medium text-slate-600">
+              服务地址
+              <input
+                data-testid="planner-api-base-input"
+                value={plannerConfig.apiBase}
+                onChange={(event) => setPlannerField('apiBase', event.target.value)}
+                className="mt-1 h-10 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm text-slate-800 outline-none ring-amber-300 transition focus:ring-2"
+              />
+            </label>
+            <label className="block text-xs font-medium text-slate-600">
+              访问密钥
+              <input
+                data-testid="planner-api-key-input"
+                type="password"
+                value={plannerConfig.apiKey}
+                onChange={(event) => setPlannerField('apiKey', event.target.value)}
+                placeholder={plannerPersisted.apiKey ? '已保存，如需更新请重新填写' : 'sk-...'}
+                className="mt-1 h-10 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm text-slate-800 outline-none ring-amber-300 transition focus:ring-2"
+              />
+            </label>
+            <label className="block text-xs font-medium text-slate-600">
+              模型名称
+              <input
+                data-testid="planner-model-input"
+                value={plannerConfig.model}
+                onChange={(event) => setPlannerField('model', event.target.value)}
+                className="mt-1 h-10 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm text-slate-800 outline-none ring-amber-300 transition focus:ring-2"
+              />
+            </label>
+            <label className="block text-xs font-medium text-slate-600">
+              超时时间（毫秒）
+              <input
+                data-testid="planner-timeout-input"
+                type="number"
+                min={1000}
+                value={plannerConfig.timeoutMs}
+                onChange={(event) => setPlannerField('timeoutMs', Number(event.target.value) || defaultPlannerConfig.timeoutMs)}
+                className="mt-1 h-10 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm text-slate-800 outline-none ring-amber-300 transition focus:ring-2"
+              />
+            </label>
+          </div>
+          <div className="mt-4 rounded-xl border border-dashed border-amber-200 bg-white/80 p-4 text-[11px] text-slate-600">
+            <p className="font-medium text-slate-800">当前生效配置</p>
+            <p className="mt-1">
+              启用: {runtimeOverview?.planner?.use_llm ? '是' : '否'} · 来源: {formatRuntimeSource(runtimeOverview?.planner?.source)}
+            </p>
+            <p className="mt-1 break-all font-mono">
+              {(runtimeOverview?.planner?.provider || '-') +
+                ' / ' +
+                (runtimeOverview?.planner?.model || '-') +
+                ' / ' +
+                String(runtimeOverview?.planner?.timeout_ms ?? defaultPlannerConfig.timeoutMs)}
+            </p>
+          </div>
+          {plannerStatusText ? <p className="mt-2 text-xs text-emerald-700">{plannerStatusText}</p> : null}
+          {plannerGlobalError ? <p data-testid="planner-error" className="mt-2 text-xs text-rose-600">{plannerGlobalError}</p> : null}
+        </article>
+      </section>
+
+      <section className="mb-4">
+        <p className="text-xs font-semibold uppercase tracking-[0.14em] text-slate-500">可编辑配置</p>
+        <h3 className="mt-2 text-xl font-semibold text-slate-950">按模型分别调整，需要时再单独保存</h3>
+        <p className="mt-2 max-w-3xl text-sm leading-6 text-slate-600">
+          下面每张卡片对应一路可在线调整的模型。修改后可以只保存当前卡片，不会把其他卡片里还没确认的改动一起提交。
+        </p>
       </section>
 
       <div className="grid gap-4 xl:grid-cols-3">
@@ -1215,22 +1651,34 @@ export function SettingsShell() {
           return (
             <article key={stage.key} className="magic-card rounded-2xl p-[1px]">
               <div className="h-full rounded-2xl bg-white p-4">
-                <div className="mb-3 flex items-center justify-between gap-2">
+                <div className="mb-3 flex items-start justify-between gap-2">
                   <h3 className="text-sm font-semibold text-slate-900">{stage.title}</h3>
-                  <button
-                    type="button"
-                    data-testid={`llm-${stage.key}-detect-btn`}
-                    onClick={() => void handleDetectModels(stage.key)}
-                    disabled={
-                      controlsDisabled ||
-                      item.detectLoading ||
-                      !(inherited ? configs.answer.apiBase : item.apiBase).trim() ||
-                      !(inherited ? configs.answer.apiKey : item.apiKey).trim()
-                    }
-                    className="rounded-lg border border-slate-200 px-3 py-1.5 text-xs font-medium text-slate-700 disabled:cursor-not-allowed disabled:opacity-50"
-                  >
-                    {item.detectLoading ? '检测中...' : '测试连接'}
-                  </button>
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      data-testid={`llm-${stage.key}-detect-btn`}
+                      onClick={() => void handleDetectModels(stage.key)}
+                      disabled={
+                        controlsDisabled ||
+                        item.detectLoading ||
+                        item.saveLoading ||
+                        !(inherited ? configs.answer.apiBase : item.apiBase).trim() ||
+                        !(inherited ? configs.answer.apiKey : item.apiKey).trim()
+                      }
+                      className="rounded-lg border border-slate-200 px-3 py-1.5 text-xs font-medium text-slate-700 disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                      {item.detectLoading ? '检测中...' : '测试连接'}
+                    </button>
+                    <button
+                      type="button"
+                      data-testid={`llm-${stage.key}-save-btn`}
+                      onClick={() => void handleSaveStage(stage.key)}
+                      disabled={controlsDisabled || item.saveLoading}
+                      className="rounded-lg border border-sky-200 bg-sky-50 px-3 py-1.5 text-xs font-medium text-sky-700 disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                      {item.saveLoading ? '保存中...' : '保存本模型'}
+                    </button>
+                  </div>
                 </div>
 
                 <div className="space-y-3">
@@ -1341,6 +1789,11 @@ export function SettingsShell() {
                     {item.error}
                   </p>
                 ) : null}
+                {item.status ? (
+                  <p data-testid={`llm-${stage.key}-status`} className="mt-2 text-xs text-emerald-700">
+                    {item.status}
+                  </p>
+                ) : null}
               </div>
             </article>
           );
@@ -1356,9 +1809,9 @@ export function SettingsShell() {
           className="shimmer-btn"
         >
           <Sparkles className="h-4 w-4" />
-          {saveLoading ? '测试并保存中...' : '测试并保存'}
+          {saveLoading ? '保存中...' : '保存全部模型'}
         </button>
-        <span className="rounded-full border border-slate-200 bg-slate-50 px-3 py-1 text-xs text-slate-600">所有操作均含加载态反馈</span>
+        <span className="rounded-full border border-slate-200 bg-slate-50 px-3 py-1 text-xs text-slate-600">每张卡片都可单独保存；顶部按钮会一次保存全部</span>
       </div>
 
       {statusText ? (
