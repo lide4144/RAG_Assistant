@@ -501,6 +501,45 @@ class KernelApiContractTests(unittest.TestCase):
             self.assertEqual(by_key["indexes:bmp25"].status, "stale")
             self.assertEqual(by_key["indexes:vec"].status, "healthy")
 
+    def test_marker_artifacts_ignore_synthetic_stage_time_when_stage_files_are_uniformly_old(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            data_dir = Path(tmp)
+            processed = data_dir / "processed"
+            indexes = data_dir / "indexes"
+            processed.mkdir(parents=True, exist_ok=True)
+            indexes.mkdir(parents=True, exist_ok=True)
+
+            artifacts = {
+                processed / "papers.json": 1710000000,
+                processed / "paper_summary.json": 1710000000,
+                indexes / "bm25_index.json": 1710000000,
+                indexes / "vec_index.json": 1710000000,
+                indexes / "vec_index_embed.json": 1710000000,
+            }
+            for path, ts in artifacts.items():
+                path.write_text("{}", encoding="utf-8")
+                os.utime(path, (ts, ts))
+
+            with patch(
+                "app.kernel_api._ARTIFACT_INDEX",
+                (
+                    ("indexes:bmp25", indexes / "bm25_index.json", "bm25-index", "index"),
+                    ("indexes:vec", indexes / "vec_index.json", "vector-index", "index"),
+                    ("indexes:embed", indexes / "vec_index_embed.json", "embedding-index", "index"),
+                    ("processed:papers", processed / "papers.json", "papers-catalog", "import"),
+                    ("processed:paper_summary", processed / "paper_summary.json", "paper-summary", "clean"),
+                ),
+            ):
+                items = _build_marker_artifacts(
+                    stage_updated_at={
+                        "import": "2024-03-09T16:00:20Z",
+                        "clean": "2024-03-09T16:00:20Z",
+                        "index": "2024-03-09T16:00:20Z",
+                    }
+                )
+
+            self.assertTrue(all(item.status == "healthy" for item in items))
+
     def test_library_import_task_runs_in_background(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             upload = Path(tmp) / "demo.pdf"
