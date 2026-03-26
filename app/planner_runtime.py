@@ -406,8 +406,7 @@ def _build_planner_llm_candidate(
 
     config_path = str(request.get("configPath") or "").strip()
     if not config_path:
-        diagnostics["reason"] = "planner_config_missing"
-        return None, diagnostics
+        config_path = str(CONFIGS_DIR / "default.yaml")
 
     cfg, _ = load_and_validate_config(config_path)
     provider = str(getattr(cfg, "planner_provider", "")).strip()
