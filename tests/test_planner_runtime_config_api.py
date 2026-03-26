@@ -12,6 +12,7 @@ from app.kernel_api import (
     get_runtime_overview,
     save_admin_planner_config,
 )
+from app.planner_runtime import _build_planner_llm_candidate
 
 
 class PlannerRuntimeConfigApiTests(unittest.TestCase):
@@ -66,6 +67,42 @@ class PlannerRuntimeConfigApiTests(unittest.TestCase):
         self.assertIn("planner", payload)
         self.assertEqual(payload["planner"]["source"], "env")
         self.assertEqual(payload["planner"]["model"], "env-planner")
+
+    def test_planner_llm_candidate_uses_default_config_when_request_path_missing(self) -> None:
+        request = {
+            "sessionId": "s1",
+            "mode": "local",
+            "query": "我录入了哪些论文",
+            "history": [],
+            "traceId": "t1",
+            "configPath": "",
+        }
+        planner_input_context = {
+            "request": {"query": "我录入了哪些论文", "mode": "local", "trace_id": "t1"},
+            "conversation_context": {},
+            "capability_registry": [],
+            "policy_flags": {},
+        }
+        with (
+            patch("app.planner_runtime.load_and_validate_config") as load_cfg,
+            patch("app.planner_runtime.evaluate_planner_service_state", return_value={"formal_chat_available": False, "reason_code": "planner_api_key_missing"}),
+        ):
+            load_cfg.return_value = (type("Cfg", (), {
+                "planner_provider": "openai",
+                "planner_model": "gpt-4.1-mini",
+                "planner_api_base": "https://planner.example.com/v1",
+                "planner_api_key_env": "PLANNER_RUNTIME_API_KEY",
+                "planner_timeout_ms": 6000,
+                "llm_max_retries": 0,
+            })(), [])
+            payload, diagnostics = _build_planner_llm_candidate(
+                request=request,
+                planner_input_context=planner_input_context,
+            )
+        self.assertIsNone(payload)
+        self.assertEqual(diagnostics["reason"], "planner_api_key_missing")
+        load_cfg.assert_called_once()
+        self.assertTrue(str(load_cfg.call_args.args[0]).endswith("configs/default.yaml"))
 
 
 if __name__ == "__main__":

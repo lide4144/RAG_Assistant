@@ -62,6 +62,7 @@ const promptSuggestions = [
 ];
 
 const storageKey = 'rag-workbench-chat-history-v1';
+const defaultConfigPath = 'configs/default.yaml';
 
 export function ChatShell() {
   const [mode, setMode] = useState<ChatMode>('local');
@@ -90,7 +91,7 @@ export function ChatShell() {
   const runtimeOverviewUrl = useMemo(() => resolveAdminUrl('/api/admin/runtime-overview'), []);
   const statusLevel = runtimeOverview?.status?.level ?? 'ERROR';
   const answerConfigured = Boolean(runtimeOverview?.llm?.answer?.configured);
-  const plannerChatAvailable = runtimeOverview?.planner?.formal_chat_available !== false;
+  const plannerChatAvailable = runtimeOverview?.planner?.formal_chat_available === true;
   const plannerBlockMessage = runtimeOverview?.planner?.block_reason_message || 'Planner Runtime 当前不可服务，请先修复规划模型配置。';
   const canSend =
     input.trim().length > 0 && statusText === 'Connected' && answerConfigured && statusLevel !== 'BLOCKED' && plannerChatAvailable;
@@ -327,6 +328,7 @@ export function ChatShell() {
           sessionId: sessionIdRef.current,
           query,
           mode,
+          configPath: defaultConfigPath,
           history: messages.slice(-8).map((item) => ({
             role: item.role,
             content: item.content
