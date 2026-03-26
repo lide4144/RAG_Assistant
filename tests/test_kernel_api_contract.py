@@ -476,7 +476,7 @@ class KernelApiContractTests(unittest.TestCase):
                 self.assertEqual(len(result.recent_items), 1)
                 self.assertEqual(result.recent_items[0].state, "failed")
 
-    def test_marker_artifacts_compare_against_related_stage_time(self) -> None:
+    def test_marker_artifacts_keep_same_run_indexes_healthy(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             data_dir = Path(tmp)
             processed = data_dir / "processed"
@@ -521,10 +521,11 @@ class KernelApiContractTests(unittest.TestCase):
             self.assertEqual(by_key["processed:chunks"].status, "healthy")
             self.assertEqual(by_key["processed:chunks_clean"].status, "healthy")
             self.assertEqual(by_key["processed:papers"].status, "healthy")
-            self.assertEqual(by_key["indexes:bmp25"].status, "stale")
+            self.assertEqual(by_key["indexes:bmp25"].status, "healthy")
             self.assertEqual(by_key["indexes:vec"].status, "healthy")
+            self.assertEqual(by_key["indexes:embed"].status, "healthy")
 
-    def test_marker_artifacts_ignore_synthetic_stage_time_when_stage_files_are_uniformly_old(self) -> None:
+    def test_marker_artifacts_mark_index_stale_when_input_is_newer(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             data_dir = Path(tmp)
             processed = data_dir / "processed"
@@ -533,11 +534,11 @@ class KernelApiContractTests(unittest.TestCase):
             indexes.mkdir(parents=True, exist_ok=True)
 
             artifacts = {
-                processed / "papers.json": 1710000000,
-                processed / "paper_summary.json": 1710000000,
-                indexes / "bm25_index.json": 1710000000,
-                indexes / "vec_index.json": 1710000000,
-                indexes / "vec_index_embed.json": 1710000000,
+                processed / "chunks.jsonl": 1710000000,
+                processed / "chunks_clean.jsonl": 1710000020,
+                indexes / "bm25_index.json": 1710000010,
+                indexes / "vec_index.json": 1710000025,
+                indexes / "vec_index_embed.json": 1710000030,
             }
             for path, ts in artifacts.items():
                 path.write_text("{}", encoding="utf-8")
@@ -549,8 +550,8 @@ class KernelApiContractTests(unittest.TestCase):
                     ("indexes:bmp25", indexes / "bm25_index.json", "bm25-index", "index"),
                     ("indexes:vec", indexes / "vec_index.json", "vector-index", "index"),
                     ("indexes:embed", indexes / "vec_index_embed.json", "embedding-index", "index"),
-                    ("processed:papers", processed / "papers.json", "papers-catalog", "import"),
-                    ("processed:paper_summary", processed / "paper_summary.json", "paper-summary", "clean"),
+                    ("processed:chunks", processed / "chunks.jsonl", "chunks", "import"),
+                    ("processed:chunks_clean", processed / "chunks_clean.jsonl", "clean-chunks", "clean"),
                 ),
             ):
                 items = _build_marker_artifacts(
@@ -561,7 +562,13 @@ class KernelApiContractTests(unittest.TestCase):
                     }
                 )
 
-            self.assertTrue(all(item.status == "healthy" for item in items))
+            by_key = {item.key: item for item in items}
+            self.assertEqual(by_key["processed:chunks"].status, "healthy")
+            self.assertEqual(by_key["processed:chunks_clean"].status, "healthy")
+            self.assertEqual(by_key["indexes:bmp25"].status, "stale")
+            self.assertEqual(by_key["indexes:bmp25"].health_message, "产物早于上游依赖，建议检查是否需要重建")
+            self.assertEqual(by_key["indexes:vec"].status, "healthy")
+            self.assertEqual(by_key["indexes:embed"].status, "healthy")
 
     def test_library_import_task_runs_in_background(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
