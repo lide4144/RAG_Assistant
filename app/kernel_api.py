@@ -286,6 +286,13 @@ _ARTIFACT_INDEX = (
     ("processed:paper_summary", DATA_DIR / "processed" / "paper_summary.json", "paper-summary", "clean"),
     ("processed:graph", DATA_DIR / "processed" / "graph.json", "graph", "graph_build"),
 )
+_ARTIFACT_DEPENDENCIES: dict[str, tuple[str, ...]] = {
+    "processed:chunks_clean": ("processed:chunks",),
+    "indexes:bmp25": ("processed:chunks_clean",),
+    "indexes:vec": ("processed:chunks_clean",),
+    "indexes:embed": ("processed:chunks_clean",),
+    "processed:graph": ("processed:chunks_clean",),
+}
 
 
 class TaskCancelResponse(BaseModel):
@@ -1519,43 +1526,37 @@ def _collect_stage_updated_at(
 def _artifact_status_from_path(
     path: Path,
     *,
-    related_stage_latest_at: str | None = None,
+    dependency_paths: tuple[Path, ...] = (),
 ) -> tuple[str, str | None, int | None, str | None]:
     if not path.exists():
         return "missing", "文件不存在", None, None
     updated_at = datetime.fromtimestamp(path.stat().st_mtime, timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
     size_bytes = int(path.stat().st_size)
-    anchor_dt = _parse_iso_utc(related_stage_latest_at)
     file_dt = _parse_iso_utc(updated_at)
-    if anchor_dt is not None and file_dt is not None and file_dt < anchor_dt:
-        return "stale", "产物早于最近一次运行，建议检查是否需要重建", size_bytes, updated_at
+    if file_dt is not None:
+        for dependency_path in dependency_paths:
+            if not dependency_path.exists():
+                continue
+            dependency_updated_at = datetime.fromtimestamp(dependency_path.stat().st_mtime, timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
+            dependency_dt = _parse_iso_utc(dependency_updated_at)
+            if dependency_dt is not None and file_dt < dependency_dt:
+                return "stale", "产物早于上游依赖，建议检查是否需要重建", size_bytes, updated_at
     return "healthy", "产物可用", size_bytes, updated_at
 
 
 def _build_marker_artifacts(*, latest_updated_at: str | None = None, stage_updated_at: dict[str, str] | None = None) -> list[MarkerArtifactEntryResponse]:
     artifacts: list[MarkerArtifactEntryResponse] = []
-    effective_stage_updated_at = stage_updated_at or _collect_stage_updated_at(latest_updated_at=latest_updated_at)
-    stage_latest_artifact_at: dict[str, str] = {}
-    for _key, path, _artifact_type, related_stage in _ARTIFACT_INDEX:
-        if not path.exists():
-            continue
-        updated_at = datetime.fromtimestamp(path.stat().st_mtime, timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
-        current = stage_latest_artifact_at.get(related_stage)
-        if current is None:
-            stage_latest_artifact_at[related_stage] = updated_at
-            continue
-        current_dt = _parse_iso_utc(current)
-        updated_dt = _parse_iso_utc(updated_at)
-        if current_dt is None or (updated_dt is not None and updated_dt > current_dt):
-            stage_latest_artifact_at[related_stage] = updated_at
+    path_by_key = {key: path for key, path, _artifact_type, _related_stage in _ARTIFACT_INDEX}
     for key, path, artifact_type, related_stage in _ARTIFACT_INDEX:
         group = "indexes" if key.startswith("indexes:") else "processed"
-        # Prefer the newest real artifact timestamp for the same stage so a
-        # synthetic pipeline stage time does not mark unchanged files as stale.
-        anchor_updated_at = stage_latest_artifact_at.get(related_stage) or effective_stage_updated_at.get(related_stage)
+        dependency_paths = tuple(
+            dependency_path
+            for dependency_key in _ARTIFACT_DEPENDENCIES.get(key, ())
+            if (dependency_path := path_by_key.get(dependency_key)) is not None
+        )
         status, health_message, size_bytes, updated_at = _artifact_status_from_path(
             path,
-            related_stage_latest_at=anchor_updated_at,
+            dependency_paths=dependency_paths,
         )
         artifacts.append(
             MarkerArtifactEntryResponse(
