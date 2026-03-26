@@ -42,6 +42,7 @@ from app.pipeline_runtime_config import (
 )
 from app.paths import CONFIGS_DIR, DATA_DIR, RUNS_DIR
 from app.planner_runtime_config import (
+    evaluate_planner_service_state,
     load_planner_runtime_config,
     mask_planner_runtime_secrets,
     resolve_effective_planner_runtime,
@@ -188,7 +189,8 @@ class AdminSavePipelineConfigRequest(BaseModel):
 
 
 class AdminSavePlannerConfigRequest(BaseModel):
-    use_llm: bool = False
+    service_mode: Literal["production", "diagnostic"] = "production"
+    use_llm: bool | None = None
     provider: str = Field(min_length=1)
     api_base: str = Field(min_length=1)
     api_key: str | None = None
@@ -893,6 +895,9 @@ def _run_planner_runtime_once(
 def _run_planner_shell_once(
     payload: KernelChatRequest, on_stream_delta: Callable[[str], None] | None = None
 ) -> KernelChatResponse:
+    _, _, planner_state = _load_planner_config_state(payload.configPath or (CONFIGS_DIR / "default.yaml"))
+    if not bool(planner_state.get("formal_chat_available")):
+        raise HTTPException(status_code=503, detail=_planner_block_detail(planner_state))
     return _run_planner_runtime_once(payload, on_stream_delta)
 
 
@@ -1188,6 +1193,34 @@ def _build_planner_streaming_chat_response(payload: KernelChatRequest) -> Stream
 
         def worker() -> None:
             try:
+                _, _, planner_state = _load_planner_config_state(payload.configPath or (CONFIGS_DIR / "default.yaml"))
+                if not bool(planner_state.get("formal_chat_available")):
+                    queue.put(
+                        {
+                            "event": "serviceBlocked",
+                            "data": {
+                                "type": "serviceBlocked",
+                                "traceId": trace_id,
+                                "mode": payload.mode,
+                                "timestamp": _agent_event_timestamp(),
+                                "reasonCode": planner_state.get("reason_code"),
+                                "message": planner_state.get("reason_message"),
+                                "serviceMode": planner_state.get("service_mode"),
+                            },
+                        }
+                    )
+                    queue.put(
+                        {
+                            "event": "error",
+                            "data": {
+                                "type": "error",
+                                "traceId": trace_id,
+                                "code": "PLANNER_SYSTEM_BLOCKED",
+                                "message": planner_state.get("reason_message") or "Planner Runtime 当前不可服务。",
+                            },
+                        }
+                    )
+                    return
                 result = run_planner_runtime(
                     payload,
                     fact_qa_executor=_planner_runtime_route_executor,
@@ -1614,6 +1647,7 @@ def _extract_parser_diagnostics(payload: dict[str, Any]) -> list[dict[str, Any]]
 def _build_runtime_status(
     *,
     llm: dict[str, Any],
+    planner: dict[str, Any],
     marker_source: dict[str, str],
     marker_warnings: list[str],
     marker_llm: dict[str, Any],
@@ -1624,6 +1658,9 @@ def _build_runtime_status(
     answer = llm.get("answer", {})
     if not isinstance(answer, dict) or not bool(answer.get("configured")):
         reasons.append("answer stage is not configured")
+        return "BLOCKED", reasons
+    if not isinstance(planner, dict) or not bool(planner.get("formal_chat_available")):
+        reasons.append(str(planner.get("block_reason_message") or planner.get("block_reason_code") or "planner runtime is blocked"))
         return "BLOCKED", reasons
 
     for stage in ("rerank", "rewrite"):
@@ -2466,9 +2503,28 @@ def _stage_health_entry(*, stage: str, provider: str, model: str, reason: str | 
     return payload
 
 
+def _load_planner_config_state(config_path: str | Path | None = None) -> tuple[Any, list[str], dict[str, Any]]:
+    cfg, warnings = load_and_validate_config(config_path or (CONFIGS_DIR / "default.yaml"))
+    planner_state = evaluate_planner_service_state(cfg)
+    return cfg, warnings, planner_state
+
+
+def _planner_block_detail(planner_state: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "code": "PLANNER_SYSTEM_BLOCKED",
+        "message": str(planner_state.get("reason_message") or "Planner Runtime 当前不可服务。"),
+        "planner": {
+            "service_mode": planner_state.get("service_mode"),
+            "reason_code": planner_state.get("reason_code"),
+            "formal_chat_available": bool(planner_state.get("formal_chat_available")),
+            "blocked": bool(planner_state.get("blocked")),
+        },
+    }
+
+
 @app.get("/health/deps")
 def health_deps() -> dict[str, Any]:
-    cfg, warnings = load_and_validate_config(CONFIGS_DIR / "default.yaml")
+    cfg, warnings, planner_state = _load_planner_config_state(CONFIGS_DIR / "default.yaml")
     _ = warnings
 
     answer_policy = build_stage_policy(cfg, stage="answer")
@@ -2526,6 +2582,18 @@ def health_deps() -> dict[str, Any]:
             model=rerank_policy.primary.model,
             reason=rerank_reason,
         ),
+        "planner": {
+            "status": "blocked" if planner_state["blocked"] else ("ok" if planner_state["formal_chat_available"] else "inactive"),
+            "provider": planner_state["provider"],
+            "model": planner_state["model"],
+            "service_mode": planner_state["service_mode"],
+            "configured": planner_state["configured"],
+            "blocked": planner_state["blocked"],
+            "reason_code": planner_state["reason_code"],
+            "reason_message": planner_state["reason_message"],
+            "formal_chat_available": planner_state["formal_chat_available"],
+            "checked_at": _iso_now(),
+        },
     }
     response["rerank"]["passthrough_mode"] = bool(rerank_passthrough_mode)
     response["rerank"]["recent_failure_reason"] = rerank_reason if rerank_passthrough_mode else None
@@ -2747,6 +2815,7 @@ def get_admin_planner_config() -> dict[str, Any]:
     if cfg is None:
         return {"configured": False}
     payload = mask_planner_runtime_secrets(cfg)
+    payload["service_mode"] = cfg.service_mode
     payload["configured"] = True
     return payload
 
@@ -2755,7 +2824,7 @@ def get_admin_planner_config() -> dict[str, Any]:
 def save_admin_planner_config(payload: AdminSavePlannerConfigRequest) -> dict[str, Any]:
     try:
         saved = save_planner_runtime_config(
-            use_llm=payload.use_llm,
+            service_mode=payload.service_mode,
             provider=str(payload.provider or "").strip(),
             api_base=_normalize_admin_api_base(str(payload.api_base or "")),
             api_key=str(payload.api_key or ""),
@@ -2766,7 +2835,7 @@ def save_admin_planner_config(payload: AdminSavePlannerConfigRequest) -> dict[st
         raise HTTPException(status_code=400, detail={"code": "INVALID_PARAMS", "message": str(exc), "stage": "planner"}) from exc
     except Exception as exc:  # pragma: no cover - defensive
         raise HTTPException(status_code=500, detail={"code": "CONFIG_SAVE_FAILED", "message": str(exc)}) from exc
-    return {"ok": True, "config": {"configured": True, **mask_planner_runtime_secrets(saved)}}
+    return {"ok": True, "config": {"configured": True, **mask_planner_runtime_secrets(saved), "service_mode": saved.service_mode}}
 
 
 @app.post("/api/admin/pipeline-config")
@@ -2883,13 +2952,19 @@ def get_runtime_overview() -> dict[str, Any]:
         raw_data=raw_data,
         runtime_cfg=planner_cfg,
     )
+    planner_state = evaluate_planner_service_state(effective_planner, api_key=effective_planner.api_key)
     planner = {
-        "use_llm": effective_planner.use_llm,
+        "service_mode": planner_state["service_mode"],
         "provider": effective_planner.provider,
         "api_base": effective_planner.api_base,
         "model": effective_planner.model,
         "timeout_ms": effective_planner.timeout_ms,
-        "configured": bool(effective_planner.model and effective_planner.api_base and (effective_planner.api_key or not effective_planner.use_llm)),
+        "configured": bool(planner_state["configured"]),
+        "llm_required": bool(planner_state["llm_required"]),
+        "formal_chat_available": bool(planner_state["formal_chat_available"]),
+        "blocked": bool(planner_state["blocked"]),
+        "block_reason_code": planner_state["reason_code"],
+        "block_reason_message": planner_state["reason_message"],
         "source": planner_source.get("model", "default"),
         "source_label": runtime_source_label(planner_source.get("model", "default")),
         "effective_source": planner_source,
@@ -2901,6 +2976,7 @@ def get_runtime_overview() -> dict[str, Any]:
     artifact_summary = latest_import.artifact_summary if latest_import.updated_at else {"counts": {}}
     status_level, reasons = _build_runtime_status(
         llm=llm,
+        planner=planner,
         marker_source=effective.source,
         marker_warnings=effective_stage_llm.warnings + planner_warnings + effective.warnings + effective_llm.warnings + config_warnings,
         marker_llm=marker_llm_entry,
@@ -3316,6 +3392,8 @@ def qa_stream(payload: KernelChatRequest) -> StreamingResponse:
 def planner_qa(payload: KernelChatRequest) -> KernelChatResponse:
     try:
         return _run_planner_shell_once(payload)
+    except HTTPException:
+        raise
     except FileNotFoundError as exc:
         raise HTTPException(status_code=500, detail={"code": "KERNEL_BAD_RESPONSE", "message": str(exc)}) from exc
     except Exception as exc:  # pragma: no cover - defensive

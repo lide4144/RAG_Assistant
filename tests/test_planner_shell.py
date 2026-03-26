@@ -875,9 +875,9 @@ class PlannerShellTests(unittest.TestCase):
         self.assertEqual(result["observation"]["planner_source_mode"], "shadow_compare")
         self.assertEqual(result["observation"]["planner_execution_source"], "fallback")
         self.assertEqual(result["observation"]["selected_path"], "controlled_terminate")
-        self.assertEqual(result["observation"]["planner_llm_diagnostics"]["reason"], "planner_llm_disabled")
+        self.assertEqual(result["observation"]["planner_llm_diagnostics"]["reason"], "planner_legacy_disabled")
         self.assertEqual(result["observation"]["planner_validation"]["status"], "reject")
-        self.assertIn("planner_llm_disabled", result["observation"]["planner_validation"]["reason_codes"])
+        self.assertIn("planner_legacy_disabled", result["observation"]["planner_validation"]["reason_codes"])
 
     def test_llm_primary_mode_rejects_raw_schema_before_normalization(self) -> None:
         invalid_llm_decision = {

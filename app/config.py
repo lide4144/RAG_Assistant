@@ -9,7 +9,7 @@ import yaml
 
 from app.admin_llm_config import load_runtime_llm_config
 from app.config_governance import resolve_effective_llm_stages
-from app.planner_runtime_config import load_planner_runtime_config, resolve_effective_planner_runtime
+from app.planner_runtime_config import PLANNER_RUNTIME_API_KEY_ENV, load_planner_runtime_config, resolve_effective_planner_runtime
 
 DEFAULT_CONFIG_PATH = Path("configs/default.yaml")
 RUNTIME_LLM_API_KEY_ENV = "RAG_RUNTIME_LLM_API_KEY"
@@ -163,7 +163,9 @@ class PipelineConfig:
     style_control_reuse_last_topic: bool = True
     style_control_max_turn_distance: int = 3
     planner_enabled: bool = True
-    planner_use_llm: bool = False
+    planner_service_mode: str = "production"
+    planner_use_llm: bool = True
+    planner_legacy_use_llm: bool | None = None
     planner_provider: str = "siliconflow"
     planner_model: str = "Pro/deepseek-ai/DeepSeek-V3.2"
     planner_api_base: str = "https://api.siliconflow.cn/v1"
@@ -1135,12 +1137,14 @@ def load_and_validate_config(path: str | Path = DEFAULT_CONFIG_PATH) -> tuple[Pi
         runtime_cfg=planner_runtime_cfg if planner_runtime_err is None else None,
     )
     warnings.extend(planner_warnings)
-    merged.planner_use_llm = planner_effective.use_llm
+    merged.planner_service_mode = planner_effective.service_mode
+    merged.planner_use_llm = planner_effective.service_mode != "diagnostic"
+    merged.planner_legacy_use_llm = planner_effective.legacy_use_llm
     merged.planner_provider = planner_effective.provider
     merged.planner_api_base = planner_effective.api_base
-    merged.planner_api_key_env = "PLANNER_RUNTIME_API_KEY" if planner_effective.api_key else merged.planner_api_key_env
+    merged.planner_api_key_env = PLANNER_RUNTIME_API_KEY_ENV if planner_effective.api_key else merged.planner_api_key_env
     if planner_effective.api_key:
-        os.environ["PLANNER_RUNTIME_API_KEY"] = planner_effective.api_key
+        os.environ[PLANNER_RUNTIME_API_KEY_ENV] = planner_effective.api_key
     merged.planner_model = planner_effective.model
     merged.planner_timeout_ms = planner_effective.timeout_ms
 

@@ -3,8 +3,9 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 import json
+import os
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from app.admin_llm_config import mask_api_key, normalize_api_base
 from app.config_governance import PLANNER_RUNTIME_FIELD_GOVERNANCE
@@ -12,11 +13,21 @@ from app.paths import CONFIGS_DIR
 
 
 PLANNER_RUNTIME_CONFIG_PATH = CONFIGS_DIR / "planner_runtime_config.json"
+PlannerServiceMode = Literal["production", "diagnostic"]
+PLANNER_RUNTIME_API_KEY_ENV = "PLANNER_RUNTIME_API_KEY"
+PLANNER_BLOCKED_REASON_MESSAGES: dict[str, str] = {
+    "planner_diagnostic_mode": "Planner Runtime 当前处于诊断模式，正式聊天入口不可用。",
+    "planner_legacy_disabled": "检测到历史 planner_use_llm=false 配置，正式模式已将其视为阻断。",
+    "planner_model_missing": "Planner Runtime 缺少模型配置，正式聊天入口不可用。",
+    "planner_api_key_missing": "Planner Runtime 缺少 API Key，正式聊天入口不可用。",
+    "planner_invalid_service_mode": "Planner Runtime service_mode 非法，正式聊天入口不可用。",
+}
 
 
 @dataclass(frozen=True)
 class PlannerRuntimeConfig:
-    use_llm: bool
+    service_mode: PlannerServiceMode
+    legacy_use_llm: bool | None
     provider: str
     api_base: str
     api_key: str
@@ -31,7 +42,8 @@ def _utc_now_iso() -> str:
 
 def default_planner_runtime_config() -> PlannerRuntimeConfig:
     return PlannerRuntimeConfig(
-        use_llm=False,
+        service_mode="production",
+        legacy_use_llm=None,
         provider="siliconflow",
         api_base="https://api.siliconflow.cn/v1",
         api_key="",
@@ -54,6 +66,30 @@ def _coerce_bool(value: Any) -> bool:
     raise ValueError("use_llm must be a boolean")
 
 
+def _coerce_service_mode(value: Any) -> PlannerServiceMode:
+    text = str(value or "").strip().lower()
+    if text in {"", "production"}:
+        return "production"
+    if text == "diagnostic":
+        return "diagnostic"
+    raise ValueError("service_mode must be production or diagnostic")
+
+
+def _coerce_legacy_use_llm(value: Any) -> bool | None:
+    if value is None:
+        return None
+    return _coerce_bool(value)
+
+
+def _compat_service_mode_from_payload(payload: dict[str, Any], defaults: PlannerRuntimeConfig) -> PlannerServiceMode:
+    if "service_mode" in payload:
+        return _coerce_service_mode(payload.get("service_mode", defaults.service_mode))
+    legacy_use_llm = _coerce_legacy_use_llm(payload.get("use_llm"))
+    if legacy_use_llm is False:
+        return "diagnostic"
+    return defaults.service_mode
+
+
 def _coerce_timeout(value: Any) -> int:
     if isinstance(value, bool):
         raise ValueError("timeout_ms must be an integer")
@@ -73,7 +109,8 @@ def validate_planner_runtime_payload(payload: Any) -> PlannerRuntimeConfig:
     if not isinstance(payload, dict):
         raise ValueError("planner runtime payload must be a JSON object")
     defaults = default_planner_runtime_config()
-    use_llm = _coerce_bool(payload.get("use_llm", defaults.use_llm))
+    service_mode = _compat_service_mode_from_payload(payload, defaults)
+    legacy_use_llm = _coerce_legacy_use_llm(payload.get("use_llm"))
     provider = str(payload.get("provider", defaults.provider) or "").strip() or defaults.provider
     api_base = normalize_api_base(str(payload.get("api_base", defaults.api_base) or defaults.api_base))
     api_key = str(payload.get("api_key", "") or "").strip()
@@ -81,11 +118,10 @@ def validate_planner_runtime_payload(payload: Any) -> PlannerRuntimeConfig:
     timeout_ms = _coerce_timeout(payload.get("timeout_ms", defaults.timeout_ms))
     if not model:
         raise ValueError("planner.model is required")
-    if use_llm and not api_key:
-        raise ValueError("planner.api_key is required when use_llm is enabled")
     updated_at = str(payload.get("updated_at", "") or "").strip() or _utc_now_iso()
     return PlannerRuntimeConfig(
-        use_llm=use_llm,
+        service_mode=service_mode,
+        legacy_use_llm=legacy_use_llm,
         provider=provider,
         api_base=api_base,
         api_key=api_key,
@@ -97,7 +133,7 @@ def validate_planner_runtime_payload(payload: Any) -> PlannerRuntimeConfig:
 
 def save_planner_runtime_config(
     *,
-    use_llm: bool,
+    service_mode: PlannerServiceMode,
     provider: str,
     api_base: str,
     api_key: str,
@@ -106,7 +142,7 @@ def save_planner_runtime_config(
     path: Path | None = None,
 ) -> PlannerRuntimeConfig:
     payload = {
-        "use_llm": use_llm,
+        "service_mode": service_mode,
         "provider": provider,
         "api_base": api_base,
         "api_key": api_key,
@@ -146,7 +182,7 @@ def resolve_effective_planner_runtime(
     warnings: list[str] = []
 
     def _select(field: str, default_value: Any, normalize: callable) -> Any:
-        rule = PLANNER_RUNTIME_FIELD_GOVERNANCE[field]
+        rule = PLANNER_RUNTIME_FIELD_GOVERNANCE.get(field)
         env_var = rule.env_var
         if rule.allow_env_override and env_var:
             env_value = str(__import__("os").environ.get(env_var, "") or "").strip()
@@ -162,7 +198,7 @@ def resolve_effective_planner_runtime(
                 return normalize(runtime_payload[field])
             except Exception as exc:
                 warnings.append(f"Planner runtime config ignored for {field}: {exc}")
-        raw_key = "planner_use_llm" if field == "use_llm" else f"planner_{field}"
+        raw_key = f"planner_{field}"
         if raw_key in raw_data:
             try:
                 source[field] = "default"
@@ -172,8 +208,31 @@ def resolve_effective_planner_runtime(
         source[field] = "default"
         return normalize(default_value)
 
+    legacy_use_llm: bool | None = None
+    legacy_source = "default"
+    if runtime_cfg is not None and runtime_cfg.legacy_use_llm is not None:
+        legacy_use_llm = runtime_cfg.legacy_use_llm
+        legacy_source = "runtime"
+    elif "planner_use_llm" in raw_data:
+        try:
+            legacy_use_llm = _coerce_bool(raw_data.get("planner_use_llm"))
+        except Exception as exc:
+            warnings.append(f"Planner default config ignored for planner_use_llm: {exc}")
+        else:
+            legacy_source = "default"
+    env_legacy = str(os.environ.get("PLANNER_USE_LLM", "") or "").strip()
+    if env_legacy:
+        try:
+            legacy_use_llm = _coerce_bool(env_legacy)
+        except Exception as exc:
+            warnings.append(f"Planner env override ignored for planner_use_llm: {exc}")
+        else:
+            legacy_source = "env"
+    source["legacy_use_llm"] = legacy_source
+
     effective = PlannerRuntimeConfig(
-        use_llm=_select("use_llm", defaults.use_llm, _coerce_bool),
+        service_mode=_select("service_mode", defaults.service_mode, _coerce_service_mode),
+        legacy_use_llm=legacy_use_llm,
         provider=_select("provider", str(raw_data.get("planner_provider", defaults.provider) or defaults.provider), lambda value: str(value or "").strip() or defaults.provider),
         api_base=_select("api_base", str(raw_data.get("planner_api_base", defaults.api_base) or defaults.api_base), lambda value: normalize_api_base(str(value or "").strip() or defaults.api_base)),
         api_key=_select("api_key", "", lambda value: str(value or "").strip()),
@@ -181,6 +240,8 @@ def resolve_effective_planner_runtime(
         timeout_ms=_select("timeout_ms", int(raw_data.get("planner_timeout_ms", defaults.timeout_ms) or defaults.timeout_ms), _coerce_timeout),
         updated_at=runtime_cfg.updated_at if runtime_cfg is not None else defaults.updated_at,
     )
+    if effective.legacy_use_llm is False:
+        warnings.append("检测到历史 planner_use_llm=false；正式模式下该配置将被视为阻断，请迁移到 planner_service_mode=diagnostic。")
     return effective, source, warnings
 
 
@@ -189,3 +250,56 @@ def mask_planner_runtime_secrets(values: PlannerRuntimeConfig | dict[str, Any]) 
     payload["api_key_masked"] = mask_api_key(str(payload.get("api_key", "") or ""))
     payload.pop("api_key", None)
     return payload
+
+
+def evaluate_planner_service_state(
+    cfg: Any,
+    *,
+    api_key: str | None = None,
+) -> dict[str, Any]:
+    service_mode_raw = getattr(cfg, "planner_service_mode", getattr(cfg, "service_mode", "production"))
+    try:
+        service_mode = _coerce_service_mode(service_mode_raw)
+    except ValueError:
+        service_mode = "production"
+        invalid_mode = True
+    else:
+        invalid_mode = False
+    legacy_use_llm = getattr(
+        cfg,
+        "planner_legacy_use_llm",
+        getattr(cfg, "legacy_use_llm", getattr(cfg, "planner_use_llm", None)),
+    )
+    model = str(getattr(cfg, "planner_model", getattr(cfg, "model", "")) or "").strip()
+    provider = str(getattr(cfg, "planner_provider", getattr(cfg, "provider", "")) or "").strip()
+    api_base = str(getattr(cfg, "planner_api_base", getattr(cfg, "api_base", "")) or "").strip()
+    api_key_env = str(getattr(cfg, "planner_api_key_env", PLANNER_RUNTIME_API_KEY_ENV) or "").strip()
+    resolved_api_key = str(api_key if api_key is not None else os.getenv(api_key_env, "")).strip()
+    reason_code: str | None = None
+    if invalid_mode:
+        reason_code = "planner_invalid_service_mode"
+    elif service_mode == "diagnostic":
+        reason_code = "planner_diagnostic_mode"
+    elif legacy_use_llm is False:
+        reason_code = "planner_legacy_disabled"
+    elif not model:
+        reason_code = "planner_model_missing"
+    elif not resolved_api_key:
+        reason_code = "planner_api_key_missing"
+    blocked = reason_code is not None and service_mode == "production"
+    formal_chat_available = service_mode == "production" and not blocked
+    return {
+        "service_mode": service_mode,
+        "provider": provider,
+        "api_base": api_base,
+        "model": model,
+        "api_key_env": api_key_env,
+        "api_key_configured": bool(resolved_api_key),
+        "legacy_use_llm": legacy_use_llm,
+        "llm_required": service_mode == "production",
+        "configured": bool(model and api_base and resolved_api_key),
+        "blocked": blocked,
+        "reason_code": reason_code,
+        "reason_message": PLANNER_BLOCKED_REASON_MESSAGES.get(reason_code or "", ""),
+        "formal_chat_available": formal_chat_available,
+    }

@@ -106,7 +106,7 @@ PIPELINE_RUNTIME_FIELD_GOVERNANCE: dict[str, dict[str, ConfigFieldGovernance]] =
 }
 
 PLANNER_RUNTIME_FIELD_GOVERNANCE: dict[str, ConfigFieldGovernance] = {
-    "use_llm": ConfigFieldGovernance("runtime", True, "PLANNER_USE_LLM"),
+    "service_mode": ConfigFieldGovernance("runtime", True, "PLANNER_SERVICE_MODE"),
     "provider": ConfigFieldGovernance("runtime", True, "PLANNER_PROVIDER"),
     "api_base": ConfigFieldGovernance("runtime", True, "PLANNER_API_BASE"),
     "api_key": ConfigFieldGovernance("runtime", True, "PLANNER_API_KEY"),
@@ -142,47 +142,100 @@ def runtime_source_label(source: RuntimeSource) -> str:
     }.get(source, source)
 
 
+def _raw_stage_value(raw_data: dict[str, Any], *, stage: str, field: str, default: str) -> str:
+    key_map = {
+        "answer": {
+            "provider": "answer_llm_provider",
+            "api_base": "answer_llm_api_base",
+            "api_key_env": "answer_llm_api_key_env",
+            "model": "answer_llm_model",
+        },
+        "embedding": {
+            "provider": "embedding_provider",
+            "api_base": "embedding_api_base",
+            "api_key_env": "embedding_api_key_env",
+            "model": "embedding_model",
+        },
+        "rerank": {
+            "provider": "rerank_provider",
+            "api_base": "rerank_api_base",
+            "api_key_env": "rerank_api_key_env",
+            "model": "rerank_model",
+        },
+        "rewrite": {
+            "provider": "rewrite_llm_provider",
+            "api_base": "rewrite_llm_api_base",
+            "api_key_env": "rewrite_llm_api_key_env",
+            "model": "rewrite_llm_model",
+        },
+        "graph_entity": {
+            "provider": "graph_entity_llm_provider",
+            "api_base": "graph_entity_llm_base_url",
+            "api_key_env": "graph_entity_llm_api_key_env",
+            "model": "graph_entity_llm_model",
+        },
+        "sufficiency_judge": {
+            "provider": "sufficiency_judge_llm_provider",
+            "api_base": "sufficiency_judge_llm_api_base",
+            "api_key_env": "sufficiency_judge_llm_api_key_env",
+            "model": "sufficiency_judge_llm_model",
+        },
+    }
+    prefixed_key = key_map[stage][field]
+    prefixed_value = str(raw_data.get(prefixed_key, "") or "").strip()
+    if prefixed_value:
+        return prefixed_value
+
+    legacy_stage = raw_data.get(stage)
+    if isinstance(legacy_stage, dict):
+        legacy_key = "base_url" if field == "api_base" else field
+        legacy_value = str(legacy_stage.get(legacy_key, "") or "").strip()
+        if legacy_value:
+            return legacy_value
+    return default
+
+
 def _runtime_stage_defaults(raw_data: dict[str, Any], *, stage: str) -> EffectiveStageConfig:
     if stage == "answer":
         return EffectiveStageConfig(
-            provider=str(raw_data.get("answer_llm_provider", "siliconflow") or "siliconflow"),
-            api_base=str(raw_data.get("answer_llm_api_base", "https://api.siliconflow.cn/v1") or "https://api.siliconflow.cn/v1"),
-            api_key_env=str(raw_data.get("answer_llm_api_key_env", "SILICONFLOW_API_KEY") or "SILICONFLOW_API_KEY"),
-            model=str(raw_data.get("answer_llm_model", "Pro/deepseek-ai/DeepSeek-V3.2") or "Pro/deepseek-ai/DeepSeek-V3.2"),
+            provider=_raw_stage_value(raw_data, stage="answer", field="provider", default="siliconflow"),
+            api_base=_raw_stage_value(raw_data, stage="answer", field="api_base", default="https://api.siliconflow.cn/v1"),
+            api_key_env=_raw_stage_value(raw_data, stage="answer", field="api_key_env", default="SILICONFLOW_API_KEY"),
+            model=_raw_stage_value(raw_data, stage="answer", field="model", default="Pro/deepseek-ai/DeepSeek-V3.2"),
         )
     if stage == "embedding":
         return EffectiveStageConfig(
-            provider=str(raw_data.get("embedding_provider", "siliconflow") or "siliconflow"),
-            api_base=str(raw_data.get("embedding_api_base", "https://api.siliconflow.cn/v1") or "https://api.siliconflow.cn/v1"),
-            api_key_env=str(raw_data.get("embedding_api_key_env", "SILICONFLOW_API_KEY") or "SILICONFLOW_API_KEY"),
-            model=str(raw_data.get("embedding_model", "BAAI/bge-large-zh-v1.5") or "BAAI/bge-large-zh-v1.5"),
+            provider=_raw_stage_value(raw_data, stage="embedding", field="provider", default="siliconflow"),
+            api_base=_raw_stage_value(raw_data, stage="embedding", field="api_base", default="https://api.siliconflow.cn/v1"),
+            api_key_env=_raw_stage_value(raw_data, stage="embedding", field="api_key_env", default="SILICONFLOW_API_KEY"),
+            model=_raw_stage_value(raw_data, stage="embedding", field="model", default="BAAI/bge-large-zh-v1.5"),
         )
     if stage == "rerank":
         return EffectiveStageConfig(
-            provider=str(raw_data.get("rerank_provider", "siliconflow") or "siliconflow"),
-            api_base=str(raw_data.get("rerank_api_base", "https://api.siliconflow.cn/v1") or "https://api.siliconflow.cn/v1"),
-            api_key_env=str(raw_data.get("rerank_api_key_env", "SILICONFLOW_API_KEY") or "SILICONFLOW_API_KEY"),
-            model=str(raw_data.get("rerank_model", "Qwen/Qwen3-Reranker-8B") or "Qwen/Qwen3-Reranker-8B"),
+            provider=_raw_stage_value(raw_data, stage="rerank", field="provider", default="siliconflow"),
+            api_base=_raw_stage_value(raw_data, stage="rerank", field="api_base", default="https://api.siliconflow.cn/v1"),
+            api_key_env=_raw_stage_value(raw_data, stage="rerank", field="api_key_env", default="SILICONFLOW_API_KEY"),
+            model=_raw_stage_value(raw_data, stage="rerank", field="model", default="Qwen/Qwen3-Reranker-8B"),
         )
     if stage == "rewrite":
         return EffectiveStageConfig(
-            provider=str(raw_data.get("rewrite_llm_provider", "siliconflow") or "siliconflow"),
-            api_base=str(raw_data.get("rewrite_llm_api_base", "https://api.siliconflow.cn/v1") or "https://api.siliconflow.cn/v1"),
-            api_key_env=str(raw_data.get("rewrite_llm_api_key_env", "SILICONFLOW_API_KEY") or "SILICONFLOW_API_KEY"),
-            model=str(raw_data.get("rewrite_llm_model", "Pro/deepseek-ai/DeepSeek-V3.2") or "Pro/deepseek-ai/DeepSeek-V3.2"),
+            provider=_raw_stage_value(raw_data, stage="rewrite", field="provider", default="siliconflow"),
+            api_base=_raw_stage_value(raw_data, stage="rewrite", field="api_base", default="https://api.siliconflow.cn/v1"),
+            api_key_env=_raw_stage_value(raw_data, stage="rewrite", field="api_key_env", default="SILICONFLOW_API_KEY"),
+            model=_raw_stage_value(raw_data, stage="rewrite", field="model", default="Pro/deepseek-ai/DeepSeek-V3.2"),
         )
     if stage == "sufficiency_judge":
         return EffectiveStageConfig(
-            provider=str(raw_data.get("sufficiency_judge_llm_provider", "siliconflow") or "siliconflow"),
-            api_base=str(raw_data.get("sufficiency_judge_llm_api_base", "https://api.siliconflow.cn/v1") or "https://api.siliconflow.cn/v1"),
-            api_key_env=str(raw_data.get("sufficiency_judge_llm_api_key_env", "SILICONFLOW_API_KEY") or "SILICONFLOW_API_KEY"),
-            model=str(raw_data.get("sufficiency_judge_llm_model", "Qwen/Qwen2.5-7B-Instruct") or "Qwen/Qwen2.5-7B-Instruct"),
+            provider=_raw_stage_value(raw_data, stage="sufficiency_judge", field="provider", default="siliconflow"),
+            api_base=_raw_stage_value(raw_data, stage="sufficiency_judge", field="api_base", default="https://api.siliconflow.cn/v1"),
+            api_key_env=_raw_stage_value(raw_data, stage="sufficiency_judge", field="api_key_env", default="SILICONFLOW_API_KEY"),
+            model=_raw_stage_value(raw_data, stage="sufficiency_judge", field="model", default="Qwen/Qwen2.5-7B-Instruct"),
         )
     return EffectiveStageConfig(
-        provider=str(raw_data.get("graph_entity_llm_provider", "siliconflow") or "siliconflow"),
-        api_base=str(raw_data.get("graph_entity_llm_base_url", "https://api.siliconflow.cn/v1") or "https://api.siliconflow.cn/v1"),
-        api_key_env=str(raw_data.get("graph_entity_llm_api_key_env", "SILICONFLOW_API_KEY") or "SILICONFLOW_API_KEY"),
-        model=str(raw_data.get("graph_entity_llm_model", "Pro/deepseek-ai/DeepSeek-V3.2") or "Pro/deepseek-ai/DeepSeek-V3.2"),
+        provider=_raw_stage_value(raw_data, stage="graph_entity", field="provider", default="siliconflow"),
+        api_base=_raw_stage_value(raw_data, stage="graph_entity", field="api_base", default="https://api.siliconflow.cn/v1"),
+        api_key_env=_raw_stage_value(raw_data, stage="graph_entity", field="api_key_env", default="SILICONFLOW_API_KEY"),
+        model=_raw_stage_value(raw_data, stage="graph_entity", field="model", default="Pro/deepseek-ai/DeepSeek-V3.2"),
     )
 
 

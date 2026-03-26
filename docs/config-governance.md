@@ -42,12 +42,13 @@
 
 | 字段组 | Owner | 默认来源 | Runtime 持久化 | 显式 env 覆盖 |
 | --- | --- | --- | --- | --- |
-| `planner.use_llm/provider/api_base/model/api_key/timeout_ms` | `runtime` | `default.yaml` | `configs/planner_runtime_config.json` | `PLANNER_*` |
+| `planner.service_mode/provider/api_base/model/api_key/timeout_ms` | `runtime` | `default.yaml` | `configs/planner_runtime_config.json` | `PLANNER_*` |
 
 说明：
 
 - `planner` 属于顶层规划器配置，虽然进入前端可管理范围，但必须以独立高风险面板暴露，不能混入普通 stage 卡片。
 - `planner.api_key` 落盘后会被注入 `PLANNER_RUNTIME_API_KEY` 供 Python planner runtime 读取。
+- 历史 `planner_use_llm` 仅作为兼容输入读取，不再属于正式 runtime 配置面。
 
 ### 2.4 静态基线字段示例
 

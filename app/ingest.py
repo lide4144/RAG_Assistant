@@ -749,8 +749,25 @@ def run_ingest(args: argparse.Namespace) -> int:
     parser_observability: list[dict[str, Any]] = []
     structure_entries: list[dict[str, Any]] = []
     marker_ready, marker_preflight_stage, marker_preflight_reason = _marker_preflight_check(config)
+    progress_callback = getattr(args, "progress_callback", None)
+    pdf_total = len(pdf_paths)
+    pdf_completed = 0
 
-    for pdf_path in pdf_paths:
+    def _emit_progress(event: dict[str, Any]) -> None:
+        if callable(progress_callback):
+            progress_callback(event)
+
+    for pdf_index, pdf_path in enumerate(pdf_paths, start=1):
+        _emit_progress(
+            {
+                "event": "pdf_started",
+                "paper_name": pdf_path.name,
+                "paper_index": pdf_index,
+                "pdf_total": pdf_total,
+                "pdf_completed": pdf_completed,
+                "pdf_failed": len(paper_failures),
+            }
+        )
         stable_paper_id, fingerprint = stable_pdf_paper_id(pdf_path)
         legacy_paper_id = make_paper_id(pdf_path)
         try:
@@ -763,11 +780,37 @@ def run_ingest(args: argparse.Namespace) -> int:
             )
         except Exception as exc:
             paper_failures.append(f"{pdf_path.name}: {exc}")
+            pdf_completed += 1
+            _emit_progress(
+                {
+                    "event": "pdf_finished",
+                    "paper_name": pdf_path.name,
+                    "paper_index": pdf_index,
+                    "pdf_total": pdf_total,
+                    "pdf_completed": pdf_completed,
+                    "pdf_failed": len(paper_failures),
+                    "status": "failed",
+                    "reason": str(exc),
+                }
+            )
             continue
 
         parse_errors.extend(parsed_pdf.page_errors)
         if not parsed_pdf.pages:
             paper_failures.append(f"{pdf_path.name}: no readable pages")
+            pdf_completed += 1
+            _emit_progress(
+                {
+                    "event": "pdf_finished",
+                    "paper_name": pdf_path.name,
+                    "paper_index": pdf_index,
+                    "pdf_total": pdf_total,
+                    "pdf_completed": pdf_completed,
+                    "pdf_failed": len(paper_failures),
+                    "status": "failed",
+                    "reason": "no readable pages",
+                }
+            )
             continue
 
         title_decision = choose_best_title(
@@ -790,6 +833,19 @@ def run_ingest(args: argparse.Namespace) -> int:
         chunks = build_chunks(**chunk_kwargs)
         if not chunks:
             paper_failures.append(f"{pdf_path.name}: no chunks generated")
+            pdf_completed += 1
+            _emit_progress(
+                {
+                    "event": "pdf_finished",
+                    "paper_name": pdf_path.name,
+                    "paper_index": pdf_index,
+                    "pdf_total": pdf_total,
+                    "pdf_completed": pdf_completed,
+                    "pdf_failed": len(paper_failures),
+                    "status": "failed",
+                    "reason": "no chunks generated",
+                }
+            )
             continue
         structure_entry = _build_structure_entry(
             paper_id=stable_paper_id,
@@ -917,6 +973,19 @@ def run_ingest(args: argparse.Namespace) -> int:
                 chunks=chunks,
                 structure_entry=structure_entry,
             )
+        )
+        pdf_completed += 1
+        _emit_progress(
+            {
+                "event": "pdf_finished",
+                "paper_name": pdf_path.name,
+                "paper_index": pdf_index,
+                "pdf_total": pdf_total,
+                "pdf_completed": pdf_completed,
+                "pdf_failed": len(paper_failures),
+                "status": "parsed",
+                "reason": parsed_pdf.parser_engine,
+            }
         )
 
     for url in urls:

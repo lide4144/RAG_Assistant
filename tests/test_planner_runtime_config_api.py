@@ -21,7 +21,7 @@ class PlannerRuntimeConfigApiTests(unittest.TestCase):
             with patch("app.planner_runtime_config.PLANNER_RUNTIME_CONFIG_PATH", runtime_path):
                 saved = save_admin_planner_config(
                     AdminSavePlannerConfigRequest(
-                        use_llm=True,
+                        service_mode="production",
                         provider="openai",
                         api_base="https://planner.example.com/v1",
                         api_key="sk-planner",
@@ -31,6 +31,7 @@ class PlannerRuntimeConfigApiTests(unittest.TestCase):
                 )
                 loaded = get_admin_planner_config()
         self.assertTrue(saved["ok"])
+        self.assertEqual(saved["config"]["service_mode"], "production")
         self.assertEqual(saved["config"]["provider"], "openai")
         self.assertEqual(saved["config"]["model"], "gpt-4.1-mini")
         self.assertIn("***", saved["config"]["api_key_masked"])
@@ -43,7 +44,7 @@ class PlannerRuntimeConfigApiTests(unittest.TestCase):
             cfg_path.write_text("planner_use_llm: false\nplanner_model: baseline-model\n", encoding="utf-8")
             runtime_path = Path(tmp) / "planner_runtime_config.json"
             runtime_path.write_text(
-                '{"use_llm":true,"provider":"openai","api_base":"https://planner.example.com/v1","api_key":"sk-planner","model":"gpt-4.1-mini","timeout_ms":9000}',
+                '{"service_mode":"production","provider":"openai","api_base":"https://planner.example.com/v1","api_key":"sk-planner","model":"gpt-4.1-mini","timeout_ms":9000}',
                 encoding="utf-8",
             )
             with patch("app.planner_runtime_config.PLANNER_RUNTIME_CONFIG_PATH", runtime_path):
@@ -52,8 +53,10 @@ class PlannerRuntimeConfigApiTests(unittest.TestCase):
         self.assertEqual(loaded.planner_model, "gpt-4.1-mini")
         self.assertEqual(loaded.planner_api_base, "https://planner.example.com/v1")
         self.assertEqual(loaded.planner_timeout_ms, 9000)
+        self.assertEqual(loaded.planner_service_mode, "production")
+        self.assertFalse(loaded.planner_legacy_use_llm)
         self.assertEqual(loaded.planner_api_key_env, "PLANNER_RUNTIME_API_KEY")
-        self.assertEqual(warnings, [])
+        self.assertTrue(any("planner_use_llm=false" in item for item in warnings))
 
     def test_runtime_overview_exposes_planner_runtime_source(self) -> None:
         with (

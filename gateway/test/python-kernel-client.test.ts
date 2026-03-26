@@ -277,6 +277,38 @@ test('streamKernelAnswer preserves fallback events without mapping them to error
   assert.equal(events[1]?.continues, true);
 });
 
+test('streamKernelAnswer preserves serviceBlocked events for planner hard blocks', async () => {
+  const events: Array<Record<string, unknown>> = [];
+
+  global.fetch = async () =>
+    new Response(
+      'event: serviceBlocked\n' +
+        'data: {"type":"serviceBlocked","traceId":"trace-blocked","mode":"local","timestamp":"2026-03-25T10:00:00Z","reasonCode":"planner_api_key_missing","message":"Planner blocked","serviceMode":"production"}\n\n' +
+        'event: error\n' +
+        'data: {"type":"error","traceId":"trace-blocked","code":"PLANNER_SYSTEM_BLOCKED","message":"Planner blocked"}\n\n',
+      {
+        status: 200,
+        headers: { 'content-type': 'text/event-stream' }
+      }
+    );
+
+  await streamKernelAnswer(
+    {
+      sessionId: 's1',
+      mode: 'local',
+      query: 'q1',
+      history: [],
+      traceId: 'trace-1'
+    },
+    (event) => events.push(event as unknown as Record<string, unknown>)
+  );
+
+  assert.deepEqual(
+    events.map((event) => event.type),
+    ['serviceBlocked', 'error']
+  );
+});
+
 test('streamKernelAnswer keeps hybrid mode on legacy /qa/stream during phase one', async () => {
   const seen: string[] = [];
   const events: Array<{ type: string }> = [];

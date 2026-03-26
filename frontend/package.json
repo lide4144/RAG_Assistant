@@ -6,6 +6,7 @@
     "dev": "next dev -p ${PORT:-3000}",
     "build": "next build",
     "start": "next start -p ${PORT:-3000}",
+    "test:e2e:server": "rm -rf .next && next build && next start -p ${PORT:-3000}",
     "lint": "next lint",
     "test:e2e": "playwright test"
   },

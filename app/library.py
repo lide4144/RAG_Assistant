@@ -57,6 +57,30 @@ def _recent_items_from_files(
     return rows
 
 
+def _recent_items_from_progress(
+    uploaded_files: list[Path],
+    *,
+    stage: str,
+    active_name: str | None,
+    completed_names: set[str],
+    failed_reasons: dict[str, str],
+) -> list[dict[str, str]]:
+    rows: list[dict[str, str]] = []
+    for path in uploaded_files[:6]:
+        name = path.name
+        if name in failed_reasons:
+            rows.append({"name": name, "state": "failed", "stage": stage, "message": failed_reasons[name]})
+            continue
+        if active_name and name == active_name:
+            rows.append({"name": name, "state": "running", "stage": stage, "message": "正在处理"})
+            continue
+        if name in completed_names:
+            rows.append({"name": name, "state": "succeeded", "stage": stage, "message": "当前阶段完成"})
+            continue
+        rows.append({"name": name, "state": "queued", "stage": stage, "message": "等待当前阶段"})
+    return rows
+
+
 def _recent_items_from_outcomes(outcomes: Any, *, stage: str) -> list[dict[str, str]]:
     if not isinstance(outcomes, list):
         return []
@@ -249,6 +273,7 @@ def run_import_workflow(
 
     copied_names = {path.name for path in copied}
     active_name = copied[0].name if copied else None
+    stage_completed_names: set[str] = set()
     _emit_progress(
         stage="import_prepare",
         stage_processed=len(copied),
@@ -294,6 +319,55 @@ def run_import_workflow(
             run_dir=str(ingest_run_dir),
             lock_timeout_sec=10.0,
         )
+
+        def _on_ingest_progress(event: dict[str, Any]) -> None:
+            event_name = str(event.get("event", "")).strip().lower()
+            paper_name = _normalize_item_name(str(event.get("paper_name", "")).strip())
+            if event_name == "pdf_started":
+                _emit_progress(
+                    stage="import_clean",
+                    stage_processed=max(0, int(event.get("pdf_completed", 0) or 0)),
+                    stage_total=max(1, len(copied)),
+                    message=f"正在解析 {paper_name}",
+                    batch_completed=max(0, int(event.get("pdf_completed", 0) or 0)),
+                    batch_running=1,
+                    batch_failed=max(failed_count, int(event.get("pdf_failed", 0) or 0)),
+                    current_item_name=paper_name,
+                    recent_items=_recent_items_from_progress(
+                        copied,
+                        stage="import_clean",
+                        active_name=paper_name,
+                        completed_names=stage_completed_names,
+                        failed_reasons=failed_reason_map,
+                    ),
+                )
+                return
+            if event_name == "pdf_finished":
+                status = str(event.get("status", "")).strip().lower()
+                if status == "failed":
+                    reason = str(event.get("reason", "解析失败")).strip() or "解析失败"
+                    failed_reason_map[paper_name] = f"{paper_name}: {reason}"
+                else:
+                    stage_completed_names.add(paper_name)
+                _emit_progress(
+                    stage="import_clean",
+                    stage_processed=max(0, int(event.get("pdf_completed", 0) or 0)),
+                    stage_total=max(1, len(copied)),
+                    message=f"{paper_name} {'失败' if status == 'failed' else '完成当前阶段'}",
+                    batch_completed=len(stage_completed_names),
+                    batch_running=0,
+                    batch_failed=max(failed_count, int(event.get("pdf_failed", 0) or 0)),
+                    current_item_name=None,
+                    recent_items=_recent_items_from_progress(
+                        copied,
+                        stage="import_clean",
+                        active_name=None,
+                        completed_names=stage_completed_names,
+                        failed_reasons=failed_reason_map,
+                    ),
+                )
+
+        ingest_args.progress_callback = _on_ingest_progress
         _emit_progress(
             stage="import_clean",
             stage_processed=0,

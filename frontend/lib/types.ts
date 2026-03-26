@@ -98,15 +98,20 @@ export interface RuntimeStageSummary {
 }
 
 export interface PlannerRuntimeSummary {
-  use_llm: boolean;
+  service_mode?: 'production' | 'diagnostic' | string;
+  llm_required?: boolean;
   provider: string;
   api_base?: string;
   model: string;
   timeout_ms: number;
   configured: boolean;
+  formal_chat_available?: boolean;
+  blocked?: boolean;
+  block_reason_code?: string | null;
+  block_reason_message?: string | null;
   source?: RuntimeSource;
   source_label?: string;
-  effective_source?: Partial<Record<'use_llm' | 'provider' | 'api_base' | 'model' | 'api_key' | 'timeout_ms', RuntimeSource>>;
+  effective_source?: Partial<Record<'service_mode' | 'provider' | 'api_base' | 'model' | 'api_key' | 'timeout_ms', RuntimeSource>>;
 }
 
 export interface RuntimeOverview {

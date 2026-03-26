@@ -29,6 +29,7 @@ from app.capability_planner import (
 from app.config import load_and_validate_config
 from app.llm_client import call_chat_completion
 from app.paths import CONFIGS_DIR
+from app.planner_runtime_config import evaluate_planner_service_state
 from app.session_state import load_planner_conversation_state
 
 try:  # pragma: no cover - exercised indirectly when langgraph is installed
@@ -414,17 +415,11 @@ def _build_planner_llm_candidate(
     api_base = str(getattr(cfg, "planner_api_base", "")).strip()
     api_key_env = str(getattr(cfg, "planner_api_key_env", "")).strip()
     api_key = os.getenv(api_key_env, "").strip() if api_key_env else ""
-    planner_enabled = bool(getattr(cfg, "planner_use_llm", False))
+    planner_state = evaluate_planner_service_state(cfg, api_key=api_key)
     diagnostics["provider"] = provider or None
     diagnostics["model"] = model or None
-    if not planner_enabled:
-        diagnostics["reason"] = "planner_llm_disabled"
-        return None, diagnostics
-    if not model:
-        diagnostics["reason"] = "planner_model_missing"
-        return None, diagnostics
-    if not api_key:
-        diagnostics["reason"] = "planner_api_key_missing"
+    if not bool(planner_state.get("formal_chat_available")):
+        diagnostics["reason"] = str(planner_state.get("reason_code") or "planner_system_blocked")
         return None, diagnostics
 
     diagnostics["attempted"] = True

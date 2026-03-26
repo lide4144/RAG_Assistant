@@ -112,7 +112,7 @@ test('chat page loads grouped local history and can switch or create sessions', 
   await expect(page.getByTestId('chat-history-groups')).toContainText('更早');
   await expect(page.locator('[data-testid^="chat-delete-session-"]')).toHaveCount(3);
 
-  await page.getByRole('button', { name: /昨天的研究会话/ }).click();
+  await page.locator('button').filter({ hasText: '昨天的研究会话' }).first().click();
   await expect(page.getByRole('article').filter({ hasText: '昨天的回答摘要' })).toBeVisible();
 
   await page.getByTestId('chat-new-session-btn').click();
@@ -128,4 +128,79 @@ test('chat page loads grouped local history and can switch or create sessions', 
   expect(stored).toBeTruthy();
   const parsed = JSON.parse(stored ?? '{"sessions":[]}') as { sessions: Array<{ id: string }> };
   expect(parsed.sessions.map((item) => item.id)).not.toContain('session-yesterday');
+});
+
+test('chat page blocks formal send when planner runtime is unavailable', async ({ page }) => {
+  await page.addInitScript(() => {
+    class MockSocket {
+      static OPEN = 1;
+      readyState = 1;
+      onopen: ((event: Event) => void) | null = null;
+      onclose: ((event: CloseEvent) => void) | null = null;
+      onerror: ((event: Event) => void) | null = null;
+      onmessage: ((event: MessageEvent<string>) => void) | null = null;
+
+      constructor(_url: string) {
+        setTimeout(() => this.onopen?.(new Event('open')), 0);
+      }
+
+      send() {}
+
+      close() {
+        this.readyState = 3;
+        this.onclose?.(new CloseEvent('close'));
+      }
+    }
+
+    // @ts-expect-error test-time override
+    window.WebSocket = MockSocket;
+  });
+
+  await page.route('**/api/admin/runtime-overview', async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        llm: {
+          answer: { provider: 'openai', model: 'gpt-4.1-mini', configured: true },
+          embedding: { provider: 'siliconflow', model: 'bge-m3', configured: true },
+          rerank: { provider: 'siliconflow', model: 'Qwen/Qwen3-Reranker-8B', configured: true },
+          rewrite: { provider: 'ollama', model: 'qwen2.5:3b', configured: true },
+          graph_entity: { provider: 'siliconflow', model: 'DeepSeek-V3.2', configured: true },
+          sufficiency_judge: { provider: 'siliconflow', model: 'Qwen/Qwen2.5-7B-Instruct', configured: true }
+        },
+        planner: {
+          service_mode: 'production',
+          use_llm: true,
+          provider: 'openai',
+          api_base: 'https://planner.example.com/v1',
+          model: 'gpt-4.1-mini',
+          timeout_ms: 9000,
+          configured: false,
+          formal_chat_available: false,
+          blocked: true,
+          block_reason_code: 'planner_missing_api_key',
+          block_reason_message: 'Planner Runtime 当前不可服务，请先修复规划模型配置。',
+          source: 'runtime'
+        },
+        pipeline: {
+          marker_tuning: {
+            recognition_batch_size: 2,
+            detector_batch_size: 2,
+            layout_batch_size: 2,
+            ocr_error_batch_size: 1,
+            table_rec_batch_size: 1,
+            model_dtype: 'float16'
+          }
+        },
+        status: { level: 'READY', reasons: [] }
+      })
+    });
+  });
+
+  await page.goto('http://127.0.0.1:3000/chat');
+
+  await expect(page.getByRole('button', { name: '发送' })).toBeDisabled();
+  await page.getByRole('button', { name: /总结当前知识库里关于 GraphRAG 的核心方法差异/ }).click();
+  await expect(page.getByText('Planner Runtime 当前不可服务，请先修复规划模型配置。')).toBeVisible();
 });

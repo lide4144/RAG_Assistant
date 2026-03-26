@@ -186,6 +186,29 @@ class KernelApiContractTests(unittest.TestCase):
         self.assertEqual(response.traceId, "trace-planner")
         self.assertEqual(response.answer, "planner answer [1]")
 
+    def test_planner_qa_returns_503_when_planner_service_is_blocked(self) -> None:
+        with patch(
+            "app.kernel_api._load_planner_config_state",
+            return_value=(
+                object(),
+                [],
+                {
+                    "formal_chat_available": False,
+                    "blocked": True,
+                    "service_mode": "production",
+                    "reason_code": "planner_api_key_missing",
+                    "reason_message": "Planner Runtime 缺少 API Key，正式聊天入口不可用。",
+                },
+            ),
+        ):
+            with self.assertRaises(HTTPException) as exc:
+                planner_qa(
+                    KernelChatRequest(sessionId="s1", mode="local", query="q1", history=[], traceId="trace-planner-blocked")
+                )
+
+        self.assertEqual(exc.exception.status_code, 503)
+        self.assertEqual(exc.exception.detail["code"], "PLANNER_SYSTEM_BLOCKED")
+
     def test_planner_stream_contract_mode_consistency_and_message_end(self) -> None:
         mocked_response = KernelChatResponse(
             traceId="trace-planner-stream",
