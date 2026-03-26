@@ -74,7 +74,7 @@ type PipelineConfigPayload = {
 };
 
 type PlannerConfigForm = {
-  use_llm: boolean;
+  serviceMode: 'production' | 'diagnostic';
   provider: string;
   apiBase: string;
   apiKey: string;
@@ -238,7 +238,7 @@ const markerLlmFieldOrder: Record<string, Array<Exclude<MarkerLlmField, 'use_llm
 };
 
 const defaultPlannerConfig: PlannerConfigForm = {
-  use_llm: false,
+  serviceMode: 'production',
   provider: 'siliconflow',
   apiBase: 'https://api.siliconflow.cn/v1',
   apiKey: '',
@@ -556,7 +556,7 @@ export function SettingsShell() {
       try {
         const result = await fetchAdminJson<{
           configured?: boolean;
-          use_llm?: boolean;
+          service_mode?: 'production' | 'diagnostic';
           provider?: string;
           api_base?: string;
           model?: string;
@@ -566,7 +566,7 @@ export function SettingsShell() {
           return;
         }
         const nextConfig: PlannerConfigForm = {
-          use_llm: Boolean(result.data.use_llm),
+          serviceMode: result.data.service_mode || 'production',
           provider: result.data.provider || defaultPlannerConfig.provider,
           apiBase: result.data.api_base || defaultPlannerConfig.apiBase,
           apiKey: '',
@@ -958,8 +958,8 @@ export function SettingsShell() {
       setPlannerGlobalError('请先补全规划模型的服务商、服务地址和模型。');
       return;
     }
-    if (plannerConfig.use_llm && !plannerConfig.apiKey.trim()) {
-      setPlannerGlobalError('启用规划模型时必须填写密钥。');
+    if (plannerConfig.serviceMode === 'production' && !plannerConfig.apiKey.trim()) {
+      setPlannerGlobalError('正式模式下必须填写规划模型密钥。');
       return;
     }
     setPlannerSaveLoading(true);
@@ -970,7 +970,7 @@ export function SettingsShell() {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          use_llm: plannerConfig.use_llm,
+          service_mode: plannerConfig.serviceMode,
           provider: plannerConfig.provider.trim(),
           api_base: plannerConfig.apiBase.trim(),
           api_key: plannerConfig.apiKey.trim(),
@@ -1233,7 +1233,7 @@ export function SettingsShell() {
                 </p>
               </div>
               <div className="rounded-xl border border-amber-200 bg-white/90 px-3 py-2 text-xs text-slate-700">
-                <p>启用: {runtimeOverview?.planner?.use_llm ? '是' : '否'}</p>
+                <p>模式: {runtimeOverview?.planner?.service_mode === 'diagnostic' ? '诊断模式' : '正式模式'}</p>
                 <p>来源: {formatRuntimeSource(runtimeOverview?.planner?.source)}</p>
               </div>
             </div>
@@ -1540,19 +1540,22 @@ export function SettingsShell() {
           <div className="mt-4 rounded-2xl border border-amber-200/70 bg-white/80 p-4">
             <p className="text-[11px] leading-5 text-slate-600">
               中文说明：
-              开启后，系统会先用这一路模型判断是直接回答、先澄清，还是切换执行路径。若想压低开销，通常先从较小模型开始。
+              正式模式会把 Planner LLM 视为聊天入口前置条件；诊断模式仅供开发排查，不代表正式聊天可用。
             </p>
           </div>
 
           <div className="mt-4 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-            <label className="inline-flex items-center gap-2 rounded-xl border border-amber-200 bg-white/90 px-3 py-3 text-xs font-medium text-slate-700">
-              <input
-                data-testid="planner-use-llm-toggle"
-                type="checkbox"
-                checked={plannerConfig.use_llm}
-                onChange={(event) => setPlannerField('use_llm', event.target.checked)}
-              />
-              启用规划模型
+            <label className="block text-xs font-medium text-slate-600">
+              运行模式
+              <select
+                data-testid="planner-service-mode-select"
+                value={plannerConfig.serviceMode}
+                onChange={(event) => setPlannerField('serviceMode', event.target.value as PlannerConfigForm['serviceMode'])}
+                className="mt-1 h-10 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm text-slate-800 outline-none ring-amber-300 transition focus:ring-2"
+              >
+                <option value="production">正式模式</option>
+                <option value="diagnostic">诊断模式</option>
+              </select>
             </label>
             <label className="block text-xs font-medium text-slate-600">
               服务商
@@ -1620,7 +1623,7 @@ export function SettingsShell() {
           <div className="mt-4 rounded-xl border border-dashed border-amber-200 bg-white/80 p-4 text-[11px] text-slate-600">
             <p className="font-medium text-slate-800">当前生效配置</p>
             <p className="mt-1">
-              启用: {runtimeOverview?.planner?.use_llm ? '是' : '否'} · 来源: {formatRuntimeSource(runtimeOverview?.planner?.source)}
+              模式: {runtimeOverview?.planner?.service_mode === 'diagnostic' ? '诊断模式' : '正式模式'} · 来源: {formatRuntimeSource(runtimeOverview?.planner?.source)}
             </p>
             <p className="mt-1 break-all font-mono">
               {(runtimeOverview?.planner?.provider || '-') +
@@ -1628,6 +1631,10 @@ export function SettingsShell() {
                 (runtimeOverview?.planner?.model || '-') +
                 ' / ' +
                 String(runtimeOverview?.planner?.timeout_ms ?? defaultPlannerConfig.timeoutMs)}
+            </p>
+            <p className="mt-1">
+              正式聊天可用: {runtimeOverview?.planner?.formal_chat_available ? '是' : '否'}
+              {runtimeOverview?.planner?.block_reason_message ? ` · ${runtimeOverview.planner.block_reason_message}` : ''}
             </p>
           </div>
           {plannerStatusText ? <p className="mt-2 text-xs text-emerald-700">{plannerStatusText}</p> : null}

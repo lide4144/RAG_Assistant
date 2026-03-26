@@ -90,7 +90,10 @@ export function ChatShell() {
   const runtimeOverviewUrl = useMemo(() => resolveAdminUrl('/api/admin/runtime-overview'), []);
   const statusLevel = runtimeOverview?.status?.level ?? 'ERROR';
   const answerConfigured = Boolean(runtimeOverview?.llm?.answer?.configured);
-  const canSend = input.trim().length > 0 && statusText === 'Connected' && answerConfigured && statusLevel !== 'BLOCKED';
+  const plannerChatAvailable = runtimeOverview?.planner?.formal_chat_available !== false;
+  const plannerBlockMessage = runtimeOverview?.planner?.block_reason_message || 'Planner Runtime 当前不可服务，请先修复规划模型配置。';
+  const canSend =
+    input.trim().length > 0 && statusText === 'Connected' && answerConfigured && statusLevel !== 'BLOCKED' && plannerChatAvailable;
   const connection = mapConnectionStatus(statusText);
   const runtimeView = mapRuntimeLevel(statusLevel);
 
@@ -115,7 +118,8 @@ export function ChatShell() {
         payload.type === 'toolSelection' ||
         payload.type === 'toolRunning' ||
         payload.type === 'toolResult' ||
-        payload.type === 'fallback'
+        payload.type === 'fallback' ||
+        payload.type === 'serviceBlocked'
       ) {
         const existingEvents = pendingAgentEventsRef.current[payload.traceId] ?? [];
         pendingAgentEventsRef.current[payload.traceId] = [...existingEvents, payload];
@@ -294,8 +298,8 @@ export function ChatShell() {
     if (!query.trim()) {
       return;
     }
-    if (!answerConfigured || statusLevel === 'BLOCKED') {
-      setSendError('当前推理模型未就绪，请先前往“模型设置”完成配置。');
+    if (!answerConfigured || statusLevel === 'BLOCKED' || !plannerChatAvailable) {
+      setSendError(plannerChatAvailable ? '当前推理模型未就绪，请先前往“模型设置”完成配置。' : plannerBlockMessage);
       return;
     }
     if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) {
@@ -653,7 +657,7 @@ export function ChatShell() {
                                 <div
                                   key={`${message.id}-agent-${index}`}
                                   className={`rounded-2xl border px-3 py-2 text-xs ${
-                                    agentEvent.type === 'fallback'
+                                    agentEvent.type === 'fallback' || agentEvent.type === 'serviceBlocked'
                                       ? 'border-amber-200 bg-amber-50 text-amber-900'
                                       : agentEvent.type === 'planning'
                                         ? 'border-sky-200 bg-sky-50 text-sky-900'
@@ -893,6 +897,9 @@ function formatAgentEventTitle(event: AgentEvent) {
   if (event.type === 'toolResult') {
     return `Tool result · ${event.toolName} · ${event.status}`;
   }
+  if (event.type === 'serviceBlocked') {
+    return 'Service blocked';
+  }
   return `Fallback · ${event.fallbackScope}`;
 }
 
@@ -906,6 +913,9 @@ function formatAgentEventDetail(event: AgentEvent) {
   }
   if (event.type === 'toolResult') {
     return event.message ? `${event.resultKind || event.status} · ${event.message}` : `${event.resultKind || event.status}`;
+  }
+  if (event.type === 'serviceBlocked') {
+    return `reason=${event.reasonCode || '-'} mode=${event.serviceMode || '-'}${event.message ? ` · ${event.message}` : ''}`;
   }
   const toolPart = event.failedTool ? ` failedTool=${event.failedTool}` : '';
   const messagePart = event.message ? ` · ${event.message}` : '';

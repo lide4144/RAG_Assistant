@@ -13,7 +13,7 @@ export default defineConfig({
     baseURL: 'http://127.0.0.1:3000'
   },
   webServer: {
-    command: 'npm run build && npm run start',
+    command: 'npm run test:e2e:server',
     port: 3000,
     reuseExistingServer: true,
     env: {

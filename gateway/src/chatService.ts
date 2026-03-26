@@ -217,8 +217,15 @@ export function createChatService(overrides: Partial<ChatServiceDeps> = {}) {
         let latestSources: ReturnType<typeof normalizeSources> = [];
         let lastTraceId = requestTraceId;
         let streamEnded = false;
+        let streamBlocked = false;
 
         const handleKernelEvent = (kernelEvent: KernelStreamEvent) => {
+          if (kernelEvent.type === 'serviceBlocked') {
+            streamBlocked = true;
+            lastTraceId = kernelEvent.traceId;
+            sendEvent(kernelEvent);
+            return;
+          }
           if (kernelEvent.type === 'message') {
             fullAnswer += kernelEvent.content;
             lastTraceId = kernelEvent.traceId;
@@ -247,13 +254,17 @@ export function createChatService(overrides: Partial<ChatServiceDeps> = {}) {
 
         await deps.streamKernelAnswer(payload, handleKernelEvent);
 
-        if (!streamEnded) {
+        if (!streamEnded && !streamBlocked) {
           const fallback = await deps.requestKernelAnswer(payload);
           fullAnswer = fallback.answer;
           latestSources = ensureStableSourceOrder(normalizeSources(fallback.sources));
           lastTraceId = fallback.traceId;
           sendEvent({ type: 'sources', traceId: fallback.traceId, mode: event.payload.mode, sources: latestSources });
           await streamAnswerAsMessageEvents(sendEvent, fallback.traceId, event.payload.mode, fallback.answer, deps.sleep);
+        }
+
+        if (streamBlocked) {
+          return;
         }
 
         const citationMapping = validateCitationMapping(fullAnswer, latestSources);

@@ -150,6 +150,16 @@ class HealthDepsTests(unittest.TestCase):
             self.assertIn("reason", payload[stage])
         self.assertIn("passthrough_mode", payload["rerank"])
         self.assertIn("fallback_mode", payload["embedding"])
+        self.assertIn("planner", payload)
+        self.assertIn("status", payload["planner"])
+        self.assertIn("provider", payload["planner"])
+        self.assertIn("model", payload["planner"])
+        self.assertIn("checked_at", payload["planner"])
+        self.assertIn("reason_code", payload["planner"])
+        self.assertIn("service_mode", payload["planner"])
+        self.assertIn("configured", payload["planner"])
+        self.assertIn("blocked", payload["planner"])
+        self.assertIn("formal_chat_available", payload["planner"])
 
 
 class FailureClassificationTests(unittest.TestCase):

@@ -37,6 +37,26 @@ type PipelineConfigState = {
 
 const allStages: StageKey[] = ['answer', 'embedding', 'rerank', 'rewrite', 'graph_entity', 'sufficiency_judge'];
 
+function buildPlannerRuntimeOverview(
+  overrides: Partial<RuntimeOverview['planner']> = {}
+): RuntimeOverview['planner'] {
+  return {
+    service_mode: 'diagnostic',
+    use_llm: false,
+    provider: 'siliconflow',
+    api_base: 'https://api.siliconflow.cn/v1',
+    model: 'Pro/deepseek-ai/DeepSeek-V3.2',
+    timeout_ms: 6000,
+    configured: true,
+    formal_chat_available: true,
+    blocked: false,
+    block_reason_code: null,
+    block_reason_message: null,
+    source: 'default',
+    ...overrides
+  };
+}
+
 async function mockRuntimePanels(page: Page) {
   await page.route('**/api/admin/pipeline-config', async (route) => {
     if (route.request().method() === 'POST') {
@@ -89,15 +109,7 @@ async function mockRuntimePanels(page: Page) {
           graph_entity: { provider: 'siliconflow', model: 'Pro/deepseek-ai/DeepSeek-V3.2', configured: true },
           sufficiency_judge: { provider: 'siliconflow', model: 'Qwen/Qwen2.5-7B-Instruct', configured: true }
         },
-        planner: {
-          use_llm: false,
-          provider: 'siliconflow',
-          api_base: 'https://api.siliconflow.cn/v1',
-          model: 'Pro/deepseek-ai/DeepSeek-V3.2',
-          timeout_ms: 6000,
-          configured: true,
-          source: 'default'
-        },
+        planner: buildPlannerRuntimeOverview(),
         pipeline: {
           marker_tuning: {
             recognition_batch_size: 2,
@@ -1068,15 +1080,7 @@ test('settings page posts marker llm config and refreshes runtime summary after 
       graph_entity: { provider: 'siliconflow', model: 'graph', configured: true },
       sufficiency_judge: { provider: 'siliconflow', model: 'judge', configured: true }
     },
-    planner: {
-      use_llm: false,
-      provider: 'siliconflow',
-      api_base: 'https://api.siliconflow.cn/v1',
-      model: 'Pro/deepseek-ai/DeepSeek-V3.2',
-      timeout_ms: 6000,
-      configured: true,
-      source: 'default'
-    },
+    planner: buildPlannerRuntimeOverview(),
     pipeline: {
       marker_tuning: {
         recognition_batch_size: 2,
@@ -1439,7 +1443,7 @@ test('settings page saves planner runtime config and refreshes runtime overview'
     }
     savedPlannerPayload = route.request().postDataJSON() as Record<string, unknown>;
     expect(savedPlannerPayload).toMatchObject({
-      use_llm: true,
+      service_mode: 'production',
       provider: 'openai',
       api_base: 'https://planner.example.com/v1',
       api_key: 'sk-planner',
@@ -1448,15 +1452,18 @@ test('settings page saves planner runtime config and refreshes runtime overview'
     });
     runtimeOverviewState = {
       ...runtimeOverviewState,
-      planner: {
+      planner: buildPlannerRuntimeOverview({
+        service_mode: 'production',
         use_llm: true,
         provider: 'openai',
         api_base: 'https://planner.example.com/v1',
         model: 'gpt-4.1-mini',
         timeout_ms: 9000,
         configured: true,
+        formal_chat_available: true,
+        blocked: false,
         source: 'runtime'
-      }
+      })
     };
     await route.fulfill({
       status: 200,
@@ -1465,6 +1472,7 @@ test('settings page saves planner runtime config and refreshes runtime overview'
         ok: true,
         config: {
           configured: true,
+          service_mode: 'production',
           use_llm: true,
           provider: 'openai',
           api_base: 'https://planner.example.com/v1',
@@ -1477,7 +1485,7 @@ test('settings page saves planner runtime config and refreshes runtime overview'
   });
 
   await page.goto('http://127.0.0.1:3000/settings');
-  await page.getByTestId('planner-use-llm-toggle').check();
+  await page.getByTestId('planner-service-mode-select').selectOption('production');
   await page.getByTestId('planner-provider-select').selectOption('openai');
   await page.getByTestId('planner-api-base-input').fill('https://planner.example.com/v1');
   await page.getByTestId('planner-api-key-input').fill('sk-planner');
@@ -1489,4 +1497,6 @@ test('settings page saves planner runtime config and refreshes runtime overview'
   await expect(page.getByText('Planner Runtime 配置已保存并进入统一治理。')).toBeVisible();
   await expect(page.getByTestId('planner-runtime-overview')).toContainText('openai');
   await expect(page.getByTestId('planner-runtime-overview')).toContainText('gpt-4.1-mini');
+  await expect(page.getByTestId('planner-runtime-overview')).toContainText('正式模式');
+  await expect(page.getByText('正式聊天可用: 是')).toBeVisible();
 });

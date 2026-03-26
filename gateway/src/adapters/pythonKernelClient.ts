@@ -280,8 +280,8 @@ function normalizeKernelStreamEvent(eventType: string, payload: unknown): Kernel
         : undefined;
     const plannerSourceMode =
       typeof payload.plannerSourceMode === 'string' &&
-      ['rule_only', 'shadow_compare', 'llm_primary_with_rule_fallback'].includes(payload.plannerSourceMode)
-        ? (payload.plannerSourceMode as 'rule_only' | 'shadow_compare' | 'llm_primary_with_rule_fallback')
+      ['llm_primary', 'shadow_compare'].includes(payload.plannerSourceMode)
+        ? (payload.plannerSourceMode as 'llm_primary' | 'shadow_compare')
         : undefined;
     const executionSource =
       typeof payload.executionSource === 'string' && ['rule', 'llm', 'fallback'].includes(payload.executionSource)
@@ -381,6 +381,21 @@ function normalizeKernelStreamEvent(eventType: string, payload: unknown): Kernel
       failedTool: typeof payload.failedTool === 'string' ? payload.failedTool : undefined,
       continues: payload.continues,
       message: typeof payload.message === 'string' ? payload.message : undefined
+    };
+  }
+
+  if (type === 'serviceBlocked') {
+    return {
+      type: 'serviceBlocked',
+      traceId,
+      mode,
+      timestamp: normalizeTimestamp(payload.timestamp),
+      reasonCode: typeof payload.reasonCode === 'string' ? payload.reasonCode : undefined,
+      message: typeof payload.message === 'string' ? payload.message : undefined,
+      serviceMode:
+        typeof payload.serviceMode === 'string' && ['production', 'diagnostic'].includes(payload.serviceMode)
+          ? (payload.serviceMode as 'production' | 'diagnostic')
+          : undefined
     };
   }
 

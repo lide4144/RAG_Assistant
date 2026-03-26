@@ -644,7 +644,13 @@ export function PipelineWorkbenchPanel({
       setImportTaskSnapshot(null);
       setImportFiles([]);
     } catch (error) {
-      setImportSubmitMessage(error instanceof Error ? error.message : '导入失败');
+      const message =
+        error instanceof Error && error.message === 'Failed to fetch'
+          ? '上传请求未成功到达服务端，通常是批量文件总体积超过了反向代理上传上限，或上传连接被中途断开。请减少单次文件数，或把服务器上的 NGINX_CLIENT_MAX_BODY_SIZE 调大后重启服务。'
+          : error instanceof Error
+            ? error.message
+            : '导入失败';
+      setImportSubmitMessage(message);
       setImportTaskId('');
       setImportTaskState('failed');
       setImportTaskSnapshot(null);
@@ -1010,12 +1016,15 @@ export function PipelineWorkbenchPanel({
                         ? 'border-emerald-200 bg-emerald-50 text-emerald-700'
                         : 'border-sky-200 bg-sky-50 text-sky-700';
                   return (
-                    <article key={`${item.name}-${item.stage}`} className="flex flex-wrap items-start justify-between gap-3 rounded-2xl border border-slate-200 bg-white px-3 py-3">
-                      <div>
-                        <p className="text-sm font-medium text-slate-900">{item.name}</p>
+                    <article
+                      key={`${item.name}-${item.stage}`}
+                      className="flex flex-wrap items-start justify-between gap-3 rounded-2xl border border-slate-200 bg-white px-3 py-3"
+                    >
+                      <div className="min-w-0 flex-1">
+                        <p className="text-sm font-medium text-slate-900 [overflow-wrap:anywhere]">{item.name}</p>
                         <p className="mt-1 text-[11px] text-slate-500">{item.message || item.stage}</p>
                       </div>
-                      <div className="flex items-center gap-2">
+                      <div className="flex shrink-0 items-center gap-2">
                         <span className="rounded-full border border-slate-200 bg-slate-50 px-2 py-1 text-[11px] text-slate-600">
                           {resolveImportPipelineStage(item.stage) ?? item.stage}
                         </span>

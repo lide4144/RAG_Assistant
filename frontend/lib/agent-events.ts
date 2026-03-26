@@ -63,4 +63,14 @@ export type FallbackEvent = {
   message?: string;
 };
 
-export type AgentEvent = PlanningEvent | ToolSelectionEvent | ToolRunningEvent | ToolResultEvent | FallbackEvent;
+export type ServiceBlockedEvent = {
+  type: 'serviceBlocked';
+  traceId: string;
+  mode: AgentChatMode;
+  timestamp: string;
+  reasonCode?: string;
+  message?: string;
+  serviceMode?: 'production' | 'diagnostic';
+};
+
+export type AgentEvent = PlanningEvent | ToolSelectionEvent | ToolRunningEvent | ToolResultEvent | FallbackEvent | ServiceBlockedEvent;

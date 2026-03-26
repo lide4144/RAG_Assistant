@@ -8,6 +8,7 @@ KERNEL_PORT="${KERNEL_PORT:-8000}"
 GATEWAY_PORT="${GATEWAY_PORT:-8080}"
 NGINX_RUNTIME_DIR="${NGINX_RUNTIME_DIR:-$ROOT_DIR/.runtime/cloudstudio-nginx}"
 NGINX_CONF="$NGINX_RUNTIME_DIR/nginx.conf"
+NGINX_CLIENT_MAX_BODY_SIZE="${NGINX_CLIENT_MAX_BODY_SIZE:-512m}"
 
 cd "$ROOT_DIR"
 
@@ -19,7 +20,7 @@ fi
 
 mkdir -p "$NGINX_RUNTIME_DIR"
 
-python3 - <<'PY' "$ROOT_DIR/deploy/nginx/cloudstudio-http.conf.template" "$NGINX_CONF" "$NGINX_RUNTIME_DIR" "$APP_PORT" "$FRONTEND_PORT" "$KERNEL_PORT" "$GATEWAY_PORT"
+python3 - <<'PY' "$ROOT_DIR/deploy/nginx/cloudstudio-http.conf.template" "$NGINX_CONF" "$NGINX_RUNTIME_DIR" "$APP_PORT" "$FRONTEND_PORT" "$KERNEL_PORT" "$GATEWAY_PORT" "$NGINX_CLIENT_MAX_BODY_SIZE"
 from pathlib import Path
 import sys
 
@@ -30,6 +31,7 @@ app_port = sys.argv[4]
 frontend_port = sys.argv[5]
 kernel_port = sys.argv[6]
 gateway_port = sys.argv[7]
+client_max_body_size = sys.argv[8]
 
 content = template_path.read_text()
 for key, value in {
@@ -38,6 +40,7 @@ for key, value in {
     "__FRONTEND_PORT__": frontend_port,
     "__KERNEL_PORT__": kernel_port,
     "__GATEWAY_PORT__": gateway_port,
+    "__CLIENT_MAX_BODY_SIZE__": client_max_body_size,
 }.items():
     content = content.replace(key, value)
 output_path.write_text(content)
@@ -60,6 +63,7 @@ DEV_UP_PID=$!
 
 echo "cloudstudio internal services pid=$DEV_UP_PID"
 echo "cloudstudio public app target=http://127.0.0.1:$APP_PORT"
+echo "cloudstudio nginx client_max_body_size=$NGINX_CLIENT_MAX_BODY_SIZE"
 
 nginx -p "$NGINX_RUNTIME_DIR" -c "$NGINX_CONF" -g 'daemon off;' &
 NGINX_PID=$!
