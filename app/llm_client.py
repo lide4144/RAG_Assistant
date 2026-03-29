@@ -24,6 +24,19 @@ except Exception:  # pragma: no cover
 
 _EVENT_CALLBACKS: list[Callable[[dict[str, Any]], None]] = []
 
+_LITELLM_PROVIDER_PREFIXES = {
+    "openai",
+    "azure",
+    "anthropic",
+    "ollama",
+    "openrouter",
+    "vertex_ai",
+    "xai",
+    "huggingface",
+    "novita",
+    "vercel_ai_gateway",
+}
+
 
 def register_llm_event_callback(callback: Callable[[dict[str, Any]], None]) -> None:
     _EVENT_CALLBACKS.append(callback)
@@ -78,6 +91,18 @@ def _provider_endpoint(provider: str, api_base: str | None = None) -> str | None
     if normalized == "siliconflow":
         return "https://api.siliconflow.cn/v1/chat/completions"
     return None
+
+
+def _litellm_model_name(provider: str, model: str) -> str:
+    normalized_provider = str(provider or "").strip().lower()
+    raw_model = str(model or "").strip()
+    if not raw_model:
+        return raw_model
+    if normalized_provider not in _LITELLM_PROVIDER_PREFIXES:
+        return raw_model
+    if raw_model.startswith(f"{normalized_provider}/"):
+        return raw_model
+    return f"{normalized_provider}/{raw_model}"
 
 
 def _iso_now() -> str:
@@ -343,9 +368,10 @@ def _litellm_call_chat_completion(
             model_used=model,
             error_category="other",
         )
+    litellm_model = _litellm_model_name(provider, model)
     try:
         resp = litellm.completion(
-            model=model,
+            model=litellm_model,
             api_key=api_key,
             api_base=api_base,
             messages=[
@@ -367,7 +393,7 @@ def _litellm_call_chat_completion(
                 t0=t0,
                 retries=retries,
                 provider_used=provider,
-                model_used=model,
+                model_used=litellm_model,
                 error_category="other",
             )
         first = choices[0]
@@ -384,7 +410,7 @@ def _litellm_call_chat_completion(
                 t0=t0,
                 retries=retries,
                 provider_used=provider,
-                model_used=model,
+                model_used=litellm_model,
                 error_category="other",
             )
         return _base_result(
@@ -396,7 +422,7 @@ def _litellm_call_chat_completion(
             t0=t0,
             retries=retries,
             provider_used=provider,
-            model_used=model,
+            model_used=litellm_model,
         )
     except Exception as exc:  # pragma: no cover - covered via patched exceptions in tests
         err_name = exc.__class__.__name__.lower()
@@ -421,7 +447,7 @@ def _litellm_call_chat_completion(
             t0=t0,
             retries=retries,
             provider_used=provider,
-            model_used=model,
+            model_used=litellm_model,
             error_category=classify_error_category(reason, status_code),
         )
 
