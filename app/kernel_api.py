@@ -1097,12 +1097,27 @@ def _build_streaming_chat_response(
 
     def event_stream() -> Iterator[str]:
         queue: Queue[dict[str, Any]] = Queue()
+        streamed_chunks = 0
 
         def send_sse(event_name: str, data: dict[str, Any]) -> str:
             return f"event: {event_name}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
 
         def on_delta(piece: str) -> None:
-            _ = piece
+            nonlocal streamed_chunks
+            if not piece:
+                return
+            streamed_chunks += 1
+            queue.put(
+                {
+                    "event": "message",
+                    "data": {
+                        "type": "message",
+                        "traceId": trace_id,
+                        "mode": payload.mode,
+                        "content": piece,
+                    },
+                }
+            )
 
         def worker() -> None:
             try:
@@ -1118,17 +1133,18 @@ def _build_streaming_chat_response(
                         },
                     }
                 )
-                queue.put(
-                    {
-                        "event": "message",
-                        "data": {
-                            "type": "message",
-                            "traceId": trace_id,
-                            "mode": payload.mode,
-                            "content": response.answer,
-                        },
-                    }
-                )
+                if streamed_chunks == 0:
+                    queue.put(
+                        {
+                            "event": "message",
+                            "data": {
+                                "type": "message",
+                                "traceId": trace_id,
+                                "mode": payload.mode,
+                                "content": response.answer,
+                            },
+                        }
+                    )
                 queue.put(
                     {
                         "event": "messageEnd",
@@ -1194,9 +1210,27 @@ def _build_planner_streaming_chat_response(payload: KernelChatRequest) -> Stream
 
     def event_stream() -> Iterator[str]:
         queue: Queue[dict[str, Any]] = Queue()
+        streamed_chunks = 0
 
         def send_sse(event_name: str, data: dict[str, Any]) -> str:
             return f"event: {event_name}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
+
+        def on_delta(piece: str) -> None:
+            nonlocal streamed_chunks
+            if not piece:
+                return
+            streamed_chunks += 1
+            queue.put(
+                {
+                    "event": "message",
+                    "data": {
+                        "type": "message",
+                        "traceId": trace_id,
+                        "mode": payload.mode,
+                        "content": piece,
+                    },
+                }
+            )
 
         def worker() -> None:
             try:
@@ -1233,6 +1267,7 @@ def _build_planner_streaming_chat_response(payload: KernelChatRequest) -> Stream
                     fact_qa_executor=_planner_runtime_route_executor,
                     compat_executor=_planner_runtime_route_executor,
                     legacy_executor=_planner_runtime_route_executor,
+                    on_stream_delta=on_delta,
                 )
                 response = result["response"]
                 observation = result.get("observation")
@@ -1250,17 +1285,18 @@ def _build_planner_streaming_chat_response(payload: KernelChatRequest) -> Stream
                         },
                     }
                 )
-                queue.put(
-                    {
-                        "event": "message",
-                        "data": {
-                            "type": "message",
-                            "traceId": response_trace_id,
-                            "mode": payload.mode,
-                            "content": response.answer,
-                        },
-                    }
-                )
+                if streamed_chunks == 0:
+                    queue.put(
+                        {
+                            "event": "message",
+                            "data": {
+                                "type": "message",
+                                "traceId": response_trace_id,
+                                "mode": payload.mode,
+                                "content": response.answer,
+                            },
+                        }
+                    )
                 queue.put(
                     {
                         "event": "messageEnd",
