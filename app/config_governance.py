@@ -209,7 +209,7 @@ def _raw_stage_value(raw_data: dict[str, Any], *, stage: str, field: str, defaul
 def _runtime_stage_defaults(raw_data: dict[str, Any], *, stage: str) -> EffectiveStageConfig:
     if stage == "answer":
         return EffectiveStageConfig(
-            provider=_raw_stage_value(raw_data, stage="answer", field="provider", default="siliconflow"),
+            provider=_raw_stage_value(raw_data, stage="answer", field="provider", default="openai"),
             api_base=_raw_stage_value(raw_data, stage="answer", field="api_base", default="https://api.siliconflow.cn/v1"),
             api_key_env=_raw_stage_value(raw_data, stage="answer", field="api_key_env", default="SILICONFLOW_API_KEY"),
             model=_raw_stage_value(raw_data, stage="answer", field="model", default="Pro/deepseek-ai/DeepSeek-V3.2"),
@@ -230,20 +230,20 @@ def _runtime_stage_defaults(raw_data: dict[str, Any], *, stage: str) -> Effectiv
         )
     if stage == "rewrite":
         return EffectiveStageConfig(
-            provider=_raw_stage_value(raw_data, stage="rewrite", field="provider", default="siliconflow"),
+            provider=_raw_stage_value(raw_data, stage="rewrite", field="provider", default="openai"),
             api_base=_raw_stage_value(raw_data, stage="rewrite", field="api_base", default="https://api.siliconflow.cn/v1"),
             api_key_env=_raw_stage_value(raw_data, stage="rewrite", field="api_key_env", default="SILICONFLOW_API_KEY"),
             model=_raw_stage_value(raw_data, stage="rewrite", field="model", default="Pro/deepseek-ai/DeepSeek-V3.2"),
         )
     if stage == "sufficiency_judge":
         return EffectiveStageConfig(
-            provider=_raw_stage_value(raw_data, stage="sufficiency_judge", field="provider", default="siliconflow"),
+            provider=_raw_stage_value(raw_data, stage="sufficiency_judge", field="provider", default="openai"),
             api_base=_raw_stage_value(raw_data, stage="sufficiency_judge", field="api_base", default="https://api.siliconflow.cn/v1"),
             api_key_env=_raw_stage_value(raw_data, stage="sufficiency_judge", field="api_key_env", default="SILICONFLOW_API_KEY"),
             model=_raw_stage_value(raw_data, stage="sufficiency_judge", field="model", default="Qwen/Qwen2.5-7B-Instruct"),
         )
     return EffectiveStageConfig(
-        provider=_raw_stage_value(raw_data, stage="graph_entity", field="provider", default="siliconflow"),
+        provider=_raw_stage_value(raw_data, stage="graph_entity", field="provider", default="openai"),
         api_base=_raw_stage_value(raw_data, stage="graph_entity", field="api_base", default="https://api.siliconflow.cn/v1"),
         api_key_env=_raw_stage_value(raw_data, stage="graph_entity", field="api_key_env", default="SILICONFLOW_API_KEY"),
         model=_raw_stage_value(raw_data, stage="graph_entity", field="model", default="Pro/deepseek-ai/DeepSeek-V3.2"),

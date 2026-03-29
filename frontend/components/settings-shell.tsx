@@ -129,14 +129,14 @@ const stageMeta: StageMeta[] = [
   {
     key: 'graph_entity',
     title: '图谱实体模型',
-    defaultProvider: 'siliconflow',
+    defaultProvider: 'openai',
     defaultApiBase: 'https://api.siliconflow.cn/v1',
     defaultModel: 'Pro/deepseek-ai/DeepSeek-V3.2'
   },
   {
     key: 'sufficiency_judge',
     title: '证据判定模型',
-    defaultProvider: 'siliconflow',
+    defaultProvider: 'openai',
     defaultApiBase: 'https://api.siliconflow.cn/v1',
     defaultModel: 'Qwen/Qwen2.5-7B-Instruct'
   }
@@ -239,7 +239,7 @@ const markerLlmFieldOrder: Record<string, Array<Exclude<MarkerLlmField, 'use_llm
 
 const defaultPlannerConfig: PlannerConfigForm = {
   serviceMode: 'production',
-  provider: 'siliconflow',
+  provider: 'openai',
   apiBase: 'https://api.siliconflow.cn/v1',
   apiKey: '',
   model: 'Pro/deepseek-ai/DeepSeek-V3.2',
@@ -254,6 +254,14 @@ function formatRuntimeSource(source?: RuntimeSource): string {
     return '运行时保存';
   }
   return '静态基线';
+}
+
+function normalizeCompatibleProvider(provider: string, { preserveNative = false }: { preserveNative?: boolean } = {}): string {
+  const normalized = provider.trim().toLowerCase();
+  if (normalized === 'siliconflow' || normalized === 'silicon-flow') {
+    return preserveNative ? 'siliconflow' : 'openai';
+  }
+  return provider.trim();
 }
 
 function HintTip({
@@ -313,6 +321,7 @@ export function SettingsShell() {
   const [runtimeOverview, setRuntimeOverview] = useState<RuntimeOverview | null>(null);
   const [plannerConfig, setPlannerConfig] = useState<PlannerConfigForm>(defaultPlannerConfig);
   const [plannerPersisted, setPlannerPersisted] = useState<PlannerConfigForm>(defaultPlannerConfig);
+  const [plannerModels, setPlannerModels] = useState<AdminModel[]>(defaultPlannerConfig.model ? [{ id: defaultPlannerConfig.model }] : []);
   const [plannerSaveLoading, setPlannerSaveLoading] = useState(false);
   const [plannerDetectLoading, setPlannerDetectLoading] = useState(false);
   const [plannerStatusText, setPlannerStatusText] = useState('');
@@ -509,7 +518,9 @@ export function SettingsShell() {
             const stagePayload = payload[stage.key];
             const fallbackApiBase = typeof payload.api_base === 'string' ? payload.api_base : '';
             const fallbackModel = typeof payload.model === 'string' ? payload.model : '';
-            const provider = stagePayload?.provider || prev[stage.key].provider;
+            const provider = normalizeCompatibleProvider(stagePayload?.provider || prev[stage.key].provider, {
+              preserveNative: stage.key === 'rerank'
+            });
             const apiBase = stagePayload?.api_base || fallbackApiBase || prev[stage.key].apiBase;
             const model = stagePayload?.model || fallbackModel || prev[stage.key].model;
             const models = model
@@ -567,7 +578,7 @@ export function SettingsShell() {
         }
         const nextConfig: PlannerConfigForm = {
           serviceMode: result.data.service_mode || 'production',
-          provider: result.data.provider || defaultPlannerConfig.provider,
+          provider: normalizeCompatibleProvider(result.data.provider || defaultPlannerConfig.provider),
           apiBase: result.data.api_base || defaultPlannerConfig.apiBase,
           apiKey: '',
           model: result.data.model || defaultPlannerConfig.model,
@@ -578,6 +589,7 @@ export function SettingsShell() {
         };
         setPlannerConfig(nextConfig);
         setPlannerPersisted(nextConfig);
+        setPlannerModels(mergeDetectedModels([], nextConfig.model));
       } catch {
         // Planner 面板失败时保留静态默认值，不阻断其余设置页。
       }
@@ -788,7 +800,9 @@ export function SettingsShell() {
             (acc, stage) => ({
               ...acc,
               [stage.key]: {
-                provider: configs[stage.key].provider.trim(),
+                provider: normalizeCompatibleProvider(configs[stage.key].provider.trim(), {
+                  preserveNative: stage.key === 'rerank'
+                }),
                 api_base: (isInheritMode(stage.key) ? configs.answer.apiBase : configs[stage.key].apiBase).trim(),
                 api_key: (isInheritMode(stage.key) ? configs.answer.apiKey : configs[stage.key].apiKey).trim(),
                 model: configs[stage.key].model.trim()
@@ -834,7 +848,9 @@ export function SettingsShell() {
       (acc, stage) => ({
         ...acc,
         [stage.key]: {
-          provider: draft[stage.key].provider.trim(),
+          provider: normalizeCompatibleProvider(draft[stage.key].provider.trim(), {
+            preserveNative: stage.key === 'rerank'
+          }),
           api_base: (isInheritMode(stage.key) ? draft.answer.apiBase : draft[stage.key].apiBase).trim(),
           api_key: (isInheritMode(stage.key) ? draft.answer.apiKey : draft[stage.key].apiKey).trim(),
           model: draft[stage.key].model.trim()
@@ -933,7 +949,12 @@ export function SettingsShell() {
         setPlannerGlobalError('未检测到可用模型：请确认服务地址和密钥有效。');
         return;
       }
-      setPlannerConfig((prev) => ({ ...prev, model: prev.model || detected[0]?.id || '' }));
+      const nextModels = mergeDetectedModels(detected, plannerConfig.model);
+      setPlannerModels(nextModels);
+      setPlannerConfig((prev) => ({
+        ...prev,
+        model: prev.model && nextModels.some((item) => item.id === prev.model) ? prev.model : detected[0]?.id || ''
+      }));
       setPlannerStatusText(`规划模型连接成功，已发现 ${detected.length} 个可选模型。`);
       toast.success('规划模型连接成功');
     } catch (error) {
@@ -971,7 +992,7 @@ export function SettingsShell() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           service_mode: plannerConfig.serviceMode,
-          provider: plannerConfig.provider.trim(),
+          provider: normalizeCompatibleProvider(plannerConfig.provider.trim()),
           api_base: plannerConfig.apiBase.trim(),
           api_key: plannerConfig.apiKey.trim(),
           model: plannerConfig.model.trim(),
@@ -987,6 +1008,7 @@ export function SettingsShell() {
       const persisted = { ...plannerConfig, apiKey: '' };
       setPlannerConfig(persisted);
       setPlannerPersisted(persisted);
+      setPlannerModels(mergeDetectedModels(plannerModels, persisted.model));
       setPlannerStatusText('Planner Runtime 配置已保存并进入统一治理。');
       toast.success('规划模型保存成功');
       const overviewResult = await fetchAdminJson<RuntimeOverview>(runtimeOverviewUrl);
@@ -1601,12 +1623,19 @@ export function SettingsShell() {
             </label>
             <label className="block text-xs font-medium text-slate-600">
               模型名称
-              <input
-                data-testid="planner-model-input"
+              <select
+                data-testid="planner-model-select"
                 value={plannerConfig.model}
                 onChange={(event) => setPlannerField('model', event.target.value)}
                 className="mt-1 h-10 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm text-slate-800 outline-none ring-amber-300 transition focus:ring-2"
-              />
+              >
+                <option value="">请选择模型</option>
+                {plannerModels.map((model) => (
+                  <option key={`planner-${model.id}`} value={model.id}>
+                    {model.id}
+                  </option>
+                ))}
+              </select>
             </label>
             <label className="block text-xs font-medium text-slate-600">
               超时时间（毫秒）

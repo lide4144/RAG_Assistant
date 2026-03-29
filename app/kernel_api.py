@@ -23,7 +23,7 @@ from pydantic import BaseModel, Field
 import yaml
 
 from app.agent_tools import build_tool_failure, build_tool_result_envelope
-from app.admin_llm_config import load_runtime_llm_config, mask_api_key, normalize_api_base, save_runtime_llm_config
+from app.admin_llm_config import load_runtime_llm_config, mask_api_key, normalize_api_base, normalize_provider_alias, save_runtime_llm_config
 from app.config import load_and_validate_config
 from app.config_governance import resolve_effective_llm_stages, runtime_source_label
 from app.graph_build import run_graph_build
@@ -1393,7 +1393,8 @@ def _build_stage_payload(
     if not selected_model:
         raise ValueError(f"{stage_name}.model is required")
     return {
-        "provider": selected_provider or default_provider,
+        "provider": normalize_provider_alias(selected_provider or default_provider, preserve_native=(stage_name == "rerank"))
+        or default_provider,
         "api_base": _normalize_admin_api_base(selected_api_base),
         "api_key": selected_api_key,
         "model": selected_model,
@@ -2841,7 +2842,7 @@ def save_admin_planner_config(payload: AdminSavePlannerConfigRequest) -> dict[st
     try:
         saved = save_planner_runtime_config(
             service_mode=payload.service_mode,
-            provider=str(payload.provider or "").strip(),
+            provider=normalize_provider_alias(str(payload.provider or "").strip()),
             api_base=_normalize_admin_api_base(str(payload.api_base or "")),
             api_key=str(payload.api_key or ""),
             model=str(payload.model or "").strip(),

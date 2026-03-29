@@ -85,20 +85,20 @@ class PipelineConfig:
     rewrite_arbitration_min_delta: float = 0.03
     rewrite_legacy_strategy_enabled: bool = False
     rewrite_entity_preservation_min_ratio: float = 0.6
-    rewrite_llm_provider: str = "siliconflow"
+    rewrite_llm_provider: str = "openai"
     rewrite_llm_model: str = "Pro/deepseek-ai/DeepSeek-V3.2"
     rewrite_llm_api_base: str = "https://api.siliconflow.cn/v1"
     rewrite_llm_api_key_env: str = "SILICONFLOW_API_KEY"
-    rewrite_llm_fallback_provider: str = "siliconflow"
+    rewrite_llm_fallback_provider: str = "openai"
     rewrite_llm_fallback_model: str = ""
     rewrite_llm_fallback_api_base: str = ""
     rewrite_llm_fallback_api_key_env: str = ""
     answer_use_llm: bool = False
-    answer_llm_provider: str = "siliconflow"
+    answer_llm_provider: str = "openai"
     answer_llm_model: str = "Pro/deepseek-ai/DeepSeek-V3.2"
     answer_llm_api_base: str = "https://api.siliconflow.cn/v1"
     answer_llm_api_key_env: str = "SILICONFLOW_API_KEY"
-    answer_llm_fallback_provider: str = "siliconflow"
+    answer_llm_fallback_provider: str = "openai"
     answer_llm_fallback_model: str = ""
     answer_llm_fallback_api_base: str = ""
     answer_llm_fallback_api_key_env: str = ""
@@ -139,7 +139,7 @@ class PipelineConfig:
     sufficiency_semantic_threshold_explore: float = 0.15
     sufficiency_key_element_min_coverage: float = 1.0
     sufficiency_judge_use_llm: bool = True
-    sufficiency_judge_llm_provider: str = "siliconflow"
+    sufficiency_judge_llm_provider: str = "openai"
     sufficiency_judge_llm_model: str = "Qwen/Qwen2.5-7B-Instruct"
     sufficiency_judge_llm_api_base: str = "https://api.siliconflow.cn/v1"
     sufficiency_judge_llm_api_key_env: str = "SILICONFLOW_API_KEY"
@@ -166,7 +166,7 @@ class PipelineConfig:
     planner_service_mode: str = "production"
     planner_use_llm: bool = True
     planner_legacy_use_llm: bool | None = None
-    planner_provider: str = "siliconflow"
+    planner_provider: str = "openai"
     planner_model: str = "Pro/deepseek-ai/DeepSeek-V3.2"
     planner_api_base: str = "https://api.siliconflow.cn/v1"
     planner_api_key_env: str = "SILICONFLOW_API_KEY"
@@ -180,7 +180,7 @@ class PipelineConfig:
     embedding: EmbeddingConfig = field(default_factory=EmbeddingConfig)
     rerank: RerankConfig = field(default_factory=RerankConfig)
     graph_path: str = "data/processed/graph.json"
-    graph_entity_llm_provider: str = "siliconflow"
+    graph_entity_llm_provider: str = "openai"
     graph_entity_llm_base_url: str = "https://api.siliconflow.cn/v1"
     graph_entity_llm_api_key_env: str = "SILICONFLOW_API_KEY"
     graph_entity_llm_model: str = "Pro/deepseek-ai/DeepSeek-V3.2"

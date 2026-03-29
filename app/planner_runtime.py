@@ -427,7 +427,7 @@ def _build_planner_llm_candidate(
     diagnostics["attempted"] = True
     timeout_ms = max(1000, int(getattr(cfg, "planner_timeout_ms", 6000)))
     result = call_chat_completion(
-        provider=provider or "siliconflow",
+        provider=provider or "openai",
         model=model,
         api_key=api_key,
         api_base=(api_base or None),
