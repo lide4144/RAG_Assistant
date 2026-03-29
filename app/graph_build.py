@@ -15,6 +15,7 @@ import httpx
 from pydantic import BaseModel, Field, ValidationError
 
 from app.config import load_config
+from app.config_governance import load_resolved_llm_stage
 
 
 DEFAULT_LLM_SYSTEM_PROMPT = (
@@ -181,6 +182,7 @@ class LLMEntityExtractionConfig:
     provider: str = "siliconflow"
     base_url: str = "https://api.siliconflow.cn/v1"
     api_key_env: str = "SILICONFLOW_API_KEY"
+    api_key: str = ""
     model: str = "Pro/deepseek-ai/DeepSeek-V3.2"
     timeout_ms: int = 12000
     max_concurrency: int = 4
@@ -241,7 +243,9 @@ def _chat_completions_endpoint(base_url: str, provider: str = "siliconflow") -> 
     return f"{base}/v1/chat/completions"
 
 
-def _load_api_key(api_key_env: str) -> str:
+def _load_api_key(api_key_env: str, api_key: str = "") -> str:
+    if str(api_key or "").strip():
+        return str(api_key).strip()
     return str(os.getenv(api_key_env, "")).strip()
 
 
@@ -265,7 +269,7 @@ async def extract_entities_from_text_llm(
     if not clean_text.strip():
         return EntityExtractionResult()
 
-    api_key = _load_api_key(cfg.api_key_env)
+    api_key = _load_api_key(cfg.api_key_env, cfg.api_key)
     if not api_key:
         if metrics is not None:
             metrics.failures += 1
@@ -745,12 +749,14 @@ def run_graph_build(
     on_progress: ProgressCallback | None = None,
 ) -> int:
     cfg = load_config()
+    resolved_stage = load_resolved_llm_stage(stage="graph_entity")
     rows = load_chunk_rows(input_path)
     llm_entity_cfg = LLMEntityExtractionConfig(
-        provider=str(getattr(cfg, "graph_entity_llm_provider", "siliconflow")),
-        base_url=str(getattr(cfg, "graph_entity_llm_base_url", "https://api.siliconflow.cn/v1")),
-        api_key_env=str(getattr(cfg, "graph_entity_llm_api_key_env", "SILICONFLOW_API_KEY")),
-        model=str(getattr(cfg, "graph_entity_llm_model", "Pro/deepseek-ai/DeepSeek-V3.2")),
+        provider=str(getattr(cfg, "graph_entity_llm_provider", "siliconflow")) or resolved_stage.values.provider,
+        base_url=str(getattr(cfg, "graph_entity_llm_base_url", "https://api.siliconflow.cn/v1")) or resolved_stage.values.api_base,
+        api_key_env=str(getattr(cfg, "graph_entity_llm_api_key_env", "SILICONFLOW_API_KEY")) or resolved_stage.values.api_key_env,
+        api_key=resolved_stage.api_key,
+        model=str(getattr(cfg, "graph_entity_llm_model", "Pro/deepseek-ai/DeepSeek-V3.2")) or resolved_stage.values.model,
         timeout_ms=max(1000, int(getattr(cfg, "graph_entity_llm_timeout_ms", 12000))),
         max_concurrency=max(
             1,

@@ -30,6 +30,7 @@ from app.config import load_and_validate_config
 from app.llm_client import call_chat_completion
 from app.paths import CONFIGS_DIR
 from app.planner_runtime_config import evaluate_planner_service_state
+from app.planner_runtime_config import load_effective_planner_runtime
 from app.session_state import load_planner_conversation_state
 
 try:  # pragma: no cover - exercised indirectly when langgraph is installed
@@ -408,17 +409,19 @@ def _build_planner_llm_candidate(
     if not config_path:
         config_path = str(CONFIGS_DIR / "default.yaml")
 
-    cfg, _ = load_and_validate_config(config_path)
-    provider = str(getattr(cfg, "planner_provider", "")).strip()
-    model = str(getattr(cfg, "planner_model", "")).strip()
-    api_base = str(getattr(cfg, "planner_api_base", "")).strip()
-    api_key_env = str(getattr(cfg, "planner_api_key_env", "")).strip()
-    api_key = os.getenv(api_key_env, "").strip() if api_key_env else ""
+    cfg, cfg_warnings = load_and_validate_config(config_path)
+    effective_planner, _, planner_warnings = load_effective_planner_runtime(config_path)
+    provider = str(getattr(cfg, "planner_provider", "")).strip() or effective_planner.provider
+    model = str(getattr(cfg, "planner_model", "")).strip() or effective_planner.model
+    api_base = str(getattr(cfg, "planner_api_base", "")).strip() or effective_planner.api_base
+    api_key = str(effective_planner.api_key or "").strip()
     planner_state = evaluate_planner_service_state(cfg, api_key=api_key)
     diagnostics["provider"] = provider or None
     diagnostics["model"] = model or None
     if not bool(planner_state.get("formal_chat_available")):
         diagnostics["reason"] = str(planner_state.get("reason_code") or "planner_system_blocked")
+        if cfg_warnings or planner_warnings:
+            diagnostics["warnings"] = list(cfg_warnings) + list(planner_warnings)
         return None, diagnostics
 
     diagnostics["attempted"] = True
@@ -442,15 +445,21 @@ def _build_planner_llm_candidate(
         diagnostics["reason"] = str(getattr(result, "reason", None) or "planner_llm_call_failed")
         diagnostics["status_code"] = getattr(result, "status_code", None)
         diagnostics["error_category"] = getattr(result, "error_category", None)
+        if cfg_warnings or planner_warnings:
+            diagnostics["warnings"] = list(cfg_warnings) + list(planner_warnings)
         return None, diagnostics
 
     payload = _extract_first_json_object(str(result.content or ""))
     if not isinstance(payload, dict):
         diagnostics["status"] = "invalid_payload"
         diagnostics["reason"] = "planner_llm_invalid_json"
+        if cfg_warnings or planner_warnings:
+            diagnostics["warnings"] = list(cfg_warnings) + list(planner_warnings)
         return None, diagnostics
 
     diagnostics["status"] = "ok"
+    if cfg_warnings or planner_warnings:
+        diagnostics["warnings"] = list(cfg_warnings) + list(planner_warnings)
     return payload, diagnostics
 
 
