@@ -42,7 +42,6 @@ function buildPlannerRuntimeOverview(
 ): RuntimeOverview['planner'] {
   return {
     service_mode: 'diagnostic',
-    use_llm: false,
     provider: 'siliconflow',
     api_base: 'https://api.siliconflow.cn/v1',
     model: 'Pro/deepseek-ai/DeepSeek-V3.2',
@@ -428,8 +427,9 @@ test('llm settings panel supports saving a single stage without persisting other
   await page.getByTestId('llm-answer-save-btn').click();
 
   await expect.poll(() => savedPayload).not.toBeNull();
-  expect(savedPayload?.answer.api_base).toBe('https://answer.single-save.example.com/v1');
-  expect(savedPayload?.embedding.api_base).not.toBe('https://embedding-unsaved.example.com/v1');
+  const payload = savedPayload as unknown as FullPayload;
+  expect(payload.answer.api_base).toBe('https://answer.single-save.example.com/v1');
+  expect(payload.embedding.api_base).not.toBe('https://embedding-unsaved.example.com/v1');
   await expect(page.getByTestId('llm-answer-api-base-input')).toHaveValue('https://answer.single-save.example.com/v1');
   await expect(page.getByTestId('llm-embedding-api-base-input')).toHaveValue('https://embedding-unsaved.example.com/v1');
 });
@@ -1404,7 +1404,6 @@ test('settings page saves planner runtime config and refreshes runtime overview'
       sufficiency_judge: { provider: 'siliconflow', model: 'judge', configured: true }
     },
     planner: {
-      use_llm: false,
       provider: 'siliconflow',
       api_base: 'https://api.siliconflow.cn/v1',
       model: 'Pro/deepseek-ai/DeepSeek-V3.2',
@@ -1454,7 +1453,6 @@ test('settings page saves planner runtime config and refreshes runtime overview'
       ...runtimeOverviewState,
       planner: buildPlannerRuntimeOverview({
         service_mode: 'production',
-        use_llm: true,
         provider: 'openai',
         api_base: 'https://planner.example.com/v1',
         model: 'gpt-4.1-mini',
@@ -1489,7 +1487,7 @@ test('settings page saves planner runtime config and refreshes runtime overview'
   await page.getByTestId('planner-provider-select').selectOption('openai');
   await page.getByTestId('planner-api-base-input').fill('https://planner.example.com/v1');
   await page.getByTestId('planner-api-key-input').fill('sk-planner');
-  await page.getByTestId('planner-model-input').fill('gpt-4.1-mini');
+  await page.getByTestId('planner-model-select').selectOption('gpt-4.1-mini');
   await page.getByTestId('planner-timeout-input').fill('9000');
   await page.getByTestId('planner-save-btn').click();
 

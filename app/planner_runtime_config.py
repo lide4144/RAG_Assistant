@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any, Literal
 import yaml
 
-from app.admin_llm_config import mask_api_key, normalize_api_base
+from app.admin_llm_config import mask_api_key, normalize_api_base, normalize_provider_alias
 from app.config_governance import PLANNER_RUNTIME_FIELD_GOVERNANCE
 from app.paths import CONFIGS_DIR
 
@@ -45,7 +45,7 @@ def default_planner_runtime_config() -> PlannerRuntimeConfig:
     return PlannerRuntimeConfig(
         service_mode="production",
         legacy_use_llm=None,
-        provider="siliconflow",
+        provider="openai",
         api_base="https://api.siliconflow.cn/v1",
         api_key="",
         model="Pro/deepseek-ai/DeepSeek-V3.2",
@@ -112,7 +112,7 @@ def validate_planner_runtime_payload(payload: Any) -> PlannerRuntimeConfig:
     defaults = default_planner_runtime_config()
     service_mode = _compat_service_mode_from_payload(payload, defaults)
     legacy_use_llm = _coerce_legacy_use_llm(payload.get("use_llm"))
-    provider = str(payload.get("provider", defaults.provider) or "").strip() or defaults.provider
+    provider = normalize_provider_alias(str(payload.get("provider", defaults.provider) or "").strip() or defaults.provider)
     api_base = normalize_api_base(str(payload.get("api_base", defaults.api_base) or defaults.api_base))
     api_key = str(payload.get("api_key", "") or "").strip()
     model = str(payload.get("model", defaults.model) or "").strip()

@@ -11,6 +11,7 @@ from app.paths import CONFIGS_DIR
 
 
 RUNTIME_LLM_CONFIG_PATH = CONFIGS_DIR / "llm_runtime_config.json"
+OPENAI_COMPATIBLE_PROVIDER_ALIASES = {"siliconflow", "silicon-flow"}
 
 
 @dataclass(frozen=True)
@@ -46,6 +47,13 @@ def normalize_api_base(value: str) -> str:
     return base
 
 
+def normalize_provider_alias(provider: str, *, preserve_native: bool = False) -> str:
+    normalized = str(provider or "").strip().lower()
+    if normalized in OPENAI_COMPATIBLE_PROVIDER_ALIASES:
+        return "siliconflow" if preserve_native else "openai"
+    return str(provider or "").strip()
+
+
 def mask_api_key(value: str) -> str:
     raw = str(value or "").strip()
     if not raw:
@@ -62,7 +70,10 @@ def _parse_runtime_payload(payload: Any) -> RuntimeLLMConfig:
     def _parse_stage(stage_payload: Any, *, stage_name: str, default_provider: str) -> RuntimeStageConfig:
         if not isinstance(stage_payload, dict):
             raise ValueError(f"{stage_name} must be an object")
-        provider = str(stage_payload.get("provider", "")).strip() or default_provider
+        provider = normalize_provider_alias(
+            str(stage_payload.get("provider", "")).strip() or default_provider,
+            preserve_native=(stage_name == "rerank"),
+        ) or default_provider
         api_base = normalize_api_base(str(stage_payload.get("api_base", "")))
         api_key = str(stage_payload.get("api_key", "")).strip()
         model = str(stage_payload.get("model", "")).strip()
@@ -121,9 +132,9 @@ def _parse_runtime_payload(payload: Any) -> RuntimeLLMConfig:
         answer = RuntimeStageConfig(provider="openai", api_base=api_base, api_key=api_key, model=model)
         embedding = RuntimeStageConfig(provider="siliconflow", api_base=api_base, api_key=api_key, model=model)
         rerank = RuntimeStageConfig(provider="siliconflow", api_base=api_base, api_key=api_key, model=model)
-        rewrite = RuntimeStageConfig(provider="siliconflow", api_base=api_base, api_key=api_key, model=model)
-        graph_entity = RuntimeStageConfig(provider="siliconflow", api_base=api_base, api_key=api_key, model=model)
-        sufficiency_judge = RuntimeStageConfig(provider="siliconflow", api_base=api_base, api_key=api_key, model=model)
+        rewrite = RuntimeStageConfig(provider="openai", api_base=api_base, api_key=api_key, model=model)
+        graph_entity = RuntimeStageConfig(provider="openai", api_base=api_base, api_key=api_key, model=model)
+        sufficiency_judge = RuntimeStageConfig(provider="openai", api_base=api_base, api_key=api_key, model=model)
 
     updated_at = str(payload.get("updated_at", "")).strip() or _utc_now_iso()
     return RuntimeLLMConfig(
