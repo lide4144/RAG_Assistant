@@ -6,6 +6,7 @@ import json
 import os
 from pathlib import Path
 from typing import Any, Literal
+import yaml
 
 from app.admin_llm_config import mask_api_key, normalize_api_base
 from app.config_governance import PLANNER_RUNTIME_FIELD_GOVERNANCE
@@ -169,6 +170,32 @@ def load_planner_runtime_config(path: Path | None = None) -> tuple[PlannerRuntim
         return validate_planner_runtime_payload(payload), None
     except ValueError as exc:
         return None, f"invalid planner runtime config: {exc}"
+
+
+def load_effective_planner_runtime(config_path: str | Path | None = None) -> tuple[PlannerRuntimeConfig, dict[str, str], list[str]]:
+    raw_data: dict[str, Any] = {}
+    config_warnings: list[str] = []
+    source = Path(config_path) if config_path is not None else (CONFIGS_DIR / "default.yaml")
+    try:
+        payload = yaml.safe_load(source.read_text(encoding="utf-8")) or {}
+        if isinstance(payload, dict):
+            raw_data = payload
+        else:
+            config_warnings.append(f"Config root must be a mapping in {source}.")
+    except FileNotFoundError:
+        config_warnings.append(f"Config file not found: {source}.")
+    except Exception as exc:
+        config_warnings.append(f"Failed to load planner config from {source}: {exc}")
+
+    runtime_cfg, runtime_err = load_planner_runtime_config()
+    if runtime_err:
+        config_warnings.append(f"Planner runtime config ignored: {runtime_err}")
+
+    effective, source_map, planner_warnings = resolve_effective_planner_runtime(
+        raw_data=raw_data,
+        runtime_cfg=runtime_cfg if runtime_err is None else None,
+    )
+    return effective, source_map, config_warnings + planner_warnings
 
 
 def resolve_effective_planner_runtime(

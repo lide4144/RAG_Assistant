@@ -2,9 +2,12 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import os
+from pathlib import Path
 from typing import Any, Literal
+import yaml
 
-from app.admin_llm_config import RuntimeLLMConfig, normalize_api_base
+from app.admin_llm_config import RuntimeLLMConfig, load_runtime_llm_config, normalize_api_base
+from app.paths import CONFIGS_DIR
 
 
 ConfigOwner = Literal["static", "runtime", "env_only"]
@@ -36,6 +39,14 @@ class EffectiveLLMStage:
 @dataclass(frozen=True)
 class EffectiveLLMStages:
     stages: dict[str, EffectiveLLMStage]
+    warnings: list[str]
+
+
+@dataclass(frozen=True)
+class ResolvedLLMStage:
+    values: EffectiveStageConfig
+    api_key: str
+    source: dict[str, RuntimeSource]
     warnings: list[str]
 
 
@@ -317,3 +328,45 @@ def resolve_effective_llm_stages(
         )
 
     return EffectiveLLMStages(stages=stages, warnings=warnings)
+
+
+def load_resolved_llm_stage(
+    *,
+    stage: str,
+    config_path: str | Path | None = None,
+    runtime_api_key_env_prefix: str = "RAG_RUNTIME_LLM_API_KEY",
+) -> ResolvedLLMStage:
+    source = Path(config_path) if config_path is not None else (CONFIGS_DIR / "default.yaml")
+    raw_data: dict[str, Any] = {}
+    warnings: list[str] = []
+    try:
+        payload = yaml.safe_load(source.read_text(encoding="utf-8")) or {}
+        if isinstance(payload, dict):
+            raw_data = payload
+        else:
+            warnings.append(f"Config root must be a mapping in {source}.")
+    except FileNotFoundError:
+        warnings.append(f"Config file not found: {source}.")
+    except Exception as exc:
+        warnings.append(f"Failed to load LLM config from {source}: {exc}")
+
+    runtime_cfg, runtime_err = load_runtime_llm_config()
+    if runtime_err:
+        warnings.append(f"Runtime LLM config ignored: {runtime_err}")
+    effective = resolve_effective_llm_stages(
+        raw_data=raw_data,
+        runtime_cfg=runtime_cfg if runtime_err is None else None,
+        runtime_api_key_env_prefix=runtime_api_key_env_prefix,
+    )
+    warnings.extend(effective.warnings)
+    selected = effective.stages[stage]
+    api_key = _runtime_stage_value(runtime_cfg if runtime_err is None else None, stage=stage, field="api_key") or ""
+    if not api_key:
+        api_env = str(selected.values.api_key_env or "").strip()
+        api_key = str(os.getenv(api_env, "") or "").strip() if api_env else ""
+    return ResolvedLLMStage(
+        values=selected.values,
+        api_key=api_key,
+        source=dict(selected.source),
+        warnings=warnings,
+    )

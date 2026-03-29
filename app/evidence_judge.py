@@ -1,10 +1,10 @@
 from __future__ import annotations
 
 import json
-import os
 import re
 from typing import Any
 
+from app.config_governance import load_resolved_llm_stage
 from app.llm_client import call_chat_completion
 
 TOKEN_RE = re.compile(r"[A-Za-z0-9_]+(?:[-/][A-Za-z0-9_]+)*|[\u4e00-\u9fff]+")
@@ -128,8 +128,8 @@ def judge_semantic_evidence(
             warning="judge_llm_disabled",
             status="error",
         )
-    api_env = str(getattr(config, "sufficiency_judge_llm_api_key_env", "")).strip()
-    api_key = os.environ.get(api_env, "").strip() if api_env else ""
+    resolved_stage = load_resolved_llm_stage(stage="sufficiency_judge")
+    api_key = resolved_stage.api_key
     if not api_key:
         return _judge_error(
             config=config,

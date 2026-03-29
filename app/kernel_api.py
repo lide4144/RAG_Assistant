@@ -2506,8 +2506,23 @@ def _stage_health_entry(*, stage: str, provider: str, model: str, reason: str | 
 
 def _load_planner_config_state(config_path: str | Path | None = None) -> tuple[Any, list[str], dict[str, Any]]:
     cfg, warnings = load_and_validate_config(config_path or (CONFIGS_DIR / "default.yaml"))
-    planner_state = evaluate_planner_service_state(cfg)
-    return cfg, warnings, planner_state
+    runtime_cfg, runtime_err = load_planner_runtime_config()
+    planner_warnings: list[str] = []
+    if runtime_err:
+        planner_warnings.append(f"Planner runtime config ignored: {runtime_err}")
+    try:
+        raw_data = yaml.safe_load((Path(config_path or (CONFIGS_DIR / "default.yaml"))).read_text(encoding="utf-8")) or {}
+        if not isinstance(raw_data, dict):
+            raw_data = {}
+    except Exception as exc:
+        raw_data = {}
+        planner_warnings.append(f"Failed to load planner raw config: {exc}")
+    effective_planner, _, effective_warnings = resolve_effective_planner_runtime(
+        raw_data=raw_data,
+        runtime_cfg=runtime_cfg if runtime_err is None else None,
+    )
+    planner_state = evaluate_planner_service_state(cfg, api_key=effective_planner.api_key)
+    return cfg, list(warnings) + planner_warnings + list(effective_warnings), planner_state
 
 
 def _planner_block_detail(planner_state: dict[str, Any]) -> dict[str, Any]:
