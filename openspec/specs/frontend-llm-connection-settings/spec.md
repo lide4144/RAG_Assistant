@@ -19,11 +19,15 @@
 - **那么** 页面必须展示全模型配置分组，并允许逐项独立编辑与保存
 
 ### 需求:系统必须在探测成功后提供模型选择
-系统必须在模型探测成功后展示模型下拉框，并禁止在未探测成功时展示无效模型选项。
+系统必须在模型探测成功后展示模型下拉框，并禁止在未探测成功时展示无效模型选项。该要求同时适用于核心 stage 配置区与独立的 Planner Runtime 配置区；Planner Runtime 不得退化为仅支持手填模型名的单独表单。
 
 #### 场景:探测成功
 - **当** 后端返回至少一个可用模型
 - **那么** 系统必须显示模型下拉并允许管理员选择目标模型
+
+#### 场景:Planner Runtime 探测成功
+- **当** 管理员在 Planner Runtime 配置区完成连接测试并拿到模型列表
+- **那么** 页面必须为 Planner Runtime 显示模型下拉，并允许从探测结果中选择 planner model
 
 ### 需求:系统必须支持保存最终配置
 系统必须在模型设置页使用与聊天页和全局壳层一致的部署友好管理接口寻址策略。未显式配置 `NEXT_PUBLIC_KERNEL_BASE_URL` 时，模型设置页的配置读取、保存、模型探测与运行态概览请求必须优先走当前站点下的受控相对 `/api/admin/*` 路径，禁止默认请求 `127.0.0.1`、`0.0.0.0` 或浏览器本机回环地址。系统还必须支持编辑并保存 Marker/Surya 运行档位参数，包括 `recognition_batch_size`、`detector_batch_size`、`layout_batch_size`、`ocr_error_batch_size`、`table_rec_batch_size`、`model_dtype`，并必须同时支持 Marker `--use_llm` 所需的服务配置，包括 `llm_service` 选择以及 provider 所需的连接字段；保存后必须回显最新生效值。
@@ -93,11 +97,19 @@
 - **那么** 系统必须为 `embedding`、`rewrite` 填入 Ollama 推荐默认值，为 `rerank` 填入远端兼容推荐默认值，并保留用户后续手动修改能力
 
 ### 需求:系统必须支持 Provider 预设联动
-系统必须在管理员选择 Provider 后自动填充推荐 API Base，且必须允许管理员在自动填充后手动覆盖。
+系统必须在管理员选择 Provider 后自动填充推荐 API Base，且必须允许管理员在自动填充后手动覆盖。对于聊天、规划和其他 OpenAI-compatible 配置链路，前端还必须优先使用协议语义表达 provider，并在需要展示具体服务商时通过预设文案或 API Base 辅助说明，而不是把服务商品牌名直接当作通用 provider 持久化。对于 `embedding` 与 `rerank` 这类原生专用链路，前端必须允许保留原生 provider 选项。
 
 #### 场景:选择服务商
 - **当** 管理员在 Provider 下拉框中选择某服务商
 - **那么** 系统必须自动填充推荐 API Base 并允许后续修改
+
+#### 场景:选择 OpenAI-compatible 服务商
+- **当** 管理员为 `answer`、`rewrite`、`planner`、`graph_entity` 或 `sufficiency_judge` 选择 SiliconFlow 等 OpenAI-compatible 上游
+- **那么** 前端必须按 OpenAI-compatible 语义保存 provider，并同时保留服务商预设带来的推荐 API Base 与模型探测能力
+
+#### 场景:选择原生专用服务商
+- **当** 管理员为 `embedding` 或 `rerank` 选择 SiliconFlow
+- **那么** 前端必须允许保留原生 `siliconflow` provider，而不得统一改写为 OpenAI-compatible provider
 
 ### 需求:系统必须提供安全的 API Key 输入体验
 系统必须默认掩码显示 API Key 输入值，并必须提供显隐切换控件；禁止在非用户显式操作下明文展示密钥。
@@ -121,10 +133,13 @@
 - **当** 管理员需要调整 `planner` 的启用状态、provider、api_base、api_key、model 或 timeout
 - **那么** 系统必须在“模型设置”页面提供独立高风险配置区，而不是将其混入普通 stage 卡片，并在保存后回显当前生效来源
 
+#### 场景:管理员从历史配置进入 Planner Runtime 设置
+- **当** Planner Runtime 已保存历史模型值但尚未重新执行模型探测
+- **那么** 页面必须仍能回显该模型并允许后续在探测成功后切换到新的可选模型
+
 ### 需求:系统必须保持设置页现代化实现兼容约束
 系统后续对“模型设置”页面的重构、扩展与现代化实现必须保持对 `magic-mcp` 工作流的兼容性，避免把具体实现过程固化为唯一硬性要求；界面文案与交互说明必须保持中文语境；当实现进入代码阶段时，与该页面相关的新增或调整注解必须保持中文风格。
 
 #### 场景:后续迭代设置页界面
 - **当** 团队继续重构或扩展“模型设置”页面
 - **那么** 相关实现必须保持 `magic-mcp` 兼容约束，并保持中文文案与中文注解风格
-
