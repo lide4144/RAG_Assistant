@@ -1,8 +1,9 @@
-# planner-runtime-config-persistence 规范
+## 新增需求
 
-## 目的
-待定 - 由归档变更 unify-config-governance 创建。归档后请更新目的。
-## 需求
+无
+
+## 修改需求
+
 ### 需求:系统必须对 Planner Runtime 提供一致的来源可观测性
 系统必须在管理接口或运行态概览中说明 Planner Runtime 当前使用的是静态基线、runtime 持久化配置还是环境变量覆盖。禁止让管理员在前端保存后仍无法判断顶层规划器是否真正使用了新的模型连接。对于正式模式，来源可观测性还必须明确说明当前 Planner Runtime 是否满足正式聊天可服务前置条件。对于使用 OpenAI-compatible 上游的 Planner Runtime，系统还必须在保存、回显与执行时使用一致的 provider 规范化语义，避免展示层显示可用而执行层因 provider 解释不同而失败。
 
@@ -28,3 +29,5 @@
 #### 场景:存在运行时持久化 Planner Key
 - **当** Planner Runtime 的运行时持久化配置已提供可用 API Key
 - **那么** 系统必须允许执行链直接使用该最终解析值完成 planner 调用，而不得因为缺少旧环境变量注入副作用而误判 planner 不可服务
+
+## 移除需求
