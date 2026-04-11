@@ -12,6 +12,12 @@ interface EventMeta {
   webProvider?: WebProviderMeta;
 }
 
+interface JobEventIdentity {
+  jobId?: string;
+  seq?: number;
+  createdAt?: string;
+}
+
 export interface ClientChatRequestEvent {
   type: 'chat';
   payload: {
@@ -35,7 +41,15 @@ export interface ClientTaskStartGraphBuildEvent {
   };
 }
 
-export interface MessageEvent {
+export interface ClientJobSubscribeEvent {
+  type: 'job_subscribe';
+  payload: {
+    jobId: string;
+    afterSeq?: number;
+  };
+}
+
+export interface MessageEvent extends JobEventIdentity {
   type: 'message';
   traceId: string;
   mode: ChatMode;
@@ -43,25 +57,27 @@ export interface MessageEvent {
   meta?: EventMeta;
 }
 
-export interface SourcesEvent {
+export interface SourcesEvent extends JobEventIdentity {
   type: 'sources';
   traceId: string;
   mode: ChatMode;
   sources: KernelSource[];
+  runId?: string;
   meta?: EventMeta;
 }
 
-export interface MessageEndEvent {
+export interface MessageEndEvent extends JobEventIdentity {
   type: 'messageEnd';
   traceId: string;
   mode: ChatMode;
+  runId?: string;
   usage?: {
     latencyMs: number;
   };
   meta?: EventMeta;
 }
 
-export interface ErrorEvent {
+export interface ErrorEvent extends JobEventIdentity {
   type: 'error';
   traceId: string;
   code: string;
@@ -110,7 +126,7 @@ export interface TaskErrorEvent {
   updatedAt: string;
 }
 
-export type ClientInboundEvent = ClientChatRequestEvent | ClientTaskStartGraphBuildEvent;
+export type ClientInboundEvent = ClientChatRequestEvent | ClientTaskStartGraphBuildEvent | ClientJobSubscribeEvent;
 export type OutboundEvent =
   | AgentEvent
   | MessageEvent

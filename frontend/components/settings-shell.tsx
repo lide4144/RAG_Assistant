@@ -1,11 +1,11 @@
 'use client';
 
-import { ChevronDown, Eye, EyeOff, HelpCircle, Sparkles } from 'lucide-react';
+import { ChevronDown, Clock3, Eye, EyeOff, HelpCircle, Lock, ShieldAlert, Sparkles } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
 import { toast } from 'sonner';
 import { fetchAdminJson } from '../lib/admin-http';
 import { resolveAdminUrl } from '../lib/deployment-endpoints';
-import type { MarkerLlmRuntimeConfig, MarkerTuning, PlannerRuntimeSummary, RuntimeOverview, RuntimeSource } from '../lib/types';
+import type { LlmLoggingSummary, MarkerLlmRuntimeConfig, MarkerTuning, PlannerRuntimeSummary, RuntimeOverview, RuntimeSource } from '../lib/types';
 
 type AdminModel = { id: string; owned_by?: string | null };
 type StageKey = 'answer' | 'embedding' | 'rerank' | 'rewrite' | 'graph_entity' | 'sufficiency_judge';
@@ -65,9 +65,10 @@ type MarkerLlmForm = {
 };
 type PipelineConfigPayload = {
   configured?: boolean;
-  saved?: { marker_tuning?: MarkerTuning; marker_llm?: MarkerLlmForm };
-  effective?: { marker_tuning?: MarkerTuning; marker_llm?: MarkerLlmForm };
+  saved?: { marker_enabled?: boolean; marker_tuning?: MarkerTuning; marker_llm?: MarkerLlmForm };
+  effective?: { marker_enabled?: boolean; marker_tuning?: MarkerTuning; marker_llm?: MarkerLlmForm };
   effective_source?: {
+    marker_enabled?: RuntimeSource;
     marker_tuning?: Partial<Record<keyof MarkerTuning, RuntimeSource>>;
     marker_llm?: Partial<Record<MarkerLlmField, RuntimeSource>>;
   };
@@ -256,6 +257,104 @@ function formatRuntimeSource(source?: RuntimeSource): string {
   return '静态基线';
 }
 
+function formatBytes(value?: number): string {
+  const size = typeof value === 'number' && Number.isFinite(value) ? value : 0;
+  if (size < 1024) {
+    return `${size} B`;
+  }
+  if (size < 1024 * 1024) {
+    return `${(size / 1024).toFixed(1)} KB`;
+  }
+  if (size < 1024 * 1024 * 1024) {
+    return `${(size / (1024 * 1024)).toFixed(1)} MB`;
+  }
+  return `${(size / (1024 * 1024 * 1024)).toFixed(1)} GB`;
+}
+
+function formatRelativeTimeLabel(raw?: string): string {
+  if (!raw) {
+    return '未知时间';
+  }
+  const date = new Date(raw);
+  if (Number.isNaN(date.getTime())) {
+    return raw;
+  }
+  return date.toLocaleString('zh-CN', {
+    month: 'numeric',
+    day: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit'
+  });
+}
+
+function formatMarkerModeSummary(summary?: string, markerEnabled?: boolean): string {
+  if (summary === 'degraded_available') {
+    return '增强降级可用';
+  }
+  if (summary === 'enhanced') {
+    return '增强解析';
+  }
+  if (summary === 'base_only') {
+    return '基础解析';
+  }
+  return markerEnabled ? '增强解析' : '基础解析';
+}
+
+function formatActiveJobKind(kind?: string): string {
+  if (!kind) {
+    return '后台任务';
+  }
+  if (kind.includes('chat')) {
+    return '对话回答';
+  }
+  if (kind.includes('planner')) {
+    return '回答规划';
+  }
+  if (kind.includes('import')) {
+    return '资料导入';
+  }
+  return kind;
+}
+
+function formatActiveJobState(state?: string): string {
+  if (state === 'queued') {
+    return '排队中';
+  }
+  if (state === 'running') {
+    return '进行中';
+  }
+  if (state === 'succeeded') {
+    return '已完成';
+  }
+  if (state === 'failed') {
+    return '失败';
+  }
+  return state || '处理中';
+}
+
+function formatActiveJobStage(progressStage?: string): string {
+  const normalized = (progressStage || '').toLowerCase();
+  if (!normalized) {
+    return '正在处理中';
+  }
+  if (normalized.includes('queue')) {
+    return '等待系统接单';
+  }
+  if (normalized.includes('plan')) {
+    return '判断回答路径';
+  }
+  if (normalized.includes('retriev') || normalized.includes('search') || normalized.includes('recall')) {
+    return '查找相关资料';
+  }
+  if (normalized.includes('rerank') || normalized.includes('rank')) {
+    return '筛选重点内容';
+  }
+  if (normalized.includes('answer') || normalized.includes('write') || normalized.includes('draft') || normalized.includes('stream')) {
+    return '整理最终回答';
+  }
+  return progressStage || '正在处理中';
+}
+
 function normalizeCompatibleProvider(provider: string, { preserveNative = false }: { preserveNative?: boolean } = {}): string {
   const normalized = provider.trim().toLowerCase();
   if (normalized === 'siliconflow' || normalized === 'silicon-flow') {
@@ -308,6 +407,7 @@ export function SettingsShell() {
   const [draftHydrated, setDraftHydrated] = useState(false);
   const [persistedDraft, setPersistedDraft] = useState<DraftPayload>(toDraftPayload(initialConfigs));
   const [markerTuning, setMarkerTuning] = useState<MarkerTuning>(defaultMarkerTuning);
+  const [markerEnabled, setMarkerEnabled] = useState(false);
   const [markerFieldErrors, setMarkerFieldErrors] = useState<Partial<Record<keyof MarkerTuning, string>>>({});
   const [markerLlm, setMarkerLlm] = useState<MarkerLlmForm>(defaultMarkerLlm);
   const [markerLlmFieldErrors, setMarkerLlmFieldErrors] = useState<Partial<Record<MarkerLlmField, string>>>({});
@@ -330,9 +430,13 @@ export function SettingsShell() {
   const llmConfigUrl = useMemo(() => resolveAdminUrl('/api/admin/llm-config'), []);
   const detectModelsUrl = useMemo(() => resolveAdminUrl('/api/admin/detect-models'), []);
   const pipelineConfigUrl = useMemo(() => resolveAdminUrl('/api/admin/pipeline-config'), []);
+  const llmLogDownloadUrl = useMemo(() => resolveAdminUrl('/api/admin/llm-logs/download'), []);
   const plannerConfigUrl = useMemo(() => resolveAdminUrl('/api/admin/planner-config'), []);
   const runtimeOverviewUrl = useMemo(() => resolveAdminUrl('/api/admin/runtime-overview'), []);
-  const controlsDisabled = !draftHydrated;
+  const settingsLocked = runtimeOverview?.jobs?.settings_locked === true;
+  const activeJobs = runtimeOverview?.jobs?.active ?? [];
+  const primaryActiveJob = activeJobs[0];
+  const controlsDisabled = !draftHydrated || settingsLocked;
   const visibleMarkerLlmFields = markerLlm.use_llm ? markerLlmFieldOrder[markerLlm.llm_service] ?? [] : [];
 
   const providerOptions = useMemo(
@@ -348,6 +452,7 @@ export function SettingsShell() {
     ['sufficiency_judge', '证据判定模型', '用于充分性与证据匹配判定']
   ];
   const plannerDirty = useMemo(() => JSON.stringify(plannerConfig) !== JSON.stringify(plannerPersisted), [plannerConfig, plannerPersisted]);
+  const runtimeLlmLogging = runtimeOverview?.observability?.llm_logging as LlmLoggingSummary | undefined;
 
   const setField = <K extends keyof StageConfig>(stage: StageKey, field: K, value: StageConfig[K]) => {
     setConfigs((prev) => ({
@@ -411,6 +516,9 @@ export function SettingsShell() {
   const mapAdminErrorToGuidance = (parsed: ParsedAdminError, action: 'detect' | 'save'): string => {
     const code = parsed.code?.toUpperCase() ?? '';
     const message = parsed.message || '请求失败';
+    if (code === 'SETTINGS_LOCKED_BY_ACTIVE_JOB') {
+      return withBackendDetail('当前存在运行中的任务，设置暂时只读，请等待任务结束后再修改。', message);
+    }
     if (code === 'AUTH_FAILED') {
       return withBackendDetail('认证失败：请检查 API Key 是否正确、是否过期，并确认 API Base 与服务商一致。', message);
     }
@@ -616,6 +724,7 @@ export function SettingsShell() {
           if (pipelineResult.data.saved?.marker_tuning) {
             setMarkerTuning(pipelineResult.data.saved.marker_tuning);
           }
+          setMarkerEnabled(Boolean(pipelineResult.data.saved?.marker_enabled));
           if (pipelineResult.data.saved?.marker_llm) {
             const nextMarkerLlm = { ...defaultMarkerLlm, ...pipelineResult.data.saved.marker_llm };
             setMarkerOpenAiModels(mergeDetectedModels([], nextMarkerLlm.openai_model));
@@ -1044,6 +1153,7 @@ export function SettingsShell() {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
+          marker_enabled: markerEnabled,
           marker_tuning: {
             recognition_batch_size: Number(markerTuning.recognition_batch_size),
             detector_batch_size: Number(markerTuning.detector_batch_size),
@@ -1081,8 +1191,8 @@ export function SettingsShell() {
         toast.error('Marker tuning 保存失败');
         return;
       }
-      setPipelineStatusText('Marker Runtime 与 LLM service 配置已保存并生效。');
-      toast.success('Marker tuning 保存成功');
+      setPipelineStatusText('Marker 开关、运行档位与增强服务配置已保存并生效。');
+      toast.success('Marker 配置保存成功');
       const [pipelineResult, overviewResult] = await Promise.all([
         fetchAdminJson<PipelineConfigPayload>(pipelineConfigUrl),
         fetchAdminJson<RuntimeOverview>(runtimeOverviewUrl)
@@ -1095,7 +1205,7 @@ export function SettingsShell() {
       }
     } catch {
       setPipelineGlobalError('网络请求失败：请确认内核服务在线后重试保存。');
-      toast.error('Marker tuning 保存失败');
+      toast.error('Marker 配置保存失败');
     } finally {
       setPipelineSaveLoading(false);
     }
@@ -1179,10 +1289,10 @@ export function SettingsShell() {
       <header className="mb-6">
         <p className="text-xs font-semibold uppercase tracking-[0.2em] text-slate-500">模型设置</p>
         <h2 data-testid="settings-shell-title" className="mt-2 text-[32px] font-semibold tracking-tight text-slate-950">
-          运行时模型设置与导入调优
+          模型设置与导入优化
         </h2>
         <p className="mt-2 max-w-3xl text-sm leading-6 text-slate-600">
-          本页只管理运行时可调整配置，不覆盖 `default.yaml` 中的系统基线策略。首屏优先展示实际生效来源，避免把前端保存值误判为全量系统配置。
+          这里只改当前页面可调的配置，不会覆盖底层默认策略。页面上半部分先告诉你系统现在实际在用什么，避免改错位置。
         </p>
         {!draftHydrated ? (
           <p data-testid="llm-loading-text" className="mt-2 text-xs text-slate-500">
@@ -1193,17 +1303,121 @@ export function SettingsShell() {
             配置已加载
           </p>
         )}
+        {settingsLocked ? (
+          <div
+            data-testid="settings-lock-banner"
+            className="lock-grid mt-4 overflow-hidden rounded-[30px] border border-amber-300 bg-[radial-gradient(circle_at_top_left,rgba(251,191,36,0.22),transparent_34%),linear-gradient(135deg,#fff7ed,#ffffff_52%,#fef3c7)] shadow-[0_26px_70px_rgba(245,158,11,0.16)]"
+          >
+            <div className="grid gap-4 p-5 lg:grid-cols-[1.15fr_0.85fr] lg:p-6">
+              <div>
+                <div className="inline-flex items-center gap-2 rounded-full border border-amber-300 bg-white/85 px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.22em] text-amber-800">
+                  <span className="lock-pulse inline-flex h-6 w-6 items-center justify-center rounded-full bg-amber-500 text-white">
+                    <Lock className="h-3.5 w-3.5" />
+                  </span>
+                  设置已暂时锁定
+                </div>
+                <h3 className="mt-4 text-[28px] font-semibold leading-tight tracking-tight text-slate-950">
+                  当前正在生成或处理任务，先不要改设置
+                </h3>
+                <p className="mt-3 max-w-2xl text-sm leading-7 text-slate-700">
+                  现在可以继续查看当前配置，但所有输入框、测试连接和保存按钮都会先进入只读模式。等任务结束后，这里会自动恢复可编辑。
+                </p>
+                <div className="mt-4 flex flex-wrap gap-2 text-xs">
+                  <span className="rounded-full border border-amber-200 bg-white/85 px-3 py-1.5 font-medium text-amber-900">
+                    {activeJobs.length || 1} 个任务占用设置锁
+                  </span>
+                  <span className="rounded-full border border-slate-200 bg-white/80 px-3 py-1.5 text-slate-700">当前页面仅可查看</span>
+                </div>
+              </div>
+
+              <div className="rounded-[24px] border border-white/80 bg-white/82 p-4 shadow-sm">
+                <div className="flex items-center gap-2 text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">
+                  <Clock3 className="h-3.5 w-3.5 text-amber-600" />
+                  正在占用设置锁的任务
+                </div>
+                {primaryActiveJob ? (
+                  <div className="mt-3 rounded-[22px] border border-amber-100 bg-amber-50/70 p-4">
+                    <p className="text-lg font-semibold text-slate-950">{formatActiveJobKind(primaryActiveJob.kind)}</p>
+                    <p className="mt-2 text-sm text-slate-700">
+                      {formatActiveJobState(primaryActiveJob.state)} · {formatActiveJobStage(primaryActiveJob.progressStage)}
+                    </p>
+                    <p className="mt-3 break-all text-[11px] font-mono text-slate-500">{primaryActiveJob.jobId}</p>
+                  </div>
+                ) : (
+                  <p className="mt-3 text-sm leading-6 text-slate-600">后台任务正在运行，系统暂时不允许改动配置。</p>
+                )}
+                {activeJobs.slice(1).length ? (
+                  <div className="mt-3 space-y-2 text-xs text-slate-600">
+                    {activeJobs.slice(1, 4).map((job) => (
+                      <div key={job.jobId} className="rounded-2xl border border-slate-200 bg-slate-50 px-3 py-2">
+                        <p className="font-medium text-slate-800">{formatActiveJobKind(job.kind)}</p>
+                        <p className="mt-1">
+                          {formatActiveJobState(job.state)} · {formatActiveJobStage(job.progressStage)}
+                        </p>
+                      </div>
+                    ))}
+                  </div>
+                ) : null}
+              </div>
+            </div>
+          </div>
+        ) : null}
       </header>
+
+      <div className="relative">
+        {settingsLocked ? (
+          <div className="sticky top-4 z-20 mb-4">
+            <div
+              data-testid="settings-lock-spotlight"
+              className="lock-grid rounded-[26px] border border-amber-300 bg-[linear-gradient(135deg,rgba(255,247,237,0.96),rgba(255,255,255,0.98)_55%,rgba(254,243,199,0.94))] p-4 shadow-[0_18px_40px_rgba(245,158,11,0.14)]"
+            >
+              <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+                <div className="flex items-start gap-3">
+                  <span className="lock-pulse inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl bg-amber-500 text-white shadow-[0_10px_30px_rgba(245,158,11,0.28)]">
+                    <ShieldAlert className="h-5 w-5" />
+                  </span>
+                  <div>
+                    <p className="text-[11px] font-semibold uppercase tracking-[0.2em] text-amber-700">只读提醒</p>
+                    <p className="mt-1 text-lg font-semibold text-slate-950">下方所有可编辑区域都已暂时锁住</p>
+                    <p className="mt-1 text-sm leading-6 text-slate-600">
+                      等当前任务结束后，按钮和输入框会自动恢复，不需要手动刷新页面。
+                    </p>
+                  </div>
+                </div>
+                <div className="rounded-2xl border border-white/90 bg-white/80 px-4 py-3 text-sm text-slate-700">
+                  <p className="font-medium text-slate-900">
+                    {primaryActiveJob ? formatActiveJobKind(primaryActiveJob.kind) : '后台任务'}
+                  </p>
+                  <p className="mt-1">
+                    {primaryActiveJob
+                      ? `${formatActiveJobState(primaryActiveJob.state)} · ${formatActiveJobStage(primaryActiveJob.progressStage)}`
+                      : '处理中'}
+                  </p>
+                </div>
+              </div>
+            </div>
+          </div>
+        ) : null}
+
+        <div className={`relative ${settingsLocked ? 'isolate rounded-[34px]' : ''}`}>
+          {settingsLocked ? (
+            <div
+              aria-hidden
+              className="pointer-events-none absolute inset-0 z-10 rounded-[34px] border border-amber-200/80 bg-[linear-gradient(180deg,rgba(255,251,235,0.28),rgba(255,255,255,0.56))]"
+            />
+          ) : null}
+
+          <div className={settingsLocked ? 'opacity-55' : ''}>
 
       <section className="mb-6 grid gap-4 xl:grid-cols-[1.2fr_0.8fr]">
         <article data-testid="runtime-overview-panel" className="rounded-[28px] border border-slate-200 bg-[linear-gradient(135deg,#fffdfa,#ffffff_48%,#f3f8ff)] p-5 shadow-[0_18px_50px_rgba(15,23,42,0.05)]">
           <div className="flex flex-wrap items-start justify-between gap-4">
             <div>
               <p className="text-xs font-semibold uppercase tracking-[0.14em] text-slate-500">当前实际使用的模型</p>
-              <p className="mt-1 text-[11px] text-slate-400">原“运行时模型位点”，现仅展示当前生效结果。</p>
+              <p className="mt-1 text-[11px] text-slate-400">这里只展示系统现在真的在用什么。</p>
               <h3 className="mt-2 text-xl font-semibold text-slate-950">先看系统现在实际在用什么，再决定是否调整</h3>
               <p className="mt-2 text-sm leading-6 text-slate-600">
-                这里是只读摘要，只告诉你回答、向量、重排、问题改写、图谱实体和证据判定这几路当前实际生效的模型与来源。下面的卡片才是保存配置的地方。
+                这里是只读摘要，只告诉你回答、检索、排序这些关键环节当前实际生效的模型和来源。真正可保存的配置在下面。
               </p>
             </div>
             <div className="rounded-2xl border border-slate-200 bg-white/85 px-4 py-3 text-sm text-slate-700">
@@ -1249,9 +1463,9 @@ export function SettingsShell() {
           <div data-testid="planner-runtime-overview" className="mt-4 rounded-[22px] border border-amber-200 bg-amber-50/60 p-4 text-sm text-slate-700">
             <div className="flex flex-wrap items-start justify-between gap-3">
               <div>
-                <p className="text-xs font-semibold uppercase tracking-[0.14em] text-amber-700">规划模型</p>
+                <p className="text-xs font-semibold uppercase tracking-[0.14em] text-amber-700">对话路线模型</p>
                 <p className="mt-1 text-sm text-slate-700">
-                  这部分决定系统是直接回答、先澄清，还是切换到其他执行路径。它会额外产生模型调用成本，建议由管理员单独管理。
+                  这部分决定系统是直接回答，还是先想一步再继续。它更偏高级控制，通常由管理员单独维护。
                 </p>
               </div>
               <div className="rounded-xl border border-amber-200 bg-white/90 px-3 py-2 text-xs text-slate-700">
@@ -1268,13 +1482,44 @@ export function SettingsShell() {
             </p>
           </div>
 
+          <div className="mt-4 rounded-[22px] border border-sky-200 bg-sky-50/60 p-4 text-sm text-slate-700">
+            <div className="flex flex-wrap items-start justify-between gap-3">
+              <div>
+                <p className="text-xs font-semibold uppercase tracking-[0.14em] text-sky-700">LLM 调试日志</p>
+                <p className="mt-1 text-sm text-slate-700">这里只读展示当前后端是否会把模型请求和返回写到控制台/日志文件。</p>
+              </div>
+              <div className="rounded-xl border border-sky-200 bg-white/90 px-3 py-2 text-xs text-slate-700">
+                <p>开关: {runtimeLlmLogging?.enabled ? '开启' : '关闭'}</p>
+                <p>来源: {formatRuntimeSource(runtimeLlmLogging?.source)}</p>
+              </div>
+            </div>
+            <p className="mt-3 text-[11px] text-slate-700">
+              最大日志体长度: {runtimeLlmLogging?.max_body_chars ?? '-'} 字符
+            </p>
+            <p className="mt-1 break-all font-mono text-[11px] text-slate-600">
+              安全根目录: {runtimeLlmLogging?.safe_root || '未设置'}
+            </p>
+            <p className="mt-1 break-all font-mono text-[11px] text-slate-600">
+              文件路径: {runtimeLlmLogging?.log_path || '未设置，当前仅输出到控制台'}
+            </p>
+            <div className="mt-3">
+              <a
+                href={runtimeLlmLogging?.download_url ? resolveAdminUrl(runtimeLlmLogging.download_url) : llmLogDownloadUrl}
+                className="inline-flex items-center rounded-lg border border-sky-200 bg-white px-3 py-1.5 text-xs font-medium text-sky-800 transition hover:bg-sky-50"
+              >
+                下载当前日志文件
+              </a>
+            </div>
+          </div>
+
           <div className="mt-4 rounded-[22px] border border-slate-200 bg-white/85 p-4 text-sm text-slate-700">
             <p className="font-medium text-slate-900">导入增强摘要</p>
             <p className="mt-2">
-              状态：{runtimeOverview?.pipeline.marker_llm?.status || 'disabled'} · 服务：{runtimeOverview?.pipeline.marker_llm?.llm_service || '-'}
+              模式：{formatMarkerModeSummary(runtimeOverview?.pipeline.marker_mode_summary, runtimeOverview?.pipeline.marker_enabled)} · 增强解析：
+              {runtimeOverview?.pipeline.marker_enabled ? '已开启' : '已关闭'}
             </p>
             <p className="mt-1">
-              最近导入：{runtimeOverview?.pipeline.last_ingest?.degraded ? '触发兜底' : '正常完成'} ·{' '}
+              最近导入：{runtimeOverview?.pipeline.last_ingest?.degraded ? '增强降级完成' : '基础或增强正常完成'} ·{' '}
               {runtimeOverview?.pipeline.last_ingest?.fallback_reason || '无额外说明'}
             </p>
             <p className="mt-1">
@@ -1290,7 +1535,7 @@ export function SettingsShell() {
               <div>
                 <p className="text-xs font-semibold uppercase tracking-[0.14em] text-slate-500">高级设置概览</p>
                 <h3 className="mt-2 text-xl font-semibold text-slate-950">高级模型调优</h3>
-                <p className="mt-1 text-sm text-slate-600">这里只放可在线调整的高级项，默认折叠，避免把系统基线策略和导入档位混在一起。</p>
+                <p className="mt-1 text-sm text-slate-600">这里只放不常改的高级项，默认折叠，避免把常用设置和重参数混在一起。</p>
               </div>
               <ChevronDown className="h-5 w-5 text-slate-400 transition group-open:rotate-180" />
             </summary>
@@ -1326,6 +1571,27 @@ export function SettingsShell() {
                     {pipelineSaveLoading ? '保存中...' : '保存高级配置'}
                   </button>
                 </div>
+              </div>
+              <div className="mb-3 rounded-xl border border-amber-200 bg-amber-50/70 p-3 text-xs text-slate-700">
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                  <div>
+                    <p className="font-medium text-slate-900">Marker 总开关</p>
+                    <p className="mt-1 text-[11px] text-slate-600">关闭时系统默认走基础解析；开启后仅 PDF 会尝试 Marker 增强，失败时自动降级。</p>
+                  </div>
+                  <label className="inline-flex items-center gap-2 text-xs font-medium text-slate-800">
+                    <input
+                      data-testid="pipeline-marker-enabled-toggle"
+                      type="checkbox"
+                      checked={markerEnabled}
+                      onChange={(event) => setMarkerEnabled(event.target.checked)}
+                    />
+                    启用 Marker 增强解析
+                  </label>
+                </div>
+                <p className="mt-2">
+                  当前生效: {pipelineConfig?.effective?.marker_enabled ? '增强解析' : '基础解析'}
+                  {pipelineConfig?.effective_source?.marker_enabled ? ` · 来源: ${formatRuntimeSource(pipelineConfig.effective_source.marker_enabled)}` : ''}
+                </p>
               </div>
               <div className="grid gap-3 sm:grid-cols-2">
             {(
@@ -1392,11 +1658,89 @@ export function SettingsShell() {
               </div>
             </div>
           </details>
+          <div id="llm-log-config" data-testid="llm-log-config-panel" className="mt-4 rounded-2xl border border-sky-200 bg-sky-50/70 p-4">
+            <div className="flex flex-wrap items-start justify-between gap-3">
+              <div>
+                <p className="text-xs font-semibold uppercase tracking-[0.14em] text-sky-700">LLM 调试日志</p>
+                <p className="mt-1 text-[11px] leading-5 text-slate-600">
+                  后端默认开启 LLM 调试日志，所有模型请求体、原始返回体和响应文本都会写入控制台与安全目录下的日志文件。页面只读展示当前状态，并提供下载入口。
+                </p>
+              </div>
+              <a
+                href={runtimeLlmLogging?.download_url ? resolveAdminUrl(runtimeLlmLogging.download_url) : llmLogDownloadUrl}
+                className="rounded-lg border border-sky-200 bg-white px-3 py-1.5 text-xs font-medium text-sky-800 transition hover:bg-sky-50"
+              >
+                下载日志文件
+              </a>
+            </div>
+            <div className="mt-4 grid gap-3 sm:grid-cols-2">
+              <div className="rounded-xl border border-white/90 bg-white/90 p-3 text-xs font-medium text-slate-700">
+                <p>日志状态</p>
+                <p className="mt-2 text-sm text-slate-900">{runtimeLlmLogging?.enabled ? '默认开启' : '关闭'}</p>
+                <p className="mt-2 text-[11px] leading-5 text-slate-500">
+                  日志开关和路径由后端固定控制，避免页面误改部署级文件系统参数。
+                </p>
+              </div>
+              <div className="rounded-xl border border-white/90 bg-white/90 p-3 text-xs font-medium text-slate-700">
+                <p>最大日志体长度</p>
+                <p className="mt-2 text-sm text-slate-900">{runtimeLlmLogging?.max_body_chars ?? '-'}</p>
+                <p className="mt-2 text-[11px] leading-5 text-slate-500">
+                  请求或返回体超过上限时会自动截断，避免单条日志过大。
+                </p>
+              </div>
+            </div>
+            <div className="mt-3 rounded-xl border border-dashed border-sky-200 bg-white/80 p-3 text-[11px] text-slate-700">
+              <p>当前生效开关: {runtimeLlmLogging?.enabled ? '开启' : '关闭'} · 来源: {formatRuntimeSource(runtimeLlmLogging?.source)}</p>
+              <p className="mt-1">当前生效最大体长度: {runtimeLlmLogging?.max_body_chars ?? '-'}</p>
+              <p className="mt-1 break-all font-mono text-slate-600">安全根目录: {runtimeLlmLogging?.safe_root || '未设置'}</p>
+              <p className="mt-1 break-all font-mono text-slate-600">
+                日志文件路径: {runtimeLlmLogging?.log_path || '未设置，当前仅输出到控制台'}
+              </p>
+            </div>
+            {(runtimeLlmLogging?.recent_files?.length ?? 0) > 0 ? (
+              <div className="mt-4 rounded-xl border border-white/90 bg-white/90 p-3">
+                <div className="flex items-center justify-between gap-3">
+                  <div>
+                    <p className="text-xs font-semibold uppercase tracking-[0.14em] text-slate-500">最近日志文件</p>
+                    <p className="mt-1 text-[11px] text-slate-500">按最近更新时间展示，均位于受限安全目录中。</p>
+                  </div>
+                  <span className="rounded-full border border-slate-200 bg-slate-50 px-2.5 py-1 text-[10px] text-slate-500">
+                    {runtimeLlmLogging?.recent_files?.length} 份
+                  </span>
+                </div>
+                <div className="mt-3 space-y-2">
+                  {runtimeLlmLogging?.recent_files?.map((file) => (
+                    <div key={file.file_name} className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-slate-200 bg-slate-50/70 px-3 py-3 text-xs text-slate-700">
+                      <div className="min-w-0 flex-1">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <p className="truncate font-mono text-[11px] text-slate-900">{file.file_name}</p>
+                          {file.current ? (
+                            <span className="rounded-full bg-sky-100 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.16em] text-sky-700">
+                              当前
+                            </span>
+                          ) : null}
+                        </div>
+                        <p className="mt-1 text-[11px] text-slate-500">
+                          {formatRelativeTimeLabel(file.updated_at)} · {formatBytes(file.size_bytes)}
+                        </p>
+                      </div>
+                      <a
+                        href={resolveAdminUrl(file.download_url)}
+                        className="inline-flex items-center rounded-lg border border-sky-200 bg-white px-3 py-1.5 text-xs font-medium text-sky-800 transition hover:bg-sky-50"
+                      >
+                        下载
+                      </a>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            ) : null}
+          </div>
           <div data-testid="marker-llm-panel" className="mt-4 rounded-2xl border border-slate-200 bg-slate-50/80 p-3">
             <div className="flex flex-wrap items-center justify-between gap-3">
               <div>
                 <p className="text-xs font-semibold uppercase tracking-[0.14em] text-slate-500">导入增强服务</p>
-                <p className="mt-1 text-[11px] text-slate-600">用于同步 Marker `--use_llm` 配置，并在保存后回显运行态。</p>
+                <p className="mt-1 text-[11px] text-slate-600">用于同步 Marker `--use_llm` 配置，并在保存后回显运行态。仅在 Marker 总开关开启时生效。</p>
               </div>
               <label className="inline-flex items-center gap-2 text-xs font-medium text-slate-700">
                 <input
@@ -1426,7 +1770,7 @@ export function SettingsShell() {
                 <span className="mt-1 block text-[11px] text-rose-600">{markerLlmFieldErrors.llm_service}</span>
               ) : null}
             </label>
-            {markerLlm.use_llm ? (
+            {markerEnabled && markerLlm.use_llm ? (
               <div className="mt-3 grid gap-3 sm:grid-cols-2">
                 {visibleMarkerLlmFields.map((field) => {
                   const meta = markerLlmFieldMeta[field];
@@ -1505,7 +1849,9 @@ export function SettingsShell() {
                 })}
               </div>
             ) : (
-              <p className="mt-3 text-[11px] text-slate-500">关闭后仍保留已保存字段，但导入链路不会请求 Marker LLM 增强。</p>
+              <p className="mt-3 text-[11px] text-slate-500">
+                {markerEnabled ? '关闭后仍保留已保存字段，但导入链路不会请求 Marker LLM 增强。' : 'Marker 总开关关闭时保留已保存字段，但当前不会尝试任何 Marker 增强。'}
+              </p>
             )}
             <div className="mt-3 rounded-xl border border-dashed border-slate-200 bg-white p-2 text-[11px] text-slate-600">
               <p className="font-medium text-slate-700">当前生效导入增强摘要</p>
@@ -1531,10 +1877,10 @@ export function SettingsShell() {
         <article data-testid="planner-runtime-panel" className="xl:col-span-2 rounded-[28px] border border-amber-200 bg-[linear-gradient(135deg,#fff8ef,#ffffff_52%,#fff7d6)] p-6 shadow-[0_18px_50px_rgba(15,23,42,0.05)]">
           <div className="flex items-start justify-between gap-3">
             <div>
-              <p className="text-xs font-semibold uppercase tracking-[0.14em] text-amber-700">规划模型</p>
+              <p className="text-xs font-semibold uppercase tracking-[0.14em] text-amber-700">对话路线模型</p>
               <h3 className="mt-2 text-xl font-semibold text-slate-950">对话如何组织，主要看这里</h3>
               <p className="mt-2 text-sm leading-6 text-slate-600">
-                这块决定系统是否先做规划，再决定澄清、回退或继续执行。因为它会直接影响响应路径和模型开销，所以单独放一块，不和普通功能模型混在一起。
+                这块决定系统会不会先想一步，再决定澄清、继续检索还是直接回答。因为它会影响整个回答路径，所以单独放在这里。
               </p>
             </div>
             <div className="flex items-center gap-2">
@@ -1562,7 +1908,7 @@ export function SettingsShell() {
           <div className="mt-4 rounded-2xl border border-amber-200/70 bg-white/80 p-4">
             <p className="text-[11px] leading-5 text-slate-600">
               中文说明：
-              正式模式会把 Planner LLM 视为聊天入口前置条件；诊断模式仅供开发排查，不代表正式聊天可用。
+              正式模式下，聊天会先看这里能不能工作；诊断模式只用于排查，不代表用户真的能正常对话。
             </p>
           </div>
 
@@ -1573,6 +1919,7 @@ export function SettingsShell() {
                 data-testid="planner-service-mode-select"
                 value={plannerConfig.serviceMode}
                 onChange={(event) => setPlannerField('serviceMode', event.target.value as PlannerConfigForm['serviceMode'])}
+                disabled={controlsDisabled}
                 className="mt-1 h-10 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm text-slate-800 outline-none ring-amber-300 transition focus:ring-2"
               >
                 <option value="production">正式模式</option>
@@ -1592,6 +1939,7 @@ export function SettingsShell() {
                     apiBase: providerPresets[provider]?.apiBase ?? prev.apiBase
                   }));
                 }}
+                disabled={controlsDisabled}
                 className="mt-1 h-10 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm text-slate-800 outline-none ring-amber-300 transition focus:ring-2"
               >
                 {providerOptions.map((provider) => (
@@ -1607,6 +1955,7 @@ export function SettingsShell() {
                 data-testid="planner-api-base-input"
                 value={plannerConfig.apiBase}
                 onChange={(event) => setPlannerField('apiBase', event.target.value)}
+                disabled={controlsDisabled}
                 className="mt-1 h-10 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm text-slate-800 outline-none ring-amber-300 transition focus:ring-2"
               />
             </label>
@@ -1617,6 +1966,7 @@ export function SettingsShell() {
                 type="password"
                 value={plannerConfig.apiKey}
                 onChange={(event) => setPlannerField('apiKey', event.target.value)}
+                disabled={controlsDisabled}
                 placeholder={plannerPersisted.apiKey ? '已保存，如需更新请重新填写' : 'sk-...'}
                 className="mt-1 h-10 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm text-slate-800 outline-none ring-amber-300 transition focus:ring-2"
               />
@@ -1627,6 +1977,7 @@ export function SettingsShell() {
                 data-testid="planner-model-select"
                 value={plannerConfig.model}
                 onChange={(event) => setPlannerField('model', event.target.value)}
+                disabled={controlsDisabled}
                 className="mt-1 h-10 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm text-slate-800 outline-none ring-amber-300 transition focus:ring-2"
               >
                 <option value="">请选择模型</option>
@@ -1645,6 +1996,7 @@ export function SettingsShell() {
                 min={1000}
                 value={plannerConfig.timeoutMs}
                 onChange={(event) => setPlannerField('timeoutMs', Number(event.target.value) || defaultPlannerConfig.timeoutMs)}
+                disabled={controlsDisabled}
                 className="mt-1 h-10 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm text-slate-800 outline-none ring-amber-300 transition focus:ring-2"
               />
             </label>
@@ -1860,6 +2212,9 @@ export function SettingsShell() {
           {globalError}
         </p>
       ) : null}
+          </div>
+        </div>
+      </div>
     </section>
   );
 }

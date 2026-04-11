@@ -1,6 +1,6 @@
 chunk_size: 400
 overlap: 50
-marker_enabled: true
+marker_enabled: false
 marker_timeout_sec: 1200
 title_confidence_threshold: 0.6
 title_blacklist_patterns:

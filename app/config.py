@@ -55,7 +55,7 @@ class RerankConfig:
 class PipelineConfig:
     chunk_size: int = 400
     overlap: int = 50
-    marker_enabled: bool = True
+    marker_enabled: bool = False
     marker_timeout_sec: float = 30.0
     title_confidence_threshold: float = 0.6
     title_blacklist_patterns: list[str] = field(

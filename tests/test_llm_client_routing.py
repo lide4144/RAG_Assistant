@@ -9,6 +9,7 @@ from app.llm_client import (
     clear_llm_event_callbacks,
     register_llm_event_callback,
 )
+from app.llm_observability import format_llm_debug_text
 from app import llm_routing
 
 
@@ -31,6 +32,10 @@ class LLMClientRoutingTests(unittest.TestCase):
             provider_used="openai",
             model_used="primary",
             error_category="timeout",
+            endpoint_used="https://api.example.com/v1/chat/completions",
+            transport="litellm",
+            request_payload='{"model":"openai/primary"}',
+            response_payload='{"error":"timeout"}',
         )
         second = LLMCallResult(
             ok=True,
@@ -43,6 +48,10 @@ class LLMClientRoutingTests(unittest.TestCase):
             timestamp="2026-03-01T00:00:00Z",
             provider_used="openai",
             model_used="backup",
+            endpoint_used="https://api.example.com/v1/chat/completions",
+            transport="litellm",
+            request_payload='{"model":"openai/backup"}',
+            response_payload='{"content":"ok"}',
         )
 
         with patch("app.llm_client._call_completion_once", side_effect=[first, second]):
@@ -82,6 +91,10 @@ class LLMClientRoutingTests(unittest.TestCase):
             provider_used="openai",
             model_used="primary",
             error_category="timeout",
+            endpoint_used="https://api.example.com/v1/chat/completions",
+            transport="litellm",
+            request_payload='{"model":"openai/primary"}',
+            response_payload='{"error":"timeout"}',
         )
         with patch("app.llm_client._call_completion_once", return_value=fail):
             out1 = call_chat_completion(
@@ -146,6 +159,10 @@ class LLMClientRoutingTests(unittest.TestCase):
             timestamp="2026-03-01T00:00:00Z",
             provider_used="openai",
             model_used="backup",
+            endpoint_used="https://api.example.com/v1/chat/completions",
+            transport="litellm",
+            request_payload='{"model":"openai/backup"}',
+            response_payload='{"content":"ok"}',
         )
         with patch("app.llm_client._call_completion_once", side_effect=[first, second]):
             out = call_chat_completion(
@@ -168,6 +185,34 @@ class LLMClientRoutingTests(unittest.TestCase):
         self.assertIn("request_failure", names)
         self.assertIn("fallback_attempt", names)
         self.assertIn("request_success", names)
+        success_event = next(e for e in events if str(e.get("event")) == "request_success")
+        self.assertEqual(success_event.get("endpoint"), "https://api.example.com/v1/chat/completions")
+        self.assertEqual(success_event.get("transport"), "litellm")
+        self.assertIn("openai/backup", str(success_event.get("request_payload")))
+        self.assertIn("ok", str(success_event.get("response_payload")))
+
+    def test_format_llm_debug_text_pretty_prints_json_string(self) -> None:
+        formatted = format_llm_debug_text('{"selected_tools_or_skills":["catalog_lookup","cross_doc_summary"]}')
+        assert formatted is not None
+        self.assertIn('\n  "selected_tools_or_skills": [\n', formatted)
+        self.assertIn('"catalog_lookup"', formatted)
+
+    def test_format_llm_debug_text_pretty_prints_nested_json_string(self) -> None:
+        formatted = format_llm_debug_text(
+            {
+                "choices": [
+                    {
+                        "message": {
+                            "content": '{"action_plan":[{"action":"catalog_lookup","params":{"limit":20}}]}'
+                        }
+                    }
+                ]
+            }
+        )
+        assert formatted is not None
+        self.assertIn('"content": {', formatted)
+        self.assertIn('"action_plan": [', formatted)
+        self.assertIn('"limit": 20', formatted)
 
     def test_network_error_triggers_fallback_success(self) -> None:
         first = LLMCallResult(

@@ -21,9 +21,13 @@ from app.graph_build import (
     load_graph,
     run_graph_build,
 )
+from app.llm_client import clear_llm_event_callbacks, register_llm_event_callback
 
 
 class GraphBuildTests(unittest.TestCase):
+    def setUp(self) -> None:
+        clear_llm_event_callbacks()
+
     async def _fake_extractor(self, clean_text: str, _cfg: LLMEntityExtractionConfig) -> EntityExtractionResult:
         entities: list[dict[str, str]] = []
         if "PLA" in clean_text:
@@ -217,6 +221,37 @@ class GraphBuildTests(unittest.TestCase):
         self.assertEqual(metrics.retries, 1)
         self.assertEqual(metrics.failures, 1)
         self.assertEqual(metrics.fallback_empty, 1)
+
+    def test_extract_entities_emits_request_observability(self) -> None:
+        cfg = LLMEntityExtractionConfig(api_key_env="TEST_API_KEY", base_url="https://api.example.com/v1")
+        client = self._FakeAsyncClient(
+            [
+                self._FakeResponse(
+                    200,
+                    body={"choices": [{"message": {"content": json.dumps({"entities": [{"entity_name": "PLA", "entity_type": "METHOD"}]})}}]},
+                ),
+            ]
+        )
+        events: list[dict[str, object]] = []
+        register_llm_event_callback(events.append)
+
+        with patch.dict(os.environ, {"TEST_API_KEY": "token"}, clear=False):
+            result = asyncio.run(
+                extract_entities_from_text_llm(
+                    "PLA baseline",
+                    cfg,
+                    client=cast(httpx.AsyncClient, client),
+                )
+            )
+
+        self.assertEqual(result.entities[0].entity_name, "PLA")
+        success_event = next(e for e in events if str(e.get("event")) == "request_success")
+        self.assertEqual(success_event.get("debug_stage"), "graph_entity")
+        self.assertEqual(success_event.get("endpoint"), "https://api.example.com/v1/chat/completions")
+        self.assertEqual(success_event.get("transport"), "httpx")
+        self.assertIn('"model": "Pro/deepseek-ai/DeepSeek-V3.2"', str(success_event.get("request_payload")))
+        self.assertIn('\\"entities\\"', str(success_event.get("response_payload")))
+        self.assertIn('"entities"', str(success_event.get("response_text")))
 
     def test_extract_entities_schema_validation_error_retries_then_fallback(self) -> None:
         cfg = LLMEntityExtractionConfig(api_key_env="TEST_API_KEY", max_retries=1)

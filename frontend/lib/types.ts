@@ -15,7 +15,9 @@ export interface SourceItem {
 
 export interface ChatMessage {
   id: string;
+  jobId?: string;
   traceId?: string;
+  runId?: string;
   role: 'user' | 'assistant';
   content: string;
   sources?: SourceItem[];
@@ -23,6 +25,73 @@ export interface ChatMessage {
   graphExpand?: boolean;
   status?: 'streaming' | 'done' | 'error';
   mode?: ChatMode;
+  errorMeta?: {
+    code?: string;
+    detail?: string;
+  };
+}
+
+export interface LlmDebugRecord {
+  event: string;
+  stage?: string;
+  debug_stage?: string;
+  provider?: string;
+  model?: string;
+  api_base?: string;
+  endpoint?: string;
+  transport?: string;
+  route_id?: string;
+  attempts_used?: number;
+  elapsed_ms?: number;
+  reason?: string;
+  status_code?: number;
+  error_category?: string;
+  fallback_reason?: string;
+  first_token_latency_ms?: number;
+  chunks_received?: number;
+  system_prompt?: string;
+  user_prompt?: string;
+  request_payload?: string;
+  response_payload?: string;
+  response_text?: string;
+  timestamp?: string;
+}
+
+export interface LlmDebugTrace {
+  trace_id: string;
+  count: number;
+  records: LlmDebugRecord[];
+}
+
+export interface JobEvent {
+  job_id: string;
+  seq: number;
+  event_type: string;
+  created_at: string;
+  payload: Record<string, unknown>;
+}
+
+export interface JobStatus {
+  job_id: string;
+  kind: string;
+  state: string;
+  created_at: string;
+  updated_at: string;
+  accepted: boolean;
+  session_id?: string | null;
+  trace_id?: string | null;
+  run_id?: string | null;
+  config_version_id?: string | null;
+  progress_stage?: string | null;
+  latest_output_text?: string | null;
+  result?: Record<string, unknown> | null;
+  error?: Record<string, unknown> | null;
+  metadata?: Record<string, unknown>;
+}
+
+export interface JobCreateResponse {
+  ok: boolean;
+  job: JobStatus;
 }
 
 export type RuntimeLevel = 'READY' | 'DEGRADED' | 'BLOCKED' | 'ERROR';
@@ -80,6 +149,11 @@ export interface MarkerParserDiagnostic {
   paper_id: string;
   source_uri: string;
   parser_engine: string;
+  parser_mode?: string;
+  base_parser?: string | null;
+  enhanced_parser?: string | null;
+  controlled_skip?: boolean;
+  controlled_skip_reason?: string | null;
   parser_fallback: boolean;
   parser_fallback_stage?: string | null;
   parser_fallback_reason?: string | null;
@@ -114,6 +188,32 @@ export interface PlannerRuntimeSummary {
   effective_source?: Partial<Record<'service_mode' | 'provider' | 'api_base' | 'model' | 'api_key' | 'timeout_ms', RuntimeSource>>;
 }
 
+export interface ActiveJobSummary {
+  jobId: string;
+  kind: string;
+  state: string;
+  updatedAt: string;
+  progressStage?: string;
+}
+
+export interface LlmLoggingSummary {
+  enabled: boolean;
+  max_body_chars: number;
+  safe_root?: string;
+  log_path?: string;
+  download_url?: string;
+  recent_files?: Array<{
+    file_name: string;
+    path: string;
+    size_bytes: number;
+    updated_at: string;
+    current: boolean;
+    download_url: string;
+  }>;
+  source?: RuntimeSource;
+  effective_source?: Partial<Record<'enabled' | 'max_body_chars' | 'safe_root' | 'log_path', RuntimeSource>>;
+}
+
 export interface RuntimeOverview {
   llm: {
     answer: RuntimeStageSummary;
@@ -125,8 +225,12 @@ export interface RuntimeOverview {
   };
   planner: PlannerRuntimeSummary;
   pipeline: {
+    marker_enabled?: boolean;
+    marker_mode?: 'base_only' | 'enhanced' | string;
+    marker_mode_summary?: 'base_only' | 'enhanced' | 'degraded_available' | string;
     marker_tuning: MarkerTuning;
     effective_source?: {
+      marker_enabled?: RuntimeSource;
       marker_tuning?: Partial<Record<keyof MarkerTuning, RuntimeSource>>;
     };
     marker_llm?: MarkerLlmRuntimeConfig;
@@ -147,8 +251,15 @@ export interface RuntimeOverview {
       };
     };
   };
+  observability?: {
+    llm_logging?: LlmLoggingSummary;
+  };
   status: {
     level: RuntimeLevel;
     reasons: string[];
+  };
+  jobs?: {
+    active: ActiveJobSummary[];
+    settings_locked: boolean;
   };
 }

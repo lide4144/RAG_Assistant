@@ -1,8 +1,8 @@
-# Marker PDF 解析运维说明
+# Marker 本地文档增强解析运维说明
 
 ## 1. 依赖安装
 
-Marker 为可选依赖，未安装时系统会自动回退到 legacy PDF 解析器。
+Marker 为可选增强依赖，未安装时系统会继续使用本地基础解析器；默认启动路径不再把 Marker 视为前置条件。
 
 ```bash
 venv/bin/python -m pip install -r requirements.txt
@@ -18,12 +18,12 @@ venv/bin/python -m pip install marker-pdf
 
 `configs/default.yaml` 新增：
 
-- `marker_enabled`: 是否启用 Marker 首选解析（默认 `true`）
+- `marker_enabled`: 是否启用 Marker PDF 增强解析（默认 `false`）
 - `marker_timeout_sec`: Marker 单文档超时秒数（默认 `30`）
 - `title_confidence_threshold`: 标题门禁阈值（默认 `0.6`）
 - `title_blacklist_patterns`: 标题黑名单正则列表（默认包含 `Preprint. Under review.`、`All rights reserved` 等）
 
-回滚到 legacy 仅需：
+个人电脑或低资源环境推荐保持：
 
 ```yaml
 marker_enabled: false
@@ -94,9 +94,9 @@ marker_enabled: false
 
 ## 3. 观测字段
 
-`papers.json`（PDF）新增字段：
+`papers.json`（本地文档）新增字段：
 
-- `parser_engine` (`marker` / `legacy`)
+- `parser_engine` (`marker` / `legacy` / `text` / `docx` / `pptx` / `xlsx` / `rtf` / `odt` / `epub`)
 - `title_source` (`marker_h1` / `marker_h2` / `marker_markdown_first_line` / `marker` / `metadata` / `fallback_*`)
 - `title_confidence` (0-1)
 - `ingest_metadata.title_layer`：最终采用的标题层级
@@ -116,8 +116,13 @@ marker_enabled: false
 
 - `parser_observability[]`
   - `parser_engine`
+  - `parser_mode` (`base_only` / `enhanced` / `degraded_from_marker` / `controlled_skip`)
+  - `base_parser`
+  - `enhanced_parser`
   - `parser_fallback`
   - `parser_fallback_reason`
+  - `controlled_skip`
+  - `controlled_skip_reason`
   - `structured_segments_missing`
   - `structured_segments_missing_reason`
   - `title_source`
@@ -140,12 +145,12 @@ marker_enabled: false
   - `summary_fields`
   - `warnings`
 - `fallback_reason` / `fallback_path` / `confidence_note`
-  - 供前端直接展示最近一次导入是否走了降级路径
+  - 供前端直接展示最近一次导入是否走了增强降级，或是否包含按类型受控跳过
 
 ## 4. 常见故障
 
 1. `marker unavailable`：Marker 依赖未安装，执行 `pip install marker-pdf`。
-2. `marker parse timeout`：增大 `marker_timeout_sec` 或临时回滚 `marker_enabled=false`。
+2. `marker parse timeout`：增大 `marker_timeout_sec`，或在设置页关闭 Marker 总开关后重试基础解析。
 3. 标题被降级为 `Untitled Paper`：说明候选命中黑名单或低于门禁阈值，优先检查 `title_layer`、`title_decision_trace` 与 `structured_title_candidates`。
 4. Marker 明明识别了表格/公式但检索里没有体现：检查 `chunks*.jsonl` 的 `content_type/block_type/structure_provenance`，以及 ingest report 中的 `block_semantics_preserved`。
 5. markdown 只有标题首行被使用：这是当前预期，`markdown_consumption_status=partial` 用于明确区分“存在但未完全消费”和“本身不存在”。
@@ -165,7 +170,7 @@ marker_enabled: false
 ## 4.1 回退流程
 
 1. 在设置页将 Marker tuning 恢复到 8GB 安全档位并保存。
-2. 若仍不稳定，设置 `marker_enabled=false` 临时回退 legacy parser。
+2. 若仍不稳定，在设置页关闭 Marker 总开关，临时回退到基础解析模式。
 3. 执行小批量验证（见第 5 节脚本），确认恢复后再逐步恢复 Marker。
 
 ## 5. 灰度与回归脚本

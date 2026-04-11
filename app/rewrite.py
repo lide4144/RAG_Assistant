@@ -492,6 +492,7 @@ def _apply_llm_rewrite(
         timeout_ms=config.llm_timeout_ms,
         max_retries=config.llm_max_retries,
         temperature=0.0,
+        debug_stage="rewrite",
     )
     if not result.ok:
         reason_map = {

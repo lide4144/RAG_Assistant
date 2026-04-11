@@ -43,7 +43,8 @@ scripts/dev-up.sh
 ```
 
 `scripts/dev-up.sh` will inject
-`NEXT_PUBLIC_KERNEL_BASE_URL=http://<KERNEL_HOST>:<KERNEL_PORT>` for frontend.
+`NEXT_PUBLIC_KERNEL_BASE_URL=http://<KERNEL_HOST>:<KERNEL_PORT>` and
+`NEXT_PUBLIC_GATEWAY_WS_URL=ws://<GATEWAY_HOST>:<GATEWAY_PORT>/ws` for frontend.
 For frontend `/api/admin/*` calls, routing priority is:
 
 1. `NEXT_PUBLIC_KERNEL_BASE_URL` (explicit)

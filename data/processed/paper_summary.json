@@ -1,31 +1,7 @@
 [
 {
-  "paper_id": "bfb1616c7974",
-  "title": "STELLAR: Storage Tuning Engine Leveraging LLM Autonomous Reasoning for High Performance Parallel File Systems",
-  "one_paragraph_summary": "STELLAR: Storage Tuning Engine Leveraging LLM Autonomous Reasoning for High Performance Parallel File Systems Chris Egersdoerfer University of Delaware Newark, United States cegersdo@udel.edu Philip Carns Argonne National Laboratory Lemont, United States carns@mcs.anl.gov Shane Snyder Argonne National Laboratory Lemont, United States ssnyder@mcs.anl.gov Robert Ross Argonne National Laboratory Lemont, United States rross@anl.gov Dong Dai University of Delaware Newark, United States dai@udel.edu Abstract I/O performance is crucial to efficiency in data-intensive scien- tific computing; but tunin...",
-  "key_points": [
-    "STELLAR: Storage Tuning Engine Leveraging LLM Autonomous",
-    "Reasoning for High Performance Parallel File Systems",
-    "Chris Egersdoerfer"
-  ],
-  "keywords": [
-    "united",
-    "states",
-    "performance",
-    "leveraging",
-    "autonomous",
-    "laboratory",
-    "reasoning",
-    "parallel"
-  ],
-  "source_uri": "/tmp/tmpuucl7ix4/input/2602.23220v1.pdf",
-  "summary_version": "v1",
-  "chunk_snapshot_hash": "7fd5f61fb49d52769f1b20ecb185e97ae0b636c6",
-  "is_stale": false
-},
-{
   "paper_id": "pdf_9b0aa571ed09",
-  "title": "\"I Like Your Story!\": A Co-Creative Story-Crafting Game with a",
+  "title": "\"I Like Your Story!\": A",
   "one_paragraph_summary": "\"I Like Your Story!\": A Co-Creative Story-Crafting Game with a Persona-Driven Character Based on Generative AI Jiaying Fu fujiaying@mail.bnu.edu.cn School of Future Design, Beijing Normal University Zhuhai, China Ada Eden Beijing, China Xiruo Wang Ada Eden Hangzhou, China xiruo.wang.22@ucl.ac.uk Zhouyi Li Tsinghua University Shenzhen, China lizhouyi23@mails.tsinghua.edu.cn Ada Eden Beijing, China Kate Vi Simian Institute for Advanced Studies in Humanities, East China Normal University Shanghai, China kattystellavi@gmail.com Ada Eden Beijing, China Chuyan Xu Ada Eden Shenzhen, China xuchy25@mai...",
   "key_points": [
     "\"I Like Your Story!\": A Co-Creative Story-Crafting Game with a",
@@ -37,10 +13,10 @@
     "eden",
     "ada",
     "beijing",
-    "story-crafting",
-    "co-creative",
     "university",
-    "story"
+    "story",
+    "like",
+    "your"
   ],
   "source_uri": "pdf://sha1/9b0aa571ed0999e45dc3ed1362c27fcc945b5321",
   "summary_version": "v1",
@@ -49,7 +25,7 @@
 },
 {
   "paper_id": "pdf_f8a08f212a05",
-  "title": "A Framework for Adaptive Game Play and Adversary Creation Based on Gamer Behavioral Analysis and Large Language (LLM) Models",
+  "title": "A Framework for Adaptive Game",
   "one_paragraph_summary": "A framework for adaptive Game Play and Adversary Creation based on Gamer Behavioral Analysis and Large Language (LLM) Models Yomna M.I. Hassan Faculty of Mathematical and Computational Sciences. UPEI Cairo Branch hosted by Universities of Canada in Egypt Cairo, Egypt. yomna.mahmoud@uofcanada.edu.eg Amal Aboulhassan Faculty of Informatics and Computer Science German International University Cairo, Egypt. amal.abdelkarim@giu-uni.de Abstract—As the gaming industry undergoes rapid expansion, the need to enhance player engagement and adaptability within games is paramount. By leveraging behavioral...",
   "key_points": [
     "A framework for adaptive Game Play and",
@@ -59,12 +35,12 @@
   "keywords": [
     "behavioral",
     "framework",
-    "adversary",
     "adaptive",
-    "creation",
-    "analysis",
-    "language",
-    "faculty"
+    "faculty",
+    "yomna",
+    "cairo",
+    "egypt",
+    "game"
   ],
   "source_uri": "pdf://sha1/f8a08f212a059c1237268c4bc723818ab4f5b845",
   "summary_version": "v1",
@@ -73,7 +49,7 @@
 },
 {
   "paper_id": "pdf_e2b66b75cae0",
-  "title": "A General Review of Large Language Model Agents in Game Applications",
+  "title": "A General Review of Large",
   "one_paragraph_summary": "A General Review of Large Language Model Agents in Game Applications JIANHENG LI* Dalian Maritime University, Dalian, 116000, China 2220222941@dlmu.edu.cn HONGYU SI Northeastern University, Shenyang, 110819, China 202219105@stu.neu.edu.cn RUOCHEN ZHAO Beijing Jiaotong University, Beijing,100044, China 22222028@bjtu.edu.cn The breakthroughs in large language models (LLMs) have presented unprecedented opportunities for constructing game agents with human-like decision-making capabilities, with their multimodal perception and linguistic reasoning serving as critical enablers for artificial genera...",
   "key_points": [
     "A General Review of Large Language Model Agents in Game Applications JIANHENG LI*",
@@ -82,13 +58,13 @@
   ],
   "keywords": [
     "university",
-    "language",
-    "agents",
     "dalian",
     "large",
     "china",
-    "game",
-    "edu"
+    "edu",
+    "language",
+    "general",
+    "review"
   ],
   "source_uri": "pdf://sha1/e2b66b75cae01a74fcbb323fd7f6d46790c80b41",
   "summary_version": "v1",
@@ -97,7 +73,7 @@
 },
 {
   "paper_id": "pdf_6082ca27bc59",
-  "title": "A Survey on Large Language Model Based Game Agents",
+  "title": "A Survey on Large Language",
   "one_paragraph_summary": "A Survey on Large Language Model Based Game Agents SIHAO HU, Georgia Institute of Technology, USA TIANSHENG HUANG, Georgia Institute of Technology, USA GAOWEN LIU, Cisco Research, USA RAMANA RAO KOMPELLA, Cisco Research, USA FATIH ILHAN, Georgia Institute of Technology, USA SELIM FURKAN TEKIN, Georgia Institute of Technology, USA YICHANG XU, Georgia Institute of Technology, USA ZACHARY YAHN, Georgia Institute of Technology, USA LING LIU, Georgia Institute of Technology, USA The development of game agents holds a critical role in advancing towards Artificial General Intelligence. The progress o...",
   "key_points": [
     "A Survey on Large Language Model Based Game Agents",
@@ -109,10 +85,10 @@
     "technology",
     "institute",
     "georgia",
-    "agents",
-    "game",
     "language",
-    "survey"
+    "survey",
+    "agents",
+    "large"
   ],
   "source_uri": "pdf://sha1/6082ca27bc59f7b9e71eba6fb077f1691df23b76",
   "summary_version": "v1",
@@ -121,7 +97,7 @@
 },
 {
   "paper_id": "pdf_cf624284d9be",
-  "title": "Aplikasi Game Strategi Menggunakan Metode Algoritma",
+  "title": "Aplikasi Game Strategi Menggunakan Metode",
   "one_paragraph_summary": "Aplikasi Game Strategi Menggunakan Metode Algoritma Genetika untuk Pembuatan Pasukan Johan Pranata1, Kristo Radion Purba2, Liliana3 Program Studi Teknik Informatika Fakultas Teknologi Industri Universitas Kristen Petra Jl. Siwalankerto 121 ± 131 Surabaya 60236 Telp. (031) ± 2983455, Fax. (031) ± 8417658 E-Mail: pranata_johan@yahoo.com1, kristo@petra.ac.id2, lilian@petra.ac.id3 ABSTRAK Salah satu cara yang dapat digunakan untuk melakukan pendekatan edukasi yang tidak membuat bosan adalah dengan menggunakan game. Salah satu genre game yang dapat digunakan untuk memberikan aspek hiburan dan eduka...",
   "key_points": [
     "Aplikasi Game Strategi Menggunakan Metode Algoritma",
@@ -132,11 +108,11 @@
     "game",
     "menggunakan",
     "untuk",
-    "algoritma",
     "aplikasi",
     "strategi",
     "metode",
-    "kristo"
+    "kristo",
+    "petra"
   ],
   "source_uri": "pdf://sha1/cf624284d9be43b495b66d4d0b21cf41ab6bbe37",
   "summary_version": "v1",
@@ -145,7 +121,7 @@
 },
 {
   "paper_id": "pdf_a2fde9f8fedf",
-  "title": "ChatGPT Game Jam: Unleashing the Power of Large Language Models for Game Jams",
+  "title": "ChatGPT Game Jam: Unleashing the",
   "one_paragraph_summary": "ChatGPT Game Jam: Unleashing the Power of Large Language Models for Game Jams April Grow Foaad Khosmood amgrow@calpoly.edu foaad@calpoly.edu California Polytechnic State University San Luis Obispo, California, USA ABSTRACT Recently Large Language Models (LLMs) have captivated the imag- ination in many different fields. OpenAI’s ChatGPT, offered the first highly accessible LLM to the users and has seen phenomenal growth since its release in November 2022. While AI tools have always been part of game design and game development, now Chat- GPT offers users perhaps for the first time, the ability...",
   "key_points": [
     "ChatGPT Game Jam: Unleashing the Power of Large Language",
@@ -154,13 +130,13 @@
   ],
   "keywords": [
     "game",
-    "language",
     "chatgpt",
+    "unleashing",
+    "language",
     "models",
     "large",
-    "unleashing",
-    "power",
-    "jams"
+    "jam",
+    "california"
   ],
   "source_uri": "pdf://sha1/a2fde9f8fedff6fbe35c014f0ef492c5cb3ff962",
   "summary_version": "v1",
@@ -169,7 +145,7 @@
 },
 {
   "paper_id": "pdf_a052cec01e71",
-  "title": "ChatPCG: Large Language Model-Driven Reward Design for Procedural Content Generation",
+  "title": "ChatPCG: Large Language Model-Driven Reward",
   "one_paragraph_summary": "ChatPCG: Large Language Model-Driven Reward Design for Procedural Content Generation In-Chang Baek1, Tae-Hwa Park2, Jin-Ha Noh2, Cheong-Mok Bae2, Kyung-Joong Kim1,2,* 1AI Graduate School 2School of Integrated Technology Gwangju Institute of Science and Technology (GIST), South Korea {inchang.baek@gm., taehwa-p@gm., noah9905@gm., cmbae0307@gm., kjkim@}gist.ac.kr Abstract—Driven by the rapid growth of machine learning, re- cent advances in game artificial intelligence (AI) have significantly impacted productivity across various gaming genres. Reward design plays a pivotal role in training game A...",
   "key_points": [
     "ChatPCG: Large Language Model-Driven Reward",
@@ -178,13 +154,13 @@
   ],
   "keywords": [
     "reward",
-    "design",
     "gist",
     "model-driven",
-    "procedural",
-    "generation",
     "technology",
-    "language"
+    "language",
+    "chatpcg",
+    "design",
+    "large"
   ],
   "source_uri": "pdf://sha1/a052cec01e71f5e06340b1eb894a853602f12288",
   "summary_version": "v1",
@@ -193,7 +169,7 @@
 },
 {
   "paper_id": "pdf_74b1d1b88d0e",
-  "title": "Consistent Game Content Creation via Function Calling for Large Language Models",
+  "title": "Consistent Game Content Creation via",
   "one_paragraph_summary": "Consistent Game Content Creation via Function Calling for Large Language Models Roberto Gallotta Institute of Digital Games University of Malta Msida, Malta roberto.gallotta@um.edu.mt Antonios Liapis Institute of Digital Games University of Malta Msida, Malta antonios.liapis@um.edu.mt Georgios Yannakakis Institute of Digital Games University of Malta Msida, Malta georgios.yannakakis@um.edu.mt Abstract—Tools for designing content require a medium that allows the designer to efﬁciently express their creativity, and a system that ensures the content being designed adheres to the domain of interes...",
   "key_points": [
     "Consistent Game Content Creation via Function",
@@ -207,8 +183,8 @@
     "university",
     "institute",
     "creation",
-    "function",
-    "language"
+    "gallotta",
+    "roberto"
   ],
   "source_uri": "pdf://sha1/74b1d1b88d0eeb7ccd2ee1884c05b1db75469f09",
   "summary_version": "v1",
@@ -217,7 +193,7 @@
 },
 {
   "paper_id": "pdf_ced9000a9dcc",
-  "title": "Demo Paper: A Game Agents Battle Driven by Free-Form Text Commands Using Code-Generation LLM and Behavior Branch",
+  "title": "Demo Paper: A Game Agents",
   "one_paragraph_summary": "Demo Paper: A Game Agents Battle Driven by Free-Form Text Commands Using Code-Generation LLM and Behavior Branch Ray Ito Faculty of Engineering, The University of Tokyo Tokyo, Japan ray51ito@g.ecc.u-tokyo.ac.jp Junichiro Takahashi Faculty of Engineering, The University of Tokyo Tokyo, Japan takahashi-junichiro509@g.ecc.u-tokyo.ac.jp Abstract—This paper presents a demonstration of our monster battle game, in which the game agents fight in accordance with their player’s language commands. The commands were trans- lated into the knowledge expression called behavior branches by a code-generation l...",
   "key_points": [
     "Demo Paper: A Game Agents Battle Driven by",
@@ -225,14 +201,14 @@
     "LLM and Behavior Branch"
   ],
   "keywords": [
-    "commands",
     "game",
+    "commands",
+    "agents",
+    "paper",
+    "tokyo",
     "code-generation",
     "behavior",
-    "agents",
-    "battle",
-    "paper",
-    "tokyo"
+    "battle"
   ],
   "source_uri": "pdf://sha1/ced9000a9dcc007fe26b7660d17f947057046657",
   "summary_version": "v1",
@@ -265,7 +241,7 @@
 },
 {
   "paper_id": "pdf_8ae377c7f0f6",
-  "title": "GPT for Games: A Scoping Review (2020-2023)",
+  "title": "GPT for Games: A Scoping",
   "one_paragraph_summary": "GPT for Games: A Scoping Review (2020-2023) Daijin Yang College of Art, Media, and Design Northeastern University Boston, United States yang.dai@northeastern.edu Erica Kleinman College of Art, Media, and Design Northeastern University Boston, United States e.kleinman@northeastern.edu Casper Harteveld College of Art, Media, and Design Northeastern University Boston, United States c.harteveld@northeastern.edu Abstract—This paper introduces a scoping review of 55 articles to explore GPT’s potential for games, offering researchers a comprehensive understanding of the current applications and ident...",
   "key_points": [
     "GPT for Games: A Scoping Review (2020-2023)",
@@ -276,11 +252,11 @@
     "northeastern",
     "scoping",
     "college",
-    "review",
     "design",
     "games",
     "media",
-    "gpt"
+    "gpt",
+    "art"
   ],
   "source_uri": "pdf://sha1/8ae377c7f0f66a2ac413fefadc394de5a9ab3572",
   "summary_version": "v1",
@@ -313,7 +289,7 @@
 },
 {
   "paper_id": "pdf_4c0b9e0a5fce",
-  "title": "Game Generation via Large Language Models",
+  "title": "Game Generation via Large Language",
   "one_paragraph_summary": "Game Generation via Large Language Models Chengpeng Hu1, Yunlong Zhao1, 2 and Jialin Liu1 1Guangdong Key Laboratory of Brain-inspired Intelligent Computation, Department of Computer Science and Engineering, Southern University of Science and Technology, Shenzhen, China 2LightSpeed Studios, Tencent, Shenzhen, China Abstract—Recently, the emergence of large language models (LLMs) has unlocked new opportunities for procedural content generation. However, recent attempts mainly focus on level generation for specific games with defined game rules such as Super Mario Bros. and Zelda. This paper inve...",
   "key_points": [
     "Game Generation via Large Language Models",
@@ -324,11 +300,11 @@
     "generation",
     "language",
     "shenzhen",
-    "models",
     "large",
     "china",
     "game",
-    "science"
+    "science",
+    "models"
   ],
   "source_uri": "pdf://sha1/4c0b9e0a5fced8547556b2e2983ce6bb409ecca5",
   "summary_version": "v1",
@@ -361,7 +337,7 @@
 },
 {
   "paper_id": "pdf_3ec2c2985747",
-  "title": "Generative Agents: Interactive Simulacra of Human Behavior",
+  "title": "Generative Agents: Interactive Simulacra of",
   "one_paragraph_summary": "Generative Agents: Interactive Simulacra of Human Behavior Joon Sung Park Joseph C. O’Brien Carrie J. Cai Stanford University Stanford University Google Research Stanford, USA Stanford, USA Mountain View, CA, USA joonspk@stanford.edu jobrien3@stanford.edu cjcai@google.com Meredith Ringel Morris Percy Liang Michael S. Bernstein Google DeepMind Stanford University Stanford University Seattle, WA, USA Stanford, USA Stanford, USA merrie@google.com pliang@cs.stanford.edu msb@cs.stanford.edu Figure 1: Generative agents are believable simulacra of human behavior for interactive applications. In this...",
   "key_points": [
     "Generative Agents: Interactive Simulacra of Human Behavior",
@@ -375,8 +351,8 @@
     "interactive",
     "generative",
     "simulacra",
-    "behavior",
-    "agents"
+    "agents",
+    "google"
   ],
   "source_uri": "pdf://sha1/3ec2c2985747aa9023c98e8b1026351d8f8b15dd",
   "summary_version": "v1",
@@ -385,7 +361,7 @@
 },
 {
   "paper_id": "pdf_f5a28b0ba8a2",
-  "title": "Imitation Game for Adversarial Disillusion with",
+  "title": "Imitation Game for Adversarial Disillusion",
   "one_paragraph_summary": "1 Imitation Game for Adversarial Disillusion with Multimodal Generative Chain-of-Thought Role-Play Ching-Chun Chang, Fan-Yun Chen, Shih-Hong Gu, Kai Gao, Hanrui Wang, and Isao Echizen Abstract—As the cornerstone of artificial intelligence, machine perception confronts a fundamental threat posed by adversarial illusions. These adversarial attacks manifest in two primary forms: deductive illusion, where specific stimuli are crafted based on the victim model’s general decision logic, and inductive illusion, where the victim model’s general decision logic is shaped by specific stimuli. The former...",
   "key_points": [
     "1",
@@ -409,7 +385,7 @@
 },
 {
   "paper_id": "pdf_d0f6f027794e",
-  "title": "Implementation of Sprouts:",
+  "title": "Implementation of Sprouts",
   "one_paragraph_summary": "Implementation of Sprouts: a graph drawing game⋆ Tom´aˇs ˇC´ıˇzek1[0000−0002−0586−8082] and Martin Balko1[0000−0001−9688−9489] Department of Applied Mathematics, Faculty of Mathematics and Physics, Charles University, Prague, Czech Republic cizek@kam.mff.cuni.cz, balko@kam.mff.cuni.cz Abstract. Sprouts is a two-player pencil-and-paper game invented by John Conway and Michael Paterson in 1967. In the game, the players take turns in joining dots by curves according to simple rules, until one player cannot make a move. The game of Sprouts is very popular and simple-looking, so it may come as a su...",
   "key_points": [
     "Implementation of Sprouts: a graph drawing game⋆ Tom´aˇs ˇC´ıˇzek1[0000−0002−0586−8082] and Martin Balko1[0000−0001−9688−9489]",
@@ -432,8 +408,32 @@
   "is_stale": false
 },
 {
+  "paper_id": "pdf_3fb5e2b2b8e7",
+  "title": "JOURNAL OF LATEX CLASS FILES,",
+  "one_paragraph_summary": "JOURNAL OF LATEX CLASS FILES, VOL. 14, NO. 8, AUGUST 2021 1 RaidEnv: Exploring New Challenges in Automated Content Balancing for Boss Raid Games Hyeon-Chang Jeon∗ , In-Chang Baek∗ , Cheong-mok Bae, Taehwa Park, Wonsang You, Taegwan Ha, Hoyun Jung, Jinha Noh, Seungwon Oh, Kyung-Joong Kim Abstract—The balance of game content significantly impacts the gaming experience. Unbalanced game content diminishes engagement or increases frustration because of repetitive failure. Although game designers intend to adjust the difficulty of game content, this is a repetitive, labor-intensive, and challenging...",
+  "key_points": [
+    "JOURNAL OF LATEX CLASS FILES, VOL. 14, NO. 8, AUGUST 2021 1",
+    "RaidEnv: Exploring New Challenges in Automated",
+    "Content Balancing for Boss Raid Games Hyeon-Chang Jeon∗ , In-Chang Baek∗ , Cheong-mok Bae, Taehwa Park, Wonsang You, Taegwan Ha, Hoyun"
+  ],
+  "keywords": [
+    "content",
+    "game",
+    "journal",
+    "latex",
+    "class",
+    "files",
+    "hyeon-chang",
+    "challenges"
+  ],
+  "source_uri": "pdf://sha1/3fb5e2b2b8e73dd13ec8a7133a0baff344704385",
+  "summary_version": "v1",
+  "chunk_snapshot_hash": "4c02d476ba4447ee4140cf7dbb406729dfbedb2b",
+  "is_stale": false
+},
+{
   "paper_id": "pdf_e8a7eeb3037f",
-  "title": "JOURNAL OF LATEX CLASS FILES, VOL. 14, NO. 8, AUGUST 2015",
+  "title": "JOURNAL OF LATEX CLASS FILES,",
   "one_paragraph_summary": "JOURNAL OF LATEX CLASS FILES, VOL. 14, NO. 8, AUGUST 2015 1 Goal-oriented Interactions in Games Using LLMs Adon Phillips, Jochen Lang, and David Mould Abstract—Unrealistic parser-based dialogue systems limit player agency. LLM characters can enhance agency but lack structure and measurable objectives. We propose a framework for struc- tured interactions that tracks player progress through specific objectives, while also improving character LLM responses. This approach frames interactions as puzzles with states representing goal-based milestones. We employ an LLM to analyze dialogue history and...",
   "key_points": [
     "JOURNAL OF LATEX CLASS FILES, VOL. 14, NO. 8, AUGUST 2015 1",
@@ -445,10 +445,10 @@
     "llm",
     "dialogue",
     "journal",
-    "august",
     "player",
     "agency",
-    "latex"
+    "latex",
+    "class"
   ],
   "source_uri": "pdf://sha1/e8a7eeb3037f95ac84634a65e065261b71091d2c",
   "summary_version": "v1",
@@ -456,32 +456,8 @@
   "is_stale": false
 },
 {
-  "paper_id": "pdf_3fb5e2b2b8e7",
-  "title": "JOURNAL OF LATEX CLASS FILES, VOL. 14, NO. 8, AUGUST 2021",
-  "one_paragraph_summary": "JOURNAL OF LATEX CLASS FILES, VOL. 14, NO. 8, AUGUST 2021 1 RaidEnv: Exploring New Challenges in Automated Content Balancing for Boss Raid Games Hyeon-Chang Jeon∗ , In-Chang Baek∗ , Cheong-mok Bae, Taehwa Park, Wonsang You, Taegwan Ha, Hoyun Jung, Jinha Noh, Seungwon Oh, Kyung-Joong Kim Abstract—The balance of game content significantly impacts the gaming experience. Unbalanced game content diminishes engagement or increases frustration because of repetitive failure. Although game designers intend to adjust the difficulty of game content, this is a repetitive, labor-intensive, and challenging...",
-  "key_points": [
-    "JOURNAL OF LATEX CLASS FILES, VOL. 14, NO. 8, AUGUST 2021 1",
-    "RaidEnv: Exploring New Challenges in Automated",
-    "Content Balancing for Boss Raid Games Hyeon-Chang Jeon∗ , In-Chang Baek∗ , Cheong-mok Bae, Taehwa Park, Wonsang You, Taegwan Ha, Hoyun"
-  ],
-  "keywords": [
-    "content",
-    "game",
-    "journal",
-    "august",
-    "latex",
-    "class",
-    "files",
-    "vol"
-  ],
-  "source_uri": "pdf://sha1/3fb5e2b2b8e73dd13ec8a7133a0baff344704385",
-  "summary_version": "v1",
-  "chunk_snapshot_hash": "4c02d476ba4447ee4140cf7dbb406729dfbedb2b",
-  "is_stale": false
-},
-{
   "paper_id": "pdf_deaa9846b4d0",
-  "title": "LIGS: Developing an LLM-infused Game System for Emergent Narrative",
+  "title": "LIGS: Developing an LLM-infused Game",
   "one_paragraph_summary": "LIGS: Developing an LLM-infused Game System for Emergent Narrative Jin Jeong Industrial Design KAIST Daejeon, Republic of Korea tasa2000@kaist.ac.kr Tak Yeon Lee Industrial Design KAIST Daejeon, Republic of Korea reflect9@gmail.com Abstract Games with emergent narratives enable users to craft their own sto- ries through simulation-based mechanics, but have shown various limitations due to the deterministic nature of traditional algorithms. Generative AI, including LLMs(large language models), is proposed as a solution by automating tasks and dynamically generating con- tent tailored to evolvin...",
   "key_points": [
     "LIGS: Developing an LLM-infused Game System for Emergent",
@@ -489,14 +465,14 @@
     "Jin Jeong"
   ],
   "keywords": [
-    "emergent",
     "llm-infused",
     "developing",
-    "narrative",
-    "system",
+    "emergent",
     "kaist",
     "ligs",
-    "game"
+    "game",
+    "industrial",
+    "narrative"
   ],
   "source_uri": "pdf://sha1/deaa9846b4d02a99d0b4a805448d5fd968f0996e",
   "summary_version": "v1",
@@ -505,7 +481,7 @@
 },
 {
   "paper_id": "pdf_0ec6a8b26149",
-  "title": "Learning Visuomotor Policies for Aerial Navigation",
+  "title": "Learning Visuomotor Policies for Aerial",
   "one_paragraph_summary": "Learning Visuomotor Policies for Aerial Navigation Using Cross-Modal Representations Rogerio Bonatti∗1, Ratnesh Madaan2, Vibhav Vineet2, Sebastian Scherer1, and Ashish Kapoor2 Abstract— Machines are a long way from robustly solving open-world perception-control tasks, such as ﬁrst-person view (FPV) aerial navigation. While recent advances in end-to- end Machine Learning, especially Imitation and Reinforce- ment Learning appear promising, they are constrained by the need of large amounts of difﬁcult-to-collect labeled real- world data. Simulated data, on the other hand, is easy to generate, but...",
   "key_points": [
     "Learning Visuomotor Policies for Aerial Navigation",
@@ -514,11 +490,11 @@
   ],
   "keywords": [
     "learning",
-    "navigation",
     "aerial",
     "representations",
     "cross-modal",
     "visuomotor",
+    "navigation",
     "policies",
     "data"
   ],
@@ -552,56 +528,8 @@
   "is_stale": false
 },
 {
-  "paper_id": "pdf_d788f6ee64aa",
-  "title": "Preprint. Under review.",
-  "one_paragraph_summary": "Preprint. Under review. LoRI: Reducing Cross-Task Interference in Multi-Task Low- Rank Adaptation Juzheng Zhang1, Jiacheng You2, Ashwinee Panda1, Tom Goldstein1 1University of Maryland 2Tsinghua University Abstract Low-Rank Adaptation (LoRA) has emerged as a popular parameter- efficient fine-tuning (PEFT) method for Large Language Models (LLMs), yet it still incurs notable overhead and suffers from parameter interfer- ence in multi-task scenarios. We propose LoRA with Reduced Interference (LoRI), a simple yet effective approach that freezes the projection matrices A as random projections and s...",
-  "key_points": [
-    "Preprint. Under review.",
-    "LoRI: Reducing Cross-Task Interference in Multi-Task Low-",
-    "Rank Adaptation"
-  ],
-  "keywords": [
-    "interference",
-    "multi-task",
-    "adaptation",
-    "preprint",
-    "review",
-    "under",
-    "lori",
-    "cross-task"
-  ],
-  "source_uri": "pdf://sha1/d788f6ee64aa50c06c045e162529aaedce528692",
-  "summary_version": "v1",
-  "chunk_snapshot_hash": "761c4469c1296c47a99c0d347558f3e754981b62",
-  "is_stale": false
-},
-{
-  "paper_id": "pdf_a639448e61be",
-  "title": "Provided proper attribution is provided, Google hereby grants permission to",
-  "one_paragraph_summary": "Provided proper attribution is provided, Google hereby grants permission to reproduce the tables and figures in this paper solely for use in journalistic or scholarly works. Attention Is All You Need Ashish Vaswani∗ Google Brain avaswani@google.com Noam Shazeer∗ Google Brain noam@google.com Niki Parmar∗ Google Research nikip@google.com Jakob Uszkoreit∗ Google Research usz@google.com Llion Jones∗ Google Research llion@google.com Aidan N. Gomez∗† University of Toronto aidan@cs.toronto.edu Łukasz Kaiser∗ Google Brain lukaszkaiser@google.com Illia Polosukhin∗‡ illia.polosukhin@gmail.com Abstract T...",
-  "key_points": [
-    "Provided proper attribution is provided, Google hereby grants permission to reproduce the tables and figures in this paper solely for use in...",
-    "Attention Is All You Need Ashish Vaswani∗",
-    "Google Brain avaswani@google.com Noam Shazeer∗"
-  ],
-  "keywords": [
-    "google",
-    "com",
-    "provided",
-    "brain",
-    "attribution",
-    "permission",
-    "research",
-    "proper"
-  ],
-  "source_uri": "pdf://sha1/a639448e61be3ab2a6fb696c0e910b0a3e5fd57f",
-  "summary_version": "v1",
-  "chunk_snapshot_hash": "6eccfd9a56a4ae7d51dbaa738dc51e735aaf55b3",
-  "is_stale": false
-},
-{
   "paper_id": "pdf_eee3d4941333",
-  "title": "Reinforcement Learning-Based Autonomous Landing of AirSim Simulated Quadcopter in Unreal Engine",
+  "title": "Reinforcement Learning-Based Autonomous Landing of",
   "one_paragraph_summary": "Reinforcement Learning-Based Autonomous Landing of AirSim Simulated Quadcopter in Unreal Engine Nehith Sai Vemulapalli Dept. of Computer Science and Engineering, Amrita School of Computing, Amrita Vishwa Vidyapeetham, Amritapuri, India amenu4aie20053@am.students.amrita.edu Pruthvi Paladugula Dept. of Computer Science and Engineering, Amrita School of Computing, Amrita Vishwa Vidyapeetham, Amritapuri, India amenu4aie20054@am.students.amrita.edu Guggilam Sai Prabhat Dept. of Computer Science and Engineering, Amrita School of Computing, Amrita Vishwa Vidyapeetham, Amritapuri, India amenu4aie20032...",
   "key_points": [
     "Reinforcement Learning-Based Autonomous",
@@ -615,8 +543,8 @@
     "vidyapeetham",
     "engineering",
     "autonomous",
-    "quadcopter",
-    "amritapuri"
+    "amritapuri",
+    "computing"
   ],
   "source_uri": "pdf://sha1/eee3d4941333bd3f52898d49634db8beffece239",
   "summary_version": "v1",
@@ -649,7 +577,7 @@
 },
 {
   "paper_id": "pdf_4c5a8be99f11",
-  "title": "Research on Artificial Intelligence Algorithm and Its Application in Games",
+  "title": "Research on Artificial Intelligence Algorithm",
   "one_paragraph_summary": "Research on Artificial Intelligence Algorithm and Its Application in Games Cundong Tang1,2, Zhiping Wang2, Xiuxiu Sima2, Lingxiao Zhang2 1School of Information Science and Technology, Northwest University, Xi’an 710127, China 2Software Engineering College, Nanyang Institute of Technology, Nanyang 473004, China *Corresponding author: Cundong Tang nykaoshi@163.com Abstract—With the in-depth development of intelligent technology, game artificial intelligence (AI) has become the technical core of improving the playability of a game and the main selling point of game promotion, deepening the game e...",
   "key_points": [
     "Research on Artificial Intelligence Algorithm and",
@@ -661,10 +589,10 @@
     "artificial",
     "technology",
     "game",
-    "application",
     "algorithm",
     "research",
-    "cundong"
+    "cundong",
+    "application"
   ],
   "source_uri": "pdf://sha1/4c5a8be99f11da793e11611ca3170515d5e16193",
   "summary_version": "v1",
@@ -673,7 +601,7 @@
 },
 {
   "paper_id": "pdf_b3a5372699e5",
-  "title": "Role play with large language models",
+  "title": "Role play with large language",
   "one_paragraph_summary": "Nature | Vol 623 | 16 November 2023 | 493 Perspective Role play with large language models Murray Shanahan1,2 ✉, Kyle McDonell3 ✉ & Laria Reynolds3 ✉ As dialogue agents become increasingly human-like in their performance, we must develop effective ways to describe their behaviour in high-level terms without falling into the trap of anthropomorphism. Here we foreground the concept of role play. Casting dialogue-agent behaviour in terms of role play allows us to draw on familiar folk psychological terms, without ascribing human characteristics to language models that they in fact lack. Two impor...",
   "key_points": [
     "Nature | Vol 623 | 16 November 2023 | 493",
@@ -697,7 +625,7 @@
 },
 {
   "paper_id": "pdf_979dd1640086",
-  "title": "STELLAR: Storage Tuning Engine Leveraging LLM Autonomous Reasoning for High Performance Parallel File Systems",
+  "title": "STELLAR: Storage Tuning Engine Leveraging",
   "one_paragraph_summary": "STELLAR: Storage Tuning Engine Leveraging LLM Autonomous Reasoning for High Performance Parallel File Systems Chris Egersdoerfer University of Delaware Newark, United States cegersdo@udel.edu Philip Carns Argonne National Laboratory Lemont, United States carns@mcs.anl.gov Shane Snyder Argonne National Laboratory Lemont, United States ssnyder@mcs.anl.gov Robert Ross Argonne National Laboratory Lemont, United States rross@anl.gov Dong Dai University of Delaware Newark, United States dai@udel.edu Abstract I/O performance is crucial to efficiency in data-intensive scien- tific computing; but tunin...",
   "key_points": [
     "STELLAR: Storage Tuning Engine Leveraging LLM Autonomous",
@@ -709,10 +637,10 @@
     "states",
     "performance",
     "leveraging",
-    "autonomous",
     "laboratory",
-    "reasoning",
-    "parallel"
+    "national",
+    "stellar",
+    "storage"
   ],
   "source_uri": "pdf://sha1/979dd1640086abe62bcae030a43fea4994623d1e",
   "summary_version": "v1",
@@ -721,7 +649,7 @@
 },
 {
   "paper_id": "pdf_6989b99586c2",
-  "title": "The Effect of LLM-Based NPC Emotional States on Player Emotions: An Analysis of Interactive Game Play",
+  "title": "The Effect of LLM-Based NPC",
   "one_paragraph_summary": "The Effect of LLM-Based NPC Emotional States on Player Emotions: An Analysis of Interactive Game Play Alessandro Marincioni Department of Computer Science Leiden University Leiden, Netherlands a.marincioni@umail.leidenuniv.nl Myriana Miltiadous Department of Computer Science Leiden University Leiden, Netherlands m.miltiadous@umail.leidenuniv.nl Katerina Zacharia Department of Computer Science Leiden University Leiden, Netherlands k.zacharia@umail.leidenuniv.nl Rick Heemskerk Department of Computer Science Leiden University Leiden, Netherlands r.d.heemskerk@umail.leidenuniv.nl Georgios Doukeris...",
   "key_points": [
     "The Effect of LLM-Based NPC Emotional States on Player Emotions: An Analysis of Interactive",
@@ -768,8 +696,56 @@
   "is_stale": false
 },
 {
+  "paper_id": "pdf_a639448e61be",
+  "title": "Untitled Paper",
+  "one_paragraph_summary": "Provided proper attribution is provided, Google hereby grants permission to reproduce the tables and figures in this paper solely for use in journalistic or scholarly works. Attention Is All You Need Ashish Vaswani∗ Google Brain avaswani@google.com Noam Shazeer∗ Google Brain noam@google.com Niki Parmar∗ Google Research nikip@google.com Jakob Uszkoreit∗ Google Research usz@google.com Llion Jones∗ Google Research llion@google.com Aidan N. Gomez∗† University of Toronto aidan@cs.toronto.edu Łukasz Kaiser∗ Google Brain lukaszkaiser@google.com Illia Polosukhin∗‡ illia.polosukhin@gmail.com Abstract T...",
+  "key_points": [
+    "Provided proper attribution is provided, Google hereby grants permission to reproduce the tables and figures in this paper solely for use in...",
+    "Attention Is All You Need Ashish Vaswani∗",
+    "Google Brain avaswani@google.com Noam Shazeer∗"
+  ],
+  "keywords": [
+    "google",
+    "com",
+    "provided",
+    "brain",
+    "research",
+    "paper",
+    "noam",
+    "attribution"
+  ],
+  "source_uri": "pdf://sha1/a639448e61be3ab2a6fb696c0e910b0a3e5fd57f",
+  "summary_version": "v1",
+  "chunk_snapshot_hash": "6eccfd9a56a4ae7d51dbaa738dc51e735aaf55b3",
+  "is_stale": false
+},
+{
+  "paper_id": "pdf_d788f6ee64aa",
+  "title": "Untitled Paper",
+  "one_paragraph_summary": "Preprint. Under review. LoRI: Reducing Cross-Task Interference in Multi-Task Low- Rank Adaptation Juzheng Zhang1, Jiacheng You2, Ashwinee Panda1, Tom Goldstein1 1University of Maryland 2Tsinghua University Abstract Low-Rank Adaptation (LoRA) has emerged as a popular parameter- efficient fine-tuning (PEFT) method for Large Language Models (LLMs), yet it still incurs notable overhead and suffers from parameter interfer- ence in multi-task scenarios. We propose LoRA with Reduced Interference (LoRI), a simple yet effective approach that freezes the projection matrices A as random projections and s...",
+  "key_points": [
+    "Preprint. Under review.",
+    "LoRI: Reducing Cross-Task Interference in Multi-Task Low-",
+    "Rank Adaptation"
+  ],
+  "keywords": [
+    "interference",
+    "multi-task",
+    "adaptation",
+    "lori",
+    "cross-task",
+    "university",
+    "preprint",
+    "reducing"
+  ],
+  "source_uri": "pdf://sha1/d788f6ee64aa50c06c045e162529aaedce528692",
+  "summary_version": "v1",
+  "chunk_snapshot_hash": "761c4469c1296c47a99c0d347558f3e754981b62",
+  "is_stale": false
+},
+{
   "paper_id": "pdf_9dbf1cfb033a",
-  "title": "World and Human Action Models towards gameplay ideation",
+  "title": "World and Human Action Models",
   "one_paragraph_summary": "Nature | www.nature.com | 1 Article World and Human Action Models towards gameplay ideation Anssi Kanervisto1,7, Dave Bignell1,7, Linda Yilin Wen1,7, Martin Grayson1,7, Raluca Georgescu1,7, Sergio Valcarcel Macua1,7, Shan Zheng Tan1,7, Tabish Rashid1,7, Tim Pearce1,7, Yuhan Cao1,7, Abdelhak Lemkhenter1, Chentian Jiang2, Gavin Costello3, Gunshi Gupta4, Marko Tot5, Shu Ishida4, Tarun Gupta4, Udit Arora1, Ryen W. White6, Sam Devlin1,7, Cecily Morrison1,7 & Katja Hofmann1,7 ✉ Generative artificial intelligence (AI) has the potential to transform creative industries through supporting human creativ...",
   "key_points": [
     "Nature | www.nature.com | 1",
@@ -779,12 +755,12 @@
   "keywords": [
     "nature",
     "human",
-    "gameplay",
-    "ideation",
-    "towards",
     "action",
     "models",
-    "world"
+    "world",
+    "kanervisto1",
+    "gameplay",
+    "ideation"
   ],
   "source_uri": "pdf://sha1/9dbf1cfb033a6bd18a950f1fdb37f9262186a2e1",
   "summary_version": "v1",

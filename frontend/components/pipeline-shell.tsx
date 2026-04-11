@@ -4,6 +4,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { resolveGatewayWebSocketUrl } from '../lib/deployment-endpoints';
 import { PipelineWorkbenchPanel } from './PipelineWorkbenchPanel';
+import { useTaskCenter } from './task-center';
 import { usePipelineWorkbench } from './usePipelineWorkbench';
 
 type TaskPayload = Parameters<ReturnType<typeof usePipelineWorkbench>['applyTaskPayload']>[0];
@@ -13,6 +14,7 @@ export function PipelineShell() {
   const wsRef = useRef<WebSocket | null>(null);
   const [statusText, setStatusText] = useState('Disconnected');
   const wsUrl = useMemo(() => resolveGatewayWebSocketUrl(), []);
+  const { ensureTrackedJobs } = useTaskCenter();
 
   const { taskPanel, applyTaskPayload, startGraphBuildTask, retryGraphBuildTask, cancelGraphBuildTask } =
     usePipelineWorkbench({ wsRef, statusText });
@@ -51,6 +53,13 @@ export function PipelineShell() {
 
     return () => ws.close();
   }, [wsUrl]);
+
+  useEffect(() => {
+    if (!taskPanel?.taskId) {
+      return;
+    }
+    ensureTrackedJobs([taskPanel.taskId]);
+  }, [ensureTrackedJobs, taskPanel?.taskId]);
 
   return (
     <PipelineWorkbenchPanel

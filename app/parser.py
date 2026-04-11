@@ -1,9 +1,14 @@
 from __future__ import annotations
 
 import hashlib
+import html
+import json
 import re
+from io import StringIO
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
+from xml.etree import ElementTree
 
 from app.models import PageText
 
@@ -11,6 +16,67 @@ try:
     import fitz  # type: ignore
 except ImportError:  # pragma: no cover
     fitz = None
+
+try:
+    from docx import Document as DocxDocument  # type: ignore
+except ImportError:  # pragma: no cover
+    DocxDocument = None
+
+try:
+    from openpyxl import load_workbook  # type: ignore
+except ImportError:  # pragma: no cover
+    load_workbook = None
+
+try:
+    from pptx import Presentation  # type: ignore
+except ImportError:  # pragma: no cover
+    Presentation = None
+
+
+TEXT_EXTENSIONS = {
+    ".txt",
+    ".md",
+    ".mdx",
+    ".html",
+    ".htm",
+    ".tex",
+    ".json",
+    ".xml",
+    ".yaml",
+    ".yml",
+    ".csv",
+    ".log",
+    ".conf",
+    ".ini",
+    ".properties",
+    ".sql",
+    ".c",
+    ".h",
+    ".cpp",
+    ".hpp",
+    ".py",
+    ".java",
+    ".js",
+    ".ts",
+    ".swift",
+    ".go",
+    ".rb",
+    ".php",
+    ".css",
+    ".scss",
+    ".less",
+}
+OFFICE_EXTENSIONS = {".docx", ".pptx", ".xlsx"}
+LIGHT_DOCUMENT_EXTENSIONS = {".rtf", ".odt", ".epub"}
+SUPPORTED_LOCAL_DOC_EXTENSIONS = {".pdf"} | TEXT_EXTENSIONS | OFFICE_EXTENSIONS | LIGHT_DOCUMENT_EXTENSIONS
+
+
+@dataclass(frozen=True)
+class DocumentRoute:
+    source_type: str
+    route_family: str
+    base_parser: str
+    enhanced_parser: str | None = None
 
 
 def list_pdf_files(input_dir: str | Path | None) -> list[Path]:
@@ -20,6 +86,224 @@ def list_pdf_files(input_dir: str | Path | None) -> list[Path]:
     if not base.exists():
         return []
     return sorted([p for p in base.iterdir() if p.is_file() and p.suffix.lower() == ".pdf"])
+
+
+def list_local_document_files(input_dir: str | Path | None) -> list[Path]:
+    if input_dir is None:
+        return []
+    base = Path(input_dir)
+    if not base.exists():
+        return []
+    return sorted([p for p in base.iterdir() if p.is_file() and p.suffix.lower() in SUPPORTED_LOCAL_DOC_EXTENSIONS])
+
+
+def resolve_document_route(path: str | Path) -> DocumentRoute:
+    suffix = Path(path).suffix.lower()
+    if suffix == ".pdf":
+        return DocumentRoute(source_type="pdf", route_family="pdf", base_parser="legacy", enhanced_parser="marker")
+    if suffix in TEXT_EXTENSIONS:
+        return DocumentRoute(source_type="text", route_family="text_like", base_parser="text")
+    if suffix == ".docx":
+        return DocumentRoute(source_type="docx", route_family="office", base_parser="docx")
+    if suffix == ".pptx":
+        return DocumentRoute(source_type="pptx", route_family="office", base_parser="pptx")
+    if suffix == ".xlsx":
+        return DocumentRoute(source_type="xlsx", route_family="office", base_parser="xlsx")
+    if suffix in LIGHT_DOCUMENT_EXTENSIONS:
+        return DocumentRoute(source_type=suffix.lstrip("."), route_family="document_like", base_parser=suffix.lstrip("."))
+    return DocumentRoute(source_type="unknown", route_family="unsupported", base_parser="unsupported")
+
+
+def _read_text_file(path: Path) -> str:
+    payload = path.read_bytes()
+    for encoding in ("utf-8", "utf-8-sig", "gb18030", "latin-1"):
+        try:
+            return payload.decode(encoding)
+        except Exception:
+            continue
+    return payload.decode("utf-8", errors="ignore")
+
+
+def _strip_markup(text: str) -> str:
+    raw = html.unescape(str(text or ""))
+    raw = re.sub(r"(?is)<script.*?>.*?</script>", " ", raw)
+    raw = re.sub(r"(?is)<style.*?>.*?</style>", " ", raw)
+    raw = re.sub(r"(?s)<[^>]+>", " ", raw)
+    return re.sub(r"\s+", " ", raw).strip()
+
+
+def _metadata_title_from_text(text: str) -> str | None:
+    for line in str(text or "").splitlines():
+        candidate = line.strip()
+        if len(candidate) >= 4:
+            return candidate[:300]
+    return None
+
+
+def _parse_text_like_document(path: Path) -> tuple[list[PageText], list[str], str | None]:
+    suffix = path.suffix.lower()
+    raw = _read_text_file(path)
+    if suffix in {".html", ".htm", ".xml"}:
+        text = _strip_markup(raw)
+    elif suffix in {".json"}:
+        try:
+            text = json.dumps(json.loads(raw), ensure_ascii=False, indent=2)
+        except Exception:
+            text = raw
+    elif suffix in {".yaml", ".yml", ".md", ".mdx", ".tex"}:
+        text = raw
+    elif suffix == ".csv":
+        try:
+            rows = list(__import__("csv").reader(StringIO(raw)))
+            text = "\n".join(", ".join(cell.strip() for cell in row if cell is not None) for row in rows)
+        except Exception:
+            text = raw
+    else:
+        text = raw
+    normalized = text.strip()
+    if not normalized:
+        return [], [f"{path.name}: empty text content"], None
+    return [PageText(page_num=1, text=normalized)], [], _metadata_title_from_text(normalized)
+
+
+def _parse_docx_document(path: Path) -> tuple[list[PageText], list[str], str | None]:
+    if DocxDocument is None:
+        return [], [f"{path.name}: python-docx is unavailable"], None
+    doc = DocxDocument(str(path))
+    lines: list[str] = []
+    for paragraph in doc.paragraphs:
+        text = str(paragraph.text or "").strip()
+        if text:
+            lines.append(text)
+    for table in doc.tables:
+        for row in table.rows:
+            cells = [str(cell.text or "").strip() for cell in row.cells]
+            line = " | ".join(cell for cell in cells if cell)
+            if line:
+                lines.append(line)
+    text = "\n".join(lines).strip()
+    if not text:
+        return [], [f"{path.name}: no readable docx text"], None
+    return [PageText(page_num=1, text=text)], [], _metadata_title_from_text(text)
+
+
+def _parse_pptx_document(path: Path) -> tuple[list[PageText], list[str], str | None]:
+    if Presentation is None:
+        return [], [f"{path.name}: python-pptx is unavailable"], None
+    presentation = Presentation(str(path))
+    pages: list[PageText] = []
+    for index, slide in enumerate(presentation.slides, start=1):
+        texts: list[str] = []
+        for shape in slide.shapes:
+            text = str(getattr(shape, "text", "") or "").strip()
+            if text:
+                texts.append(text)
+        if texts:
+            pages.append(PageText(page_num=index, text="\n".join(texts)))
+    if not pages:
+        return [], [f"{path.name}: no readable pptx text"], None
+    title = _metadata_title_from_text(pages[0].text if pages else "")
+    return pages, [], title
+
+
+def _parse_xlsx_document(path: Path) -> tuple[list[PageText], list[str], str | None]:
+    if load_workbook is None:
+        return [], [f"{path.name}: openpyxl is unavailable"], None
+    workbook = load_workbook(filename=str(path), read_only=True, data_only=True)
+    pages: list[PageText] = []
+    try:
+        for index, sheet in enumerate(workbook.worksheets, start=1):
+            lines: list[str] = [f"# Sheet: {sheet.title}"]
+            for row in sheet.iter_rows(values_only=True):
+                values = [str(cell).strip() for cell in row if cell is not None and str(cell).strip()]
+                if values:
+                    lines.append(", ".join(values))
+            if len(lines) > 1:
+                pages.append(PageText(page_num=index, text="\n".join(lines)))
+    finally:
+        workbook.close()
+    if not pages:
+        return [], [f"{path.name}: no readable xlsx text"], None
+    title = _metadata_title_from_text(pages[0].text if pages else "")
+    return pages, [], title
+
+
+def _parse_rtf_document(path: Path) -> tuple[list[PageText], list[str], str | None]:
+    raw = _read_text_file(path)
+    text = re.sub(r"\\'[0-9a-fA-F]{2}", " ", raw)
+    text = re.sub(r"\\[a-zA-Z]+-?\d* ?", " ", text)
+    text = re.sub(r"[{}]", " ", text)
+    text = re.sub(r"\s+", " ", text).strip()
+    if not text:
+        return [], [f"{path.name}: no readable rtf text"], None
+    return [PageText(page_num=1, text=text)], [], _metadata_title_from_text(text)
+
+
+def _parse_odt_document(path: Path) -> tuple[list[PageText], list[str], str | None]:
+    import zipfile
+
+    try:
+        with zipfile.ZipFile(path) as archive:
+            raw = archive.read("content.xml").decode("utf-8", errors="ignore")
+    except Exception as exc:
+        return [], [f"{path.name}: odt extraction failed: {exc}"], None
+    text = _strip_markup(raw)
+    if not text:
+        return [], [f"{path.name}: no readable odt text"], None
+    return [PageText(page_num=1, text=text)], [], _metadata_title_from_text(text)
+
+
+def _parse_epub_document(path: Path) -> tuple[list[PageText], list[str], str | None]:
+    import zipfile
+
+    try:
+        with zipfile.ZipFile(path) as archive:
+            html_entries = sorted(
+                name
+                for name in archive.namelist()
+                if name.lower().endswith((".xhtml", ".html", ".htm")) and not name.endswith("/")
+            )
+            pages: list[PageText] = []
+            for index, name in enumerate(html_entries, start=1):
+                raw = archive.read(name).decode("utf-8", errors="ignore")
+                text = _strip_markup(raw)
+                if text:
+                    pages.append(PageText(page_num=index, text=text))
+    except Exception as exc:
+        return [], [f"{path.name}: epub extraction failed: {exc}"], None
+    if not pages:
+        return [], [f"{path.name}: no readable epub text"], None
+    return pages, [], _metadata_title_from_text(pages[0].text if pages else "")
+
+
+def parse_local_document_pages(path: str | Path) -> tuple[list[PageText], list[str], str | None, DocumentRoute]:
+    doc_path = Path(path)
+    route = resolve_document_route(doc_path)
+    if route.route_family == "pdf":
+        pages, errors, metadata_title = parse_pdf_pages(doc_path)
+        return pages, errors, metadata_title, route
+    if route.route_family == "text_like":
+        pages, errors, metadata_title = _parse_text_like_document(doc_path)
+        return pages, errors, metadata_title, route
+    if route.base_parser == "docx":
+        pages, errors, metadata_title = _parse_docx_document(doc_path)
+        return pages, errors, metadata_title, route
+    if route.base_parser == "pptx":
+        pages, errors, metadata_title = _parse_pptx_document(doc_path)
+        return pages, errors, metadata_title, route
+    if route.base_parser == "xlsx":
+        pages, errors, metadata_title = _parse_xlsx_document(doc_path)
+        return pages, errors, metadata_title, route
+    if route.base_parser == "rtf":
+        pages, errors, metadata_title = _parse_rtf_document(doc_path)
+        return pages, errors, metadata_title, route
+    if route.base_parser == "odt":
+        pages, errors, metadata_title = _parse_odt_document(doc_path)
+        return pages, errors, metadata_title, route
+    if route.base_parser == "epub":
+        pages, errors, metadata_title = _parse_epub_document(doc_path)
+        return pages, errors, metadata_title, route
+    return [], [f"{doc_path.name}: unsupported file type `{doc_path.suffix.lower() or 'unknown'}`"], None, route
 
 
 def make_paper_id(path: Path) -> str:

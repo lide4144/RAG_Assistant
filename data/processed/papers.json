@@ -1,492 +1,2280 @@
 [
 {
-  "paper_id": "bfb1616c7974",
-  "title": "STELLAR: Storage Tuning Engine Leveraging LLM Autonomous Reasoning for High Performance Parallel File Systems",
-  "path": "/tmp/tmpuucl7ix4/input/2602.23220v1.pdf",
-  "source_type": "pdf",
-  "source_uri": "/tmp/tmpuucl7ix4/input/2602.23220v1.pdf",
-  "imported_at": "",
-  "status": "active",
-  "fingerprint": ""
-},
-{
   "paper_id": "pdf_9b0aa571ed09",
-  "title": "\"I Like Your Story!\": A Co-Creative Story-Crafting Game with a",
-  "path": "/tmp/tmpqtnp9o1x/input/I Like Your Story! A Co-Creative Story-Crafting Game with a.pdf",
+  "title": "\"I Like Your Story!\": A",
+  "path": "/tmp/tmp285z9iyx/input/014-I-Like-Your-Story-A-Co-Creative-Story-Crafting-Game-with-a.pdf",
   "source_type": "pdf",
   "source_uri": "pdf://sha1/9b0aa571ed0999e45dc3ed1362c27fcc945b5321",
-  "imported_at": "2026-02-28T09:21:32+00:00",
+  "parser_engine": "legacy",
+  "title_source": "fallback_first_line",
+  "title_confidence": 0.85,
+  "imported_at": "2026-03-30T20:21:27+00:00",
   "status": "active",
   "fingerprint": "9b0aa571ed0999e45dc3ed1362c27fcc945b5321",
   "ingest_metadata": {
-    "file_name": "I Like Your Story! A Co-Creative Story-Crafting Game with a.pdf",
-    "legacy_paper_id": "dbdb553a67fb",
-    "legacy_source_path": "/tmp/tmpqtnp9o1x/input/I Like Your Story! A Co-Creative Story-Crafting Game with a.pdf"
+    "file_name": "014-I-Like-Your-Story-A-Co-Creative-Story-Crafting-Game-with-a.pdf",
+    "file_ext": ".pdf",
+    "parser_mode": "base_only",
+    "base_parser": "legacy",
+    "enhanced_parser": "",
+    "route_family": "pdf",
+    "controlled_skip": false,
+    "controlled_skip_reason": "",
+    "legacy_paper_id": "8407b4f911fd",
+    "legacy_source_path": "/tmp/tmp285z9iyx/input/014-I-Like-Your-Story-A-Co-Creative-Story-Crafting-Game-with-a.pdf",
+    "parser_fallback": false,
+    "parser_fallback_stage": "",
+    "parser_fallback_reason": "",
+    "marker_attempt_duration_sec": 0.0,
+    "marker_stage_timings": {},
+    "structure_parse_status": "unavailable",
+    "structure_parse_reason": "marker_disabled_or_legacy_parser",
+    "section_count": 0,
+    "indexed_section_count": 0,
+    "title_layer": "fallback_first_line",
+    "title_decision_trace": [
+      {
+        "layer": "marker_h1",
+        "status": "missing",
+        "reason": "no_candidates"
+      },
+      {
+        "layer": "marker_h2",
+        "status": "missing",
+        "reason": "no_candidates"
+      },
+      {
+        "layer": "marker_markdown_first_line",
+        "status": "missing",
+        "reason": "no_candidates"
+      },
+      {
+        "layer": "marker",
+        "status": "missing",
+        "reason": "no_candidates"
+      },
+      {
+        "layer": "metadata",
+        "status": "missing",
+        "reason": "no_candidates"
+      },
+      {
+        "layer": "fallback_first_line",
+        "status": "accepted",
+        "reason": "selected"
+      }
+    ],
+    "structured_title_candidates": [],
+    "structured_title_candidate_counts": {},
+    "markdown_available": false,
+    "markdown_consumption_status": "missing",
+    "block_semantics_available": false,
+    "block_semantics_preserved": false,
+    "block_types": []
   }
 },
 {
   "paper_id": "pdf_f8a08f212a05",
-  "title": "A Framework for Adaptive Game Play and Adversary Creation Based on Gamer Behavioral Analysis and Large Language (LLM) Models",
-  "path": "/tmp/tmpqtnp9o1x/input/A_Framework_for_Adaptive_Game_Play_and_Adversary_Creation_Based_on_Gamer_Behavioral_Analysis_and_Large_Language_LLM_Models.pdf",
+  "title": "A Framework for Adaptive Game",
+  "path": "/tmp/tmp285z9iyx/input/030-A_Framework_for_Adaptive_Game_Play_and_Adversary_Creation_Based_on_Gamer_Behavioral_Analysis_and_Large_Language_LLM_Models.pdf",
   "source_type": "pdf",
   "source_uri": "pdf://sha1/f8a08f212a059c1237268c4bc723818ab4f5b845",
-  "imported_at": "2026-02-28T09:21:32+00:00",
+  "parser_engine": "legacy",
+  "title_source": "metadata",
+  "title_confidence": 0.85,
+  "imported_at": "2026-03-30T20:21:27+00:00",
   "status": "active",
   "fingerprint": "f8a08f212a059c1237268c4bc723818ab4f5b845",
   "ingest_metadata": {
-    "file_name": "A_Framework_for_Adaptive_Game_Play_and_Adversary_Creation_Based_on_Gamer_Behavioral_Analysis_and_Large_Language_LLM_Models.pdf",
-    "legacy_paper_id": "214f2e8d7c54",
-    "legacy_source_path": "/tmp/tmpqtnp9o1x/input/A_Framework_for_Adaptive_Game_Play_and_Adversary_Creation_Based_on_Gamer_Behavioral_Analysis_and_Large_Language_LLM_Models.pdf"
+    "file_name": "030-A_Framework_for_Adaptive_Game_Play_and_Adversary_Creation_Based_on_Gamer_Behavioral_Analysis_and_Large_Language_LLM_Models.pdf",
+    "file_ext": ".pdf",
+    "parser_mode": "base_only",
+    "base_parser": "legacy",
+    "enhanced_parser": "",
+    "route_family": "pdf",
+    "controlled_skip": false,
+    "controlled_skip_reason": "",
+    "legacy_paper_id": "50d7293e95e1",
+    "legacy_source_path": "/tmp/tmp285z9iyx/input/030-A_Framework_for_Adaptive_Game_Play_and_Adversary_Creation_Based_on_Gamer_Behavioral_Analysis_and_Large_Language_LLM_Models.pdf",
+    "parser_fallback": false,
+    "parser_fallback_stage": "",
+    "parser_fallback_reason": "",
+    "marker_attempt_duration_sec": 0.0,
+    "marker_stage_timings": {},
+    "structure_parse_status": "unavailable",
+    "structure_parse_reason": "marker_disabled_or_legacy_parser",
+    "section_count": 0,
+    "indexed_section_count": 0,
+    "title_layer": "metadata",
+    "title_decision_trace": [
+      {
+        "layer": "marker_h1",
+        "status": "missing",
+        "reason": "no_candidates"
+      },
+      {
+        "layer": "marker_h2",
+        "status": "missing",
+        "reason": "no_candidates"
+      },
+      {
+        "layer": "marker_markdown_first_line",
+        "status": "missing",
+        "reason": "no_candidates"
+      },
+      {
+        "layer": "marker",
+        "status": "missing",
+        "reason": "no_candidates"
+      },
+      {
+        "layer": "metadata",
+        "status": "accepted",
+        "reason": "selected"
+      }
+    ],
+    "structured_title_candidates": [],
+    "structured_title_candidate_counts": {},
+    "markdown_available": false,
+    "markdown_consumption_status": "missing",
+    "block_semantics_available": false,
+    "block_semantics_preserved": false,
+    "block_types": []
   }
 },
 {
   "paper_id": "pdf_e2b66b75cae0",
-  "title": "A General Review of Large Language Model Agents in Game Applications",
-  "path": "/tmp/tmpqtnp9o1x/input/Paper-final draft.pdf",
+  "title": "A General Review of Large",
+  "path": "/tmp/tmp285z9iyx/input/008-Paper-final-draft.pdf",
   "source_type": "pdf",
   "source_uri": "pdf://sha1/e2b66b75cae01a74fcbb323fd7f6d46790c80b41",
-  "imported_at": "2026-02-28T09:21:32+00:00",
+  "parser_engine": "legacy",
+  "title_source": "fallback_first_line",
+  "title_confidence": 0.85,
+  "imported_at": "2026-03-30T20:21:27+00:00",
   "status": "active",
   "fingerprint": "e2b66b75cae01a74fcbb323fd7f6d46790c80b41",
   "ingest_metadata": {
-    "file_name": "Paper-final draft.pdf",
-    "legacy_paper_id": "9551d984ab3c",
-    "legacy_source_path": "/tmp/tmpqtnp9o1x/input/Paper-final draft.pdf"
+    "file_name": "008-Paper-final-draft.pdf",
+    "file_ext": ".pdf",
+    "parser_mode": "base_only",
+    "base_parser": "legacy",
+    "enhanced_parser": "",
+    "route_family": "pdf",
+    "controlled_skip": false,
+    "controlled_skip_reason": "",
+    "legacy_paper_id": "b5ca9c1d6a19",
+    "legacy_source_path": "/tmp/tmp285z9iyx/input/008-Paper-final-draft.pdf",
+    "parser_fallback": false,
+    "parser_fallback_stage": "",
+    "parser_fallback_reason": "",
+    "marker_attempt_duration_sec": 0.0,
+    "marker_stage_timings": {},
+    "structure_parse_status": "unavailable",
+    "structure_parse_reason": "marker_disabled_or_legacy_parser",
+    "section_count": 0,
+    "indexed_section_count": 0,
+    "title_layer": "fallback_first_line",
+    "title_decision_trace": [
+      {
+        "layer": "marker_h1",
+        "status": "missing",
+        "reason": "no_candidates"
+      },
+      {
+        "layer": "marker_h2",
+        "status": "missing",
+        "reason": "no_candidates"
+      },
+      {
+        "layer": "marker_markdown_first_line",
+        "status": "missing",
+        "reason": "no_candidates"
+      },
+      {
+        "layer": "marker",
+        "status": "missing",
+        "reason": "no_candidates"
+      },
+      {
+        "layer": "metadata",
+        "status": "missing",
+        "reason": "no_candidates"
+      },
+      {
+        "layer": "fallback_first_line",
+        "status": "accepted",
+        "reason": "selected"
+      }
+    ],
+    "structured_title_candidates": [],
+    "structured_title_candidate_counts": {},
+    "markdown_available": false,
+    "markdown_consumption_status": "missing",
+    "block_semantics_available": false,
+    "block_semantics_preserved": false,
+    "block_types": []
   }
 },
 {
   "paper_id": "pdf_6082ca27bc59",
-  "title": "A Survey on Large Language Model Based Game Agents",
-  "path": "/tmp/tmpqtnp9o1x/input/2404.02039v2.pdf",
+  "title": "A Survey on Large Language",
+  "path": "/tmp/tmp285z9iyx/input/032-2404.02039v2.pdf",
   "source_type": "pdf",
   "source_uri": "pdf://sha1/6082ca27bc59f7b9e71eba6fb077f1691df23b76",
-  "imported_at": "2026-02-28T09:21:32+00:00",
+  "parser_engine": "legacy",
+  "title_source": "metadata",
+  "title_confidence": 0.85,
+  "imported_at": "2026-03-30T20:21:27+00:00",
   "status": "active",
   "fingerprint": "6082ca27bc59f7b9e71eba6fb077f1691df23b76",
   "ingest_metadata": {
-    "file_name": "2404.02039v2.pdf",
-    "legacy_paper_id": "b5cc9853d072",
-    "legacy_source_path": "/tmp/tmpqtnp9o1x/input/2404.02039v2.pdf"
+    "file_name": "032-2404.02039v2.pdf",
+    "file_ext": ".pdf",
+    "parser_mode": "base_only",
+    "base_parser": "legacy",
+    "enhanced_parser": "",
+    "route_family": "pdf",
+    "controlled_skip": false,
+    "controlled_skip_reason": "",
+    "legacy_paper_id": "7d0a0ea2529a",
+    "legacy_source_path": "/tmp/tmp285z9iyx/input/032-2404.02039v2.pdf",
+    "parser_fallback": false,
+    "parser_fallback_stage": "",
+    "parser_fallback_reason": "",
+    "marker_attempt_duration_sec": 0.0,
+    "marker_stage_timings": {},
+    "structure_parse_status": "unavailable",
+    "structure_parse_reason": "marker_disabled_or_legacy_parser",
+    "section_count": 0,
+    "indexed_section_count": 0,
+    "title_layer": "metadata",
+    "title_decision_trace": [
+      {
+        "layer": "marker_h1",
+        "status": "missing",
+        "reason": "no_candidates"
+      },
+      {
+        "layer": "marker_h2",
+        "status": "missing",
+        "reason": "no_candidates"
+      },
+      {
+        "layer": "marker_markdown_first_line",
+        "status": "missing",
+        "reason": "no_candidates"
+      },
+      {
+        "layer": "marker",
+        "status": "missing",
+        "reason": "no_candidates"
+      },
+      {
+        "layer": "metadata",
+        "status": "accepted",
+        "reason": "selected"
+      }
+    ],
+    "structured_title_candidates": [],
+    "structured_title_candidate_counts": {},
+    "markdown_available": false,
+    "markdown_consumption_status": "missing",
+    "block_semantics_available": false,
+    "block_semantics_preserved": false,
+    "block_types": []
   }
 },
 {
   "paper_id": "pdf_cf624284d9be",
-  "title": "Aplikasi Game Strategi Menggunakan Metode Algoritma",
-  "path": "/tmp/tmpqtnp9o1x/input/Aplikasi Game Strategi Menggunakan Metode Algoritma.pdf",
+  "title": "Aplikasi Game Strategi Menggunakan Metode",
+  "path": "/tmp/tmp285z9iyx/input/028-Aplikasi-Game-Strategi-Menggunakan-Metode-Algoritma.pdf",
   "source_type": "pdf",
   "source_uri": "pdf://sha1/cf624284d9be43b495b66d4d0b21cf41ab6bbe37",
-  "imported_at": "2026-02-28T09:21:32+00:00",
+  "parser_engine": "legacy",
+  "title_source": "fallback_first_line",
+  "title_confidence": 0.85,
+  "imported_at": "2026-03-30T20:21:27+00:00",
   "status": "active",
   "fingerprint": "cf624284d9be43b495b66d4d0b21cf41ab6bbe37",
   "ingest_metadata": {
-    "file_name": "Aplikasi Game Strategi Menggunakan Metode Algoritma.pdf",
-    "legacy_paper_id": "d63c79b7b18d",
-    "legacy_source_path": "/tmp/tmpqtnp9o1x/input/Aplikasi Game Strategi Menggunakan Metode Algoritma.pdf"
+    "file_name": "028-Aplikasi-Game-Strategi-Menggunakan-Metode-Algoritma.pdf",
+    "file_ext": ".pdf",
+    "parser_mode": "base_only",
+    "base_parser": "legacy",
+    "enhanced_parser": "",
+    "route_family": "pdf",
+    "controlled_skip": false,
+    "controlled_skip_reason": "",
+    "legacy_paper_id": "7fc742270f8d",
+    "legacy_source_path": "/tmp/tmp285z9iyx/input/028-Aplikasi-Game-Strategi-Menggunakan-Metode-Algoritma.pdf",
+    "parser_fallback": false,
+    "parser_fallback_stage": "",
+    "parser_fallback_reason": "",
+    "marker_attempt_duration_sec": 0.0,
+    "marker_stage_timings": {},
+    "structure_parse_status": "unavailable",
+    "structure_parse_reason": "marker_disabled_or_legacy_parser",
+    "section_count": 0,
+    "indexed_section_count": 0,
+    "title_layer": "fallback_first_line",
+    "title_decision_trace": [
+      {
+        "layer": "marker_h1",
+        "status": "missing",
+        "reason": "no_candidates"
+      },
+      {
+        "layer": "marker_h2",
+        "status": "missing",
+        "reason": "no_candidates"
+      },
+      {
+        "layer": "marker_markdown_first_line",
+        "status": "missing",
+        "reason": "no_candidates"
+      },
+      {
+        "layer": "marker",
+        "status": "missing",
+        "reason": "no_candidates"
+      },
+      {
+        "layer": "metadata",
+        "status": "missing",
+        "reason": "no_candidates"
+      },
+      {
+        "layer": "fallback_first_line",
+        "status": "accepted",
+        "reason": "selected"
+      }
+    ],
+    "structured_title_candidates": [],
+    "structured_title_candidate_counts": {},
+    "markdown_available": false,
+    "markdown_consumption_status": "missing",
+    "block_semantics_available": false,
+    "block_semantics_preserved": false,
+    "block_types": []
   }
 },
 {
   "paper_id": "pdf_a2fde9f8fedf",
-  "title": "ChatGPT Game Jam: Unleashing the Power of Large Language Models for Game Jams",
-  "path": "/tmp/tmpqtnp9o1x/input/ChatGPT Game Jam Unleashing the Power of Large Language.pdf",
+  "title": "ChatGPT Game Jam: Unleashing the",
+  "path": "/tmp/tmp285z9iyx/input/024-ChatGPT-Game-Jam-Unleashing-the-Power-of-Large-Language.pdf",
   "source_type": "pdf",
   "source_uri": "pdf://sha1/a2fde9f8fedff6fbe35c014f0ef492c5cb3ff962",
-  "imported_at": "2026-02-28T09:21:32+00:00",
+  "parser_engine": "legacy",
+  "title_source": "metadata",
+  "title_confidence": 0.85,
+  "imported_at": "2026-03-30T20:21:27+00:00",
   "status": "active",
   "fingerprint": "a2fde9f8fedff6fbe35c014f0ef492c5cb3ff962",
   "ingest_metadata": {
-    "file_name": "ChatGPT Game Jam Unleashing the Power of Large Language.pdf",
-    "legacy_paper_id": "5a6a593ed27d",
-    "legacy_source_path": "/tmp/tmpqtnp9o1x/input/ChatGPT Game Jam Unleashing the Power of Large Language.pdf"
+    "file_name": "024-ChatGPT-Game-Jam-Unleashing-the-Power-of-Large-Language.pdf",
+    "file_ext": ".pdf",
+    "parser_mode": "base_only",
+    "base_parser": "legacy",
+    "enhanced_parser": "",
+    "route_family": "pdf",
+    "controlled_skip": false,
+    "controlled_skip_reason": "",
+    "legacy_paper_id": "25a2f7c35e67",
+    "legacy_source_path": "/tmp/tmp285z9iyx/input/024-ChatGPT-Game-Jam-Unleashing-the-Power-of-Large-Language.pdf",
+    "parser_fallback": false,
+    "parser_fallback_stage": "",
+    "parser_fallback_reason": "",
+    "marker_attempt_duration_sec": 0.0,
+    "marker_stage_timings": {},
+    "structure_parse_status": "unavailable",
+    "structure_parse_reason": "marker_disabled_or_legacy_parser",
+    "section_count": 0,
+    "indexed_section_count": 0,
+    "title_layer": "metadata",
+    "title_decision_trace": [
+      {
+        "layer": "marker_h1",
+        "status": "missing",
+        "reason": "no_candidates"
+      },
+      {
+        "layer": "marker_h2",
+        "status": "missing",
+        "reason": "no_candidates"
+      },
+      {
+        "layer": "marker_markdown_first_line",
+        "status": "missing",
+        "reason": "no_candidates"
+      },
+      {
+        "layer": "marker",
+        "status": "missing",
+        "reason": "no_candidates"
+      },
+      {
+        "layer": "metadata",
+        "status": "accepted",
+        "reason": "selected"
+      }
+    ],
+    "structured_title_candidates": [],
+    "structured_title_candidate_counts": {},
+    "markdown_available": false,
+    "markdown_consumption_status": "missing",
+    "block_semantics_available": false,
+    "block_semantics_preserved": false,
+    "block_types": []
   }
 },
 {
   "paper_id": "pdf_a052cec01e71",
-  "title": "ChatPCG: Large Language Model-Driven Reward Design for Procedural Content Generation",
-  "path": "/tmp/tmpqtnp9o1x/input/ChatPCG_Large_Language_Model-Driven_Reward_Design_for_Procedural_Content_Generation.pdf",
+  "title": "ChatPCG: Large Language Model-Driven Reward",
+  "path": "/tmp/tmp285z9iyx/input/023-ChatPCG_Large_Language_Model-Driven_Reward_Design_for_Procedural_Content_Generation.pdf",
   "source_type": "pdf",
   "source_uri": "pdf://sha1/a052cec01e71f5e06340b1eb894a853602f12288",
-  "imported_at": "2026-02-28T09:21:32+00:00",
+  "parser_engine": "legacy",
+  "title_source": "metadata",
+  "title_confidence": 0.85,
+  "imported_at": "2026-03-30T20:21:27+00:00",
   "status": "active",
   "fingerprint": "a052cec01e71f5e06340b1eb894a853602f12288",
   "ingest_metadata": {
-    "file_name": "ChatPCG_Large_Language_Model-Driven_Reward_Design_for_Procedural_Content_Generation.pdf",
-    "legacy_paper_id": "415e17f6a343",
-    "legacy_source_path": "/tmp/tmpqtnp9o1x/input/ChatPCG_Large_Language_Model-Driven_Reward_Design_for_Procedural_Content_Generation.pdf"
+    "file_name": "023-ChatPCG_Large_Language_Model-Driven_Reward_Design_for_Procedural_Content_Generation.pdf",
+    "file_ext": ".pdf",
+    "parser_mode": "base_only",
+    "base_parser": "legacy",
+    "enhanced_parser": "",
+    "route_family": "pdf",
+    "controlled_skip": false,
+    "controlled_skip_reason": "",
+    "legacy_paper_id": "5c5ab11e01a3",
+    "legacy_source_path": "/tmp/tmp285z9iyx/input/023-ChatPCG_Large_Language_Model-Driven_Reward_Design_for_Procedural_Content_Generation.pdf",
+    "parser_fallback": false,
+    "parser_fallback_stage": "",
+    "parser_fallback_reason": "",
+    "marker_attempt_duration_sec": 0.0,
+    "marker_stage_timings": {},
+    "structure_parse_status": "unavailable",
+    "structure_parse_reason": "marker_disabled_or_legacy_parser",
+    "section_count": 0,
+    "indexed_section_count": 0,
+    "title_layer": "metadata",
+    "title_decision_trace": [
+      {
+        "layer": "marker_h1",
+        "status": "missing",
+        "reason": "no_candidates"
+      },
+      {
+        "layer": "marker_h2",
+        "status": "missing",
+        "reason": "no_candidates"
+      },
+      {
+        "layer": "marker_markdown_first_line",
+        "status": "missing",
+        "reason": "no_candidates"
+      },
+      {
+        "layer": "marker",
+        "status": "missing",
+        "reason": "no_candidates"
+      },
+      {
+        "layer": "metadata",
+        "status": "accepted",
+        "reason": "selected"
+      }
+    ],
+    "structured_title_candidates": [],
+    "structured_title_candidate_counts": {},
+    "markdown_available": false,
+    "markdown_consumption_status": "missing",
+    "block_semantics_available": false,
+    "block_semantics_preserved": false,
+    "block_types": []
   }
 },
 {
   "paper_id": "pdf_74b1d1b88d0e",
-  "title": "Consistent Game Content Creation via Function Calling for Large Language Models",
-  "path": "/tmp/tmpqtnp9o1x/input/Consistent_Game_Content_Creation_via_Function_Calling_for_Large_Language_Models.pdf",
+  "title": "Consistent Game Content Creation via",
+  "path": "/tmp/tmp285z9iyx/input/021-Consistent_Game_Content_Creation_via_Function_Calling_for_Large_Language_Models.pdf",
   "source_type": "pdf",
   "source_uri": "pdf://sha1/74b1d1b88d0eeb7ccd2ee1884c05b1db75469f09",
-  "imported_at": "2026-02-28T09:21:32+00:00",
+  "parser_engine": "legacy",
+  "title_source": "metadata",
+  "title_confidence": 0.85,
+  "imported_at": "2026-03-30T20:21:27+00:00",
   "status": "active",
   "fingerprint": "74b1d1b88d0eeb7ccd2ee1884c05b1db75469f09",
   "ingest_metadata": {
-    "file_name": "Consistent_Game_Content_Creation_via_Function_Calling_for_Large_Language_Models.pdf",
-    "legacy_paper_id": "94f4f54eae41",
-    "legacy_source_path": "/tmp/tmpqtnp9o1x/input/Consistent_Game_Content_Creation_via_Function_Calling_for_Large_Language_Models.pdf"
+    "file_name": "021-Consistent_Game_Content_Creation_via_Function_Calling_for_Large_Language_Models.pdf",
+    "file_ext": ".pdf",
+    "parser_mode": "base_only",
+    "base_parser": "legacy",
+    "enhanced_parser": "",
+    "route_family": "pdf",
+    "controlled_skip": false,
+    "controlled_skip_reason": "",
+    "legacy_paper_id": "c3e94b2f9bf9",
+    "legacy_source_path": "/tmp/tmp285z9iyx/input/021-Consistent_Game_Content_Creation_via_Function_Calling_for_Large_Language_Models.pdf",
+    "parser_fallback": false,
+    "parser_fallback_stage": "",
+    "parser_fallback_reason": "",
+    "marker_attempt_duration_sec": 0.0,
+    "marker_stage_timings": {},
+    "structure_parse_status": "unavailable",
+    "structure_parse_reason": "marker_disabled_or_legacy_parser",
+    "section_count": 0,
+    "indexed_section_count": 0,
+    "title_layer": "metadata",
+    "title_decision_trace": [
+      {
+        "layer": "marker_h1",
+        "status": "missing",
+        "reason": "no_candidates"
+      },
+      {
+        "layer": "marker_h2",
+        "status": "missing",
+        "reason": "no_candidates"
+      },
+      {
+        "layer": "marker_markdown_first_line",
+        "status": "missing",
+        "reason": "no_candidates"
+      },
+      {
+        "layer": "marker",
+        "status": "missing",
+        "reason": "no_candidates"
+      },
+      {
+        "layer": "metadata",
+        "status": "accepted",
+        "reason": "selected"
+      }
+    ],
+    "structured_title_candidates": [],
+    "structured_title_candidate_counts": {},
+    "markdown_available": false,
+    "markdown_consumption_status": "missing",
+    "block_semantics_available": false,
+    "block_semantics_preserved": false,
+    "block_types": []
   }
 },
 {
   "paper_id": "pdf_ced9000a9dcc",
-  "title": "Demo Paper: A Game Agents Battle Driven by Free-Form Text Commands Using Code-Generation LLM and Behavior Branch",
-  "path": "/tmp/tmpqtnp9o1x/input/Demo_Paper_A_Game_Agents_Battle_Driven_by_Free-Form_Text_Commands_Using_Code-Generation_LLM_and_Behavior_Branch.pdf",
+  "title": "Demo Paper: A Game Agents",
+  "path": "/tmp/tmp285z9iyx/input/020-Demo_Paper_A_Game_Agents_Battle_Driven_by_Free-Form_Text_Commands_Using_Code-Generation_LLM_and_Behavior_Branch.pdf",
   "source_type": "pdf",
   "source_uri": "pdf://sha1/ced9000a9dcc007fe26b7660d17f947057046657",
-  "imported_at": "2026-02-28T09:21:32+00:00",
+  "parser_engine": "legacy",
+  "title_source": "metadata",
+  "title_confidence": 0.85,
+  "imported_at": "2026-03-30T20:21:27+00:00",
   "status": "active",
   "fingerprint": "ced9000a9dcc007fe26b7660d17f947057046657",
   "ingest_metadata": {
-    "file_name": "Demo_Paper_A_Game_Agents_Battle_Driven_by_Free-Form_Text_Commands_Using_Code-Generation_LLM_and_Behavior_Branch.pdf",
-    "legacy_paper_id": "eec884ac400b",
-    "legacy_source_path": "/tmp/tmpqtnp9o1x/input/Demo_Paper_A_Game_Agents_Battle_Driven_by_Free-Form_Text_Commands_Using_Code-Generation_LLM_and_Behavior_Branch.pdf"
+    "file_name": "020-Demo_Paper_A_Game_Agents_Battle_Driven_by_Free-Form_Text_Commands_Using_Code-Generation_LLM_and_Behavior_Branch.pdf",
+    "file_ext": ".pdf",
+    "parser_mode": "base_only",
+    "base_parser": "legacy",
+    "enhanced_parser": "",
+    "route_family": "pdf",
+    "controlled_skip": false,
+    "controlled_skip_reason": "",
+    "legacy_paper_id": "392256c22cc9",
+    "legacy_source_path": "/tmp/tmp285z9iyx/input/020-Demo_Paper_A_Game_Agents_Battle_Driven_by_Free-Form_Text_Commands_Using_Code-Generation_LLM_and_Behavior_Branch.pdf",
+    "parser_fallback": false,
+    "parser_fallback_stage": "",
+    "parser_fallback_reason": "",
+    "marker_attempt_duration_sec": 0.0,
+    "marker_stage_timings": {},
+    "structure_parse_status": "unavailable",
+    "structure_parse_reason": "marker_disabled_or_legacy_parser",
+    "section_count": 0,
+    "indexed_section_count": 0,
+    "title_layer": "metadata",
+    "title_decision_trace": [
+      {
+        "layer": "marker_h1",
+        "status": "missing",
+        "reason": "no_candidates"
+      },
+      {
+        "layer": "marker_h2",
+        "status": "missing",
+        "reason": "no_candidates"
+      },
+      {
+        "layer": "marker_markdown_first_line",
+        "status": "missing",
+        "reason": "no_candidates"
+      },
+      {
+        "layer": "marker",
+        "status": "missing",
+        "reason": "no_candidates"
+      },
+      {
+        "layer": "metadata",
+        "status": "accepted",
+        "reason": "selected"
+      }
+    ],
+    "structured_title_candidates": [],
+    "structured_title_candidate_counts": {},
+    "markdown_available": false,
+    "markdown_consumption_status": "missing",
+    "block_semantics_available": false,
+    "block_semantics_preserved": false,
+    "block_types": []
   }
 },
 {
   "paper_id": "pdf_2868bd7c49f7",
   "title": "Experiential Co-Learning of Software-Developing Agents",
-  "path": "/tmp/tmpqtnp9o1x/input/Communicative Agents for Software Developmentv3.pdf",
+  "path": "/tmp/tmp285z9iyx/input/022-Communicative-Agents-for-Software-Developmentv3.pdf",
   "source_type": "pdf",
   "source_uri": "pdf://sha1/2868bd7c49f78ff3bc4c94ea74647e70e03fa847",
-  "imported_at": "2026-02-28T09:21:32+00:00",
+  "parser_engine": "legacy",
+  "title_source": "fallback_first_line",
+  "title_confidence": 0.85,
+  "imported_at": "2026-03-30T20:21:27+00:00",
   "status": "active",
   "fingerprint": "2868bd7c49f78ff3bc4c94ea74647e70e03fa847",
   "ingest_metadata": {
-    "file_name": "Communicative Agents for Software Developmentv3.pdf",
-    "legacy_paper_id": "1fcac713a5bb",
-    "legacy_source_path": "/tmp/tmpqtnp9o1x/input/Communicative Agents for Software Developmentv3.pdf"
+    "file_name": "022-Communicative-Agents-for-Software-Developmentv3.pdf",
+    "file_ext": ".pdf",
+    "parser_mode": "base_only",
+    "base_parser": "legacy",
+    "enhanced_parser": "",
+    "route_family": "pdf",
+    "controlled_skip": false,
+    "controlled_skip_reason": "",
+    "legacy_paper_id": "7e50b84b67c2",
+    "legacy_source_path": "/tmp/tmp285z9iyx/input/022-Communicative-Agents-for-Software-Developmentv3.pdf",
+    "parser_fallback": false,
+    "parser_fallback_stage": "",
+    "parser_fallback_reason": "",
+    "marker_attempt_duration_sec": 0.0,
+    "marker_stage_timings": {},
+    "structure_parse_status": "unavailable",
+    "structure_parse_reason": "marker_disabled_or_legacy_parser",
+    "section_count": 0,
+    "indexed_section_count": 0,
+    "title_layer": "fallback_first_line",
+    "title_decision_trace": [
+      {
+        "layer": "marker_h1",
+        "status": "missing",
+        "reason": "no_candidates"
+      },
+      {
+        "layer": "marker_h2",
+        "status": "missing",
+        "reason": "no_candidates"
+      },
+      {
+        "layer": "marker_markdown_first_line",
+        "status": "missing",
+        "reason": "no_candidates"
+      },
+      {
+        "layer": "marker",
+        "status": "missing",
+        "reason": "no_candidates"
+      },
+      {
+        "layer": "metadata",
+        "status": "missing",
+        "reason": "no_candidates"
+      },
+      {
+        "layer": "fallback_first_line",
+        "status": "accepted",
+        "reason": "selected"
+      }
+    ],
+    "structured_title_candidates": [],
+    "structured_title_candidate_counts": {},
+    "markdown_available": false,
+    "markdown_consumption_status": "missing",
+    "block_semantics_available": false,
+    "block_semantics_preserved": false,
+    "block_types": []
   }
 },
 {
   "paper_id": "pdf_8ae377c7f0f6",
-  "title": "GPT for Games: A Scoping Review (2020-2023)",
-  "path": "/tmp/tmpqtnp9o1x/input/GPT_for_Games_A_Scoping_Review_2020-2023.pdf",
+  "title": "GPT for Games: A Scoping",
+  "path": "/tmp/tmp285z9iyx/input/015-GPT_for_Games_A_Scoping_Review_2020-2023.pdf",
   "source_type": "pdf",
   "source_uri": "pdf://sha1/8ae377c7f0f66a2ac413fefadc394de5a9ab3572",
-  "imported_at": "2026-02-28T09:21:32+00:00",
+  "parser_engine": "legacy",
+  "title_source": "metadata",
+  "title_confidence": 0.85,
+  "imported_at": "2026-03-30T20:21:27+00:00",
   "status": "active",
   "fingerprint": "8ae377c7f0f66a2ac413fefadc394de5a9ab3572",
   "ingest_metadata": {
-    "file_name": "GPT_for_Games_A_Scoping_Review_2020-2023.pdf",
-    "legacy_paper_id": "61272aaa6fa9",
-    "legacy_source_path": "/tmp/tmpqtnp9o1x/input/GPT_for_Games_A_Scoping_Review_2020-2023.pdf"
+    "file_name": "015-GPT_for_Games_A_Scoping_Review_2020-2023.pdf",
+    "file_ext": ".pdf",
+    "parser_mode": "base_only",
+    "base_parser": "legacy",
+    "enhanced_parser": "",
+    "route_family": "pdf",
+    "controlled_skip": false,
+    "controlled_skip_reason": "",
+    "legacy_paper_id": "92882723791c",
+    "legacy_source_path": "/tmp/tmp285z9iyx/input/015-GPT_for_Games_A_Scoping_Review_2020-2023.pdf",
+    "parser_fallback": false,
+    "parser_fallback_stage": "",
+    "parser_fallback_reason": "",
+    "marker_attempt_duration_sec": 0.0,
+    "marker_stage_timings": {},
+    "structure_parse_status": "unavailable",
+    "structure_parse_reason": "marker_disabled_or_legacy_parser",
+    "section_count": 0,
+    "indexed_section_count": 0,
+    "title_layer": "metadata",
+    "title_decision_trace": [
+      {
+        "layer": "marker_h1",
+        "status": "missing",
+        "reason": "no_candidates"
+      },
+      {
+        "layer": "marker_h2",
+        "status": "missing",
+        "reason": "no_candidates"
+      },
+      {
+        "layer": "marker_markdown_first_line",
+        "status": "missing",
+        "reason": "no_candidates"
+      },
+      {
+        "layer": "marker",
+        "status": "missing",
+        "reason": "no_candidates"
+      },
+      {
+        "layer": "metadata",
+        "status": "accepted",
+        "reason": "selected"
+      }
+    ],
+    "structured_title_candidates": [],
+    "structured_title_candidate_counts": {},
+    "markdown_available": false,
+    "markdown_consumption_status": "missing",
+    "block_semantics_available": false,
+    "block_semantics_preserved": false,
+    "block_types": []
   }
 },
 {
   "paper_id": "pdf_6a4d60b2b1c7",
   "title": "Game Development as Human-LLM Interaction",
-  "path": "/tmp/tmpqtnp9o1x/input/Game Development as Human-LLM Interaction.pdf",
+  "path": "/tmp/tmp285z9iyx/input/019-Game-Development-as-Human-LLM-Interaction.pdf",
   "source_type": "pdf",
   "source_uri": "pdf://sha1/6a4d60b2b1c7111e45a03b28a4c3030dd5542ac9",
-  "imported_at": "2026-02-28T09:21:32+00:00",
+  "parser_engine": "legacy",
+  "title_source": "fallback_first_line",
+  "title_confidence": 0.85,
+  "imported_at": "2026-03-30T20:21:27+00:00",
   "status": "active",
   "fingerprint": "6a4d60b2b1c7111e45a03b28a4c3030dd5542ac9",
   "ingest_metadata": {
-    "file_name": "Game Development as Human-LLM Interaction.pdf",
-    "legacy_paper_id": "ca531bb488d0",
-    "legacy_source_path": "/tmp/tmpqtnp9o1x/input/Game Development as Human-LLM Interaction.pdf"
+    "file_name": "019-Game-Development-as-Human-LLM-Interaction.pdf",
+    "file_ext": ".pdf",
+    "parser_mode": "base_only",
+    "base_parser": "legacy",
+    "enhanced_parser": "",
+    "route_family": "pdf",
+    "controlled_skip": false,
+    "controlled_skip_reason": "",
+    "legacy_paper_id": "3dc7752b90e4",
+    "legacy_source_path": "/tmp/tmp285z9iyx/input/019-Game-Development-as-Human-LLM-Interaction.pdf",
+    "parser_fallback": false,
+    "parser_fallback_stage": "",
+    "parser_fallback_reason": "",
+    "marker_attempt_duration_sec": 0.0,
+    "marker_stage_timings": {},
+    "structure_parse_status": "unavailable",
+    "structure_parse_reason": "marker_disabled_or_legacy_parser",
+    "section_count": 0,
+    "indexed_section_count": 0,
+    "title_layer": "fallback_first_line",
+    "title_decision_trace": [
+      {
+        "layer": "marker_h1",
+        "status": "missing",
+        "reason": "no_candidates"
+      },
+      {
+        "layer": "marker_h2",
+        "status": "missing",
+        "reason": "no_candidates"
+      },
+      {
+        "layer": "marker_markdown_first_line",
+        "status": "missing",
+        "reason": "no_candidates"
+      },
+      {
+        "layer": "marker",
+        "status": "missing",
+        "reason": "no_candidates"
+      },
+      {
+        "layer": "metadata",
+        "status": "missing",
+        "reason": "no_candidates"
+      },
+      {
+        "layer": "fallback_first_line",
+        "status": "accepted",
+        "reason": "selected"
+      }
+    ],
+    "structured_title_candidates": [],
+    "structured_title_candidate_counts": {},
+    "markdown_available": false,
+    "markdown_consumption_status": "missing",
+    "block_semantics_available": false,
+    "block_semantics_preserved": false,
+    "block_types": []
   }
 },
 {
   "paper_id": "pdf_4c0b9e0a5fce",
-  "title": "Game Generation via Large Language Models",
-  "path": "/tmp/tmpqtnp9o1x/input/Game_Generation_via_Large_Language_Models.pdf",
+  "title": "Game Generation via Large Language",
+  "path": "/tmp/tmp285z9iyx/input/018-Game_Generation_via_Large_Language_Models.pdf",
   "source_type": "pdf",
   "source_uri": "pdf://sha1/4c0b9e0a5fced8547556b2e2983ce6bb409ecca5",
-  "imported_at": "2026-02-28T09:21:32+00:00",
+  "parser_engine": "legacy",
+  "title_source": "metadata",
+  "title_confidence": 0.85,
+  "imported_at": "2026-03-30T20:21:27+00:00",
   "status": "active",
   "fingerprint": "4c0b9e0a5fced8547556b2e2983ce6bb409ecca5",
   "ingest_metadata": {
-    "file_name": "Game_Generation_via_Large_Language_Models.pdf",
-    "legacy_paper_id": "8035f8f2f267",
-    "legacy_source_path": "/tmp/tmpqtnp9o1x/input/Game_Generation_via_Large_Language_Models.pdf"
+    "file_name": "018-Game_Generation_via_Large_Language_Models.pdf",
+    "file_ext": ".pdf",
+    "parser_mode": "base_only",
+    "base_parser": "legacy",
+    "enhanced_parser": "",
+    "route_family": "pdf",
+    "controlled_skip": false,
+    "controlled_skip_reason": "",
+    "legacy_paper_id": "18ea7d986f73",
+    "legacy_source_path": "/tmp/tmp285z9iyx/input/018-Game_Generation_via_Large_Language_Models.pdf",
+    "parser_fallback": false,
+    "parser_fallback_stage": "",
+    "parser_fallback_reason": "",
+    "marker_attempt_duration_sec": 0.0,
+    "marker_stage_timings": {},
+    "structure_parse_status": "unavailable",
+    "structure_parse_reason": "marker_disabled_or_legacy_parser",
+    "section_count": 0,
+    "indexed_section_count": 0,
+    "title_layer": "metadata",
+    "title_decision_trace": [
+      {
+        "layer": "marker_h1",
+        "status": "missing",
+        "reason": "no_candidates"
+      },
+      {
+        "layer": "marker_h2",
+        "status": "missing",
+        "reason": "no_candidates"
+      },
+      {
+        "layer": "marker_markdown_first_line",
+        "status": "missing",
+        "reason": "no_candidates"
+      },
+      {
+        "layer": "marker",
+        "status": "missing",
+        "reason": "no_candidates"
+      },
+      {
+        "layer": "metadata",
+        "status": "accepted",
+        "reason": "selected"
+      }
+    ],
+    "structured_title_candidates": [],
+    "structured_title_candidate_counts": {},
+    "markdown_available": false,
+    "markdown_consumption_status": "missing",
+    "block_semantics_available": false,
+    "block_semantics_preserved": false,
+    "block_types": []
   }
 },
 {
   "paper_id": "pdf_6f9c30bee8ad",
   "title": "GameOn 2016 D King",
-  "path": "/tmp/tmpqtnp9o1x/input/AN INVESTIGATION OF TWO REAL TIME MACHINE LEARNING .PDF",
+  "path": "/tmp/tmp285z9iyx/input/029-AN-INVESTIGATION-OF-TWO-REAL-TIME-MACHINE-LEARNING-.PDF",
   "source_type": "pdf",
   "source_uri": "pdf://sha1/6f9c30bee8ad8f534412039ecb9a70711e1857d3",
-  "imported_at": "2026-02-28T09:21:32+00:00",
+  "parser_engine": "legacy",
+  "title_source": "metadata",
+  "title_confidence": 0.85,
+  "imported_at": "2026-03-30T20:21:27+00:00",
   "status": "active",
   "fingerprint": "6f9c30bee8ad8f534412039ecb9a70711e1857d3",
   "ingest_metadata": {
-    "file_name": "AN INVESTIGATION OF TWO REAL TIME MACHINE LEARNING .PDF",
-    "legacy_paper_id": "2576bf2e7eb3",
-    "legacy_source_path": "/tmp/tmpqtnp9o1x/input/AN INVESTIGATION OF TWO REAL TIME MACHINE LEARNING .PDF"
+    "file_name": "029-AN-INVESTIGATION-OF-TWO-REAL-TIME-MACHINE-LEARNING-.PDF",
+    "file_ext": ".pdf",
+    "parser_mode": "base_only",
+    "base_parser": "legacy",
+    "enhanced_parser": "",
+    "route_family": "pdf",
+    "controlled_skip": false,
+    "controlled_skip_reason": "",
+    "legacy_paper_id": "65caf3c9a65d",
+    "legacy_source_path": "/tmp/tmp285z9iyx/input/029-AN-INVESTIGATION-OF-TWO-REAL-TIME-MACHINE-LEARNING-.PDF",
+    "parser_fallback": false,
+    "parser_fallback_stage": "",
+    "parser_fallback_reason": "",
+    "marker_attempt_duration_sec": 0.0,
+    "marker_stage_timings": {},
+    "structure_parse_status": "unavailable",
+    "structure_parse_reason": "marker_disabled_or_legacy_parser",
+    "section_count": 0,
+    "indexed_section_count": 0,
+    "title_layer": "metadata",
+    "title_decision_trace": [
+      {
+        "layer": "marker_h1",
+        "status": "missing",
+        "reason": "no_candidates"
+      },
+      {
+        "layer": "marker_h2",
+        "status": "missing",
+        "reason": "no_candidates"
+      },
+      {
+        "layer": "marker_markdown_first_line",
+        "status": "missing",
+        "reason": "no_candidates"
+      },
+      {
+        "layer": "marker",
+        "status": "missing",
+        "reason": "no_candidates"
+      },
+      {
+        "layer": "metadata",
+        "status": "accepted",
+        "reason": "selected"
+      }
+    ],
+    "structured_title_candidates": [],
+    "structured_title_candidate_counts": {},
+    "markdown_available": false,
+    "markdown_consumption_status": "missing",
+    "block_semantics_available": false,
+    "block_semantics_preserved": false,
+    "block_types": []
   }
 },
 {
   "paper_id": "pdf_3ec2c2985747",
-  "title": "Generative Agents: Interactive Simulacra of Human Behavior",
-  "path": "/tmp/tmpqtnp9o1x/input/Generative Agents Interactive Simulacra of Human Behavior.pdf",
+  "title": "Generative Agents: Interactive Simulacra of",
+  "path": "/tmp/tmp285z9iyx/input/017-Generative-Agents-Interactive-Simulacra-of-Human-Behavior.pdf",
   "source_type": "pdf",
   "source_uri": "pdf://sha1/3ec2c2985747aa9023c98e8b1026351d8f8b15dd",
-  "imported_at": "2026-02-28T09:21:32+00:00",
+  "parser_engine": "legacy",
+  "title_source": "metadata",
+  "title_confidence": 0.85,
+  "imported_at": "2026-03-30T20:21:27+00:00",
   "status": "active",
   "fingerprint": "3ec2c2985747aa9023c98e8b1026351d8f8b15dd",
   "ingest_metadata": {
-    "file_name": "Generative Agents Interactive Simulacra of Human Behavior.pdf",
-    "legacy_paper_id": "6a7f2d73d542",
-    "legacy_source_path": "/tmp/tmpqtnp9o1x/input/Generative Agents Interactive Simulacra of Human Behavior.pdf"
+    "file_name": "017-Generative-Agents-Interactive-Simulacra-of-Human-Behavior.pdf",
+    "file_ext": ".pdf",
+    "parser_mode": "base_only",
+    "base_parser": "legacy",
+    "enhanced_parser": "",
+    "route_family": "pdf",
+    "controlled_skip": false,
+    "controlled_skip_reason": "",
+    "legacy_paper_id": "508d412006ba",
+    "legacy_source_path": "/tmp/tmp285z9iyx/input/017-Generative-Agents-Interactive-Simulacra-of-Human-Behavior.pdf",
+    "parser_fallback": false,
+    "parser_fallback_stage": "",
+    "parser_fallback_reason": "",
+    "marker_attempt_duration_sec": 0.0,
+    "marker_stage_timings": {},
+    "structure_parse_status": "unavailable",
+    "structure_parse_reason": "marker_disabled_or_legacy_parser",
+    "section_count": 0,
+    "indexed_section_count": 0,
+    "title_layer": "metadata",
+    "title_decision_trace": [
+      {
+        "layer": "marker_h1",
+        "status": "missing",
+        "reason": "no_candidates"
+      },
+      {
+        "layer": "marker_h2",
+        "status": "missing",
+        "reason": "no_candidates"
+      },
+      {
+        "layer": "marker_markdown_first_line",
+        "status": "missing",
+        "reason": "no_candidates"
+      },
+      {
+        "layer": "marker",
+        "status": "missing",
+        "reason": "no_candidates"
+      },
+      {
+        "layer": "metadata",
+        "status": "accepted",
+        "reason": "selected"
+      }
+    ],
+    "structured_title_candidates": [],
+    "structured_title_candidate_counts": {},
+    "markdown_available": false,
+    "markdown_consumption_status": "missing",
+    "block_semantics_available": false,
+    "block_semantics_preserved": false,
+    "block_types": []
   }
 },
 {
   "paper_id": "pdf_f5a28b0ba8a2",
-  "title": "Imitation Game for Adversarial Disillusion with",
-  "path": "/tmp/tmpqtnp9o1x/input/Imitation Game for Adversarial Disillusion with.PDF",
+  "title": "Imitation Game for Adversarial Disillusion",
+  "path": "/tmp/tmp285z9iyx/input/013-Imitation-Game-for-Adversarial-Disillusion-with.PDF",
   "source_type": "pdf",
   "source_uri": "pdf://sha1/f5a28b0ba8a2c49f7bf186f93ccb45d4b3e7f86a",
-  "imported_at": "2026-02-28T09:21:32+00:00",
+  "parser_engine": "legacy",
+  "title_source": "fallback_first_line",
+  "title_confidence": 0.85,
+  "imported_at": "2026-03-30T20:21:27+00:00",
   "status": "active",
   "fingerprint": "f5a28b0ba8a2c49f7bf186f93ccb45d4b3e7f86a",
   "ingest_metadata": {
-    "file_name": "Imitation Game for Adversarial Disillusion with.PDF",
-    "legacy_paper_id": "99f33303d554",
-    "legacy_source_path": "/tmp/tmpqtnp9o1x/input/Imitation Game for Adversarial Disillusion with.PDF"
+    "file_name": "013-Imitation-Game-for-Adversarial-Disillusion-with.PDF",
+    "file_ext": ".pdf",
+    "parser_mode": "base_only",
+    "base_parser": "legacy",
+    "enhanced_parser": "",
+    "route_family": "pdf",
+    "controlled_skip": false,
+    "controlled_skip_reason": "",
+    "legacy_paper_id": "9cd91684ef6f",
+    "legacy_source_path": "/tmp/tmp285z9iyx/input/013-Imitation-Game-for-Adversarial-Disillusion-with.PDF",
+    "parser_fallback": false,
+    "parser_fallback_stage": "",
+    "parser_fallback_reason": "",
+    "marker_attempt_duration_sec": 0.0,
+    "marker_stage_timings": {},
+    "structure_parse_status": "unavailable",
+    "structure_parse_reason": "marker_disabled_or_legacy_parser",
+    "section_count": 0,
+    "indexed_section_count": 0,
+    "title_layer": "fallback_first_line",
+    "title_decision_trace": [
+      {
+        "layer": "marker_h1",
+        "status": "missing",
+        "reason": "no_candidates"
+      },
+      {
+        "layer": "marker_h2",
+        "status": "missing",
+        "reason": "no_candidates"
+      },
+      {
+        "layer": "marker_markdown_first_line",
+        "status": "missing",
+        "reason": "no_candidates"
+      },
+      {
+        "layer": "marker",
+        "status": "missing",
+        "reason": "no_candidates"
+      },
+      {
+        "layer": "metadata",
+        "status": "missing",
+        "reason": "no_candidates"
+      },
+      {
+        "layer": "fallback_first_line",
+        "status": "accepted",
+        "reason": "selected"
+      }
+    ],
+    "structured_title_candidates": [],
+    "structured_title_candidate_counts": {},
+    "markdown_available": false,
+    "markdown_consumption_status": "missing",
+    "block_semantics_available": false,
+    "block_semantics_preserved": false,
+    "block_types": []
   }
 },
 {
   "paper_id": "pdf_d0f6f027794e",
-  "title": "Implementation of Sprouts:",
-  "path": "/tmp/tmpqtnp9o1x/input/Implementation of Sprouts.PDF",
+  "title": "Implementation of Sprouts",
+  "path": "/tmp/tmp285z9iyx/input/012-Implementation-of-Sprouts.PDF",
   "source_type": "pdf",
   "source_uri": "pdf://sha1/d0f6f027794e1914518fcd5409b8da648565f577",
-  "imported_at": "2026-02-28T09:21:32+00:00",
+  "parser_engine": "legacy",
+  "title_source": "fallback_first_line",
+  "title_confidence": 0.7,
+  "imported_at": "2026-03-30T20:21:27+00:00",
   "status": "active",
   "fingerprint": "d0f6f027794e1914518fcd5409b8da648565f577",
   "ingest_metadata": {
-    "file_name": "Implementation of Sprouts.PDF",
-    "legacy_paper_id": "08b4b2ab8bb8",
-    "legacy_source_path": "/tmp/tmpqtnp9o1x/input/Implementation of Sprouts.PDF"
-  }
-},
-{
-  "paper_id": "pdf_e8a7eeb3037f",
-  "title": "JOURNAL OF LATEX CLASS FILES, VOL. 14, NO. 8, AUGUST 2015",
-  "path": "/tmp/tmpqtnp9o1x/input/Goal-Oriented_Interactions_in_Games_Using_LLMs.pdf",
-  "source_type": "pdf",
-  "source_uri": "pdf://sha1/e8a7eeb3037f95ac84634a65e065261b71091d2c",
-  "imported_at": "2026-02-28T09:21:32+00:00",
-  "status": "active",
-  "fingerprint": "e8a7eeb3037f95ac84634a65e065261b71091d2c",
-  "ingest_metadata": {
-    "file_name": "Goal-Oriented_Interactions_in_Games_Using_LLMs.pdf",
-    "legacy_paper_id": "d53bcdeab0d3",
-    "legacy_source_path": "/tmp/tmpqtnp9o1x/input/Goal-Oriented_Interactions_in_Games_Using_LLMs.pdf"
+    "file_name": "012-Implementation-of-Sprouts.PDF",
+    "file_ext": ".pdf",
+    "parser_mode": "base_only",
+    "base_parser": "legacy",
+    "enhanced_parser": "",
+    "route_family": "pdf",
+    "controlled_skip": false,
+    "controlled_skip_reason": "",
+    "legacy_paper_id": "dabda1b034d0",
+    "legacy_source_path": "/tmp/tmp285z9iyx/input/012-Implementation-of-Sprouts.PDF",
+    "parser_fallback": false,
+    "parser_fallback_stage": "",
+    "parser_fallback_reason": "",
+    "marker_attempt_duration_sec": 0.0,
+    "marker_stage_timings": {},
+    "structure_parse_status": "unavailable",
+    "structure_parse_reason": "marker_disabled_or_legacy_parser",
+    "section_count": 0,
+    "indexed_section_count": 0,
+    "title_layer": "fallback_first_line",
+    "title_decision_trace": [
+      {
+        "layer": "marker_h1",
+        "status": "missing",
+        "reason": "no_candidates"
+      },
+      {
+        "layer": "marker_h2",
+        "status": "missing",
+        "reason": "no_candidates"
+      },
+      {
+        "layer": "marker_markdown_first_line",
+        "status": "missing",
+        "reason": "no_candidates"
+      },
+      {
+        "layer": "marker",
+        "status": "missing",
+        "reason": "no_candidates"
+      },
+      {
+        "layer": "metadata",
+        "status": "missing",
+        "reason": "no_candidates"
+      },
+      {
+        "layer": "fallback_first_line",
+        "status": "accepted",
+        "reason": "selected"
+      }
+    ],
+    "structured_title_candidates": [],
+    "structured_title_candidate_counts": {},
+    "markdown_available": false,
+    "markdown_consumption_status": "missing",
+    "block_semantics_available": false,
+    "block_semantics_preserved": false,
+    "block_types": []
   }
 },
 {
   "paper_id": "pdf_3fb5e2b2b8e7",
-  "title": "JOURNAL OF LATEX CLASS FILES, VOL. 14, NO. 8, AUGUST 2021",
-  "path": "/tmp/tmpqtnp9o1x/input/RaidEnv Exploring New Challenges in Automated.PDF",
+  "title": "JOURNAL OF LATEX CLASS FILES,",
+  "path": "/tmp/tmp285z9iyx/input/007-RaidEnv-Exploring-New-Challenges-in-Automated.PDF",
   "source_type": "pdf",
   "source_uri": "pdf://sha1/3fb5e2b2b8e73dd13ec8a7133a0baff344704385",
-  "imported_at": "2026-02-28T09:21:32+00:00",
+  "parser_engine": "legacy",
+  "title_source": "fallback_first_line",
+  "title_confidence": 0.65,
+  "imported_at": "2026-03-30T20:21:27+00:00",
   "status": "active",
   "fingerprint": "3fb5e2b2b8e73dd13ec8a7133a0baff344704385",
   "ingest_metadata": {
-    "file_name": "RaidEnv Exploring New Challenges in Automated.PDF",
-    "legacy_paper_id": "c3a01ede6301",
-    "legacy_source_path": "/tmp/tmpqtnp9o1x/input/RaidEnv Exploring New Challenges in Automated.PDF"
+    "file_name": "007-RaidEnv-Exploring-New-Challenges-in-Automated.PDF",
+    "file_ext": ".pdf",
+    "parser_mode": "base_only",
+    "base_parser": "legacy",
+    "enhanced_parser": "",
+    "route_family": "pdf",
+    "controlled_skip": false,
+    "controlled_skip_reason": "",
+    "legacy_paper_id": "122a594f6726",
+    "legacy_source_path": "/tmp/tmp285z9iyx/input/007-RaidEnv-Exploring-New-Challenges-in-Automated.PDF",
+    "parser_fallback": false,
+    "parser_fallback_stage": "",
+    "parser_fallback_reason": "",
+    "marker_attempt_duration_sec": 0.0,
+    "marker_stage_timings": {},
+    "structure_parse_status": "unavailable",
+    "structure_parse_reason": "marker_disabled_or_legacy_parser",
+    "section_count": 0,
+    "indexed_section_count": 0,
+    "title_layer": "fallback_first_line",
+    "title_decision_trace": [
+      {
+        "layer": "marker_h1",
+        "status": "missing",
+        "reason": "no_candidates"
+      },
+      {
+        "layer": "marker_h2",
+        "status": "missing",
+        "reason": "no_candidates"
+      },
+      {
+        "layer": "marker_markdown_first_line",
+        "status": "missing",
+        "reason": "no_candidates"
+      },
+      {
+        "layer": "marker",
+        "status": "missing",
+        "reason": "no_candidates"
+      },
+      {
+        "layer": "metadata",
+        "status": "missing",
+        "reason": "no_candidates"
+      },
+      {
+        "layer": "fallback_first_line",
+        "status": "accepted",
+        "reason": "selected"
+      }
+    ],
+    "structured_title_candidates": [],
+    "structured_title_candidate_counts": {},
+    "markdown_available": false,
+    "markdown_consumption_status": "missing",
+    "block_semantics_available": false,
+    "block_semantics_preserved": false,
+    "block_types": []
+  }
+},
+{
+  "paper_id": "pdf_e8a7eeb3037f",
+  "title": "JOURNAL OF LATEX CLASS FILES,",
+  "path": "/tmp/tmp285z9iyx/input/016-Goal-Oriented_Interactions_in_Games_Using_LLMs.pdf",
+  "source_type": "pdf",
+  "source_uri": "pdf://sha1/e8a7eeb3037f95ac84634a65e065261b71091d2c",
+  "parser_engine": "legacy",
+  "title_source": "fallback_first_line",
+  "title_confidence": 0.65,
+  "imported_at": "2026-03-30T20:21:27+00:00",
+  "status": "active",
+  "fingerprint": "e8a7eeb3037f95ac84634a65e065261b71091d2c",
+  "ingest_metadata": {
+    "file_name": "016-Goal-Oriented_Interactions_in_Games_Using_LLMs.pdf",
+    "file_ext": ".pdf",
+    "parser_mode": "base_only",
+    "base_parser": "legacy",
+    "enhanced_parser": "",
+    "route_family": "pdf",
+    "controlled_skip": false,
+    "controlled_skip_reason": "",
+    "legacy_paper_id": "35e1cb82823d",
+    "legacy_source_path": "/tmp/tmp285z9iyx/input/016-Goal-Oriented_Interactions_in_Games_Using_LLMs.pdf",
+    "parser_fallback": false,
+    "parser_fallback_stage": "",
+    "parser_fallback_reason": "",
+    "marker_attempt_duration_sec": 0.0,
+    "marker_stage_timings": {},
+    "structure_parse_status": "unavailable",
+    "structure_parse_reason": "marker_disabled_or_legacy_parser",
+    "section_count": 0,
+    "indexed_section_count": 0,
+    "title_layer": "fallback_first_line",
+    "title_decision_trace": [
+      {
+        "layer": "marker_h1",
+        "status": "missing",
+        "reason": "no_candidates"
+      },
+      {
+        "layer": "marker_h2",
+        "status": "missing",
+        "reason": "no_candidates"
+      },
+      {
+        "layer": "marker_markdown_first_line",
+        "status": "missing",
+        "reason": "no_candidates"
+      },
+      {
+        "layer": "marker",
+        "status": "missing",
+        "reason": "no_candidates"
+      },
+      {
+        "layer": "metadata",
+        "status": "missing",
+        "reason": "no_candidates"
+      },
+      {
+        "layer": "fallback_first_line",
+        "status": "accepted",
+        "reason": "selected"
+      }
+    ],
+    "structured_title_candidates": [],
+    "structured_title_candidate_counts": {},
+    "markdown_available": false,
+    "markdown_consumption_status": "missing",
+    "block_semantics_available": false,
+    "block_semantics_preserved": false,
+    "block_types": []
   }
 },
 {
   "paper_id": "pdf_deaa9846b4d0",
-  "title": "LIGS: Developing an LLM-infused Game System for Emergent Narrative",
-  "path": "/tmp/tmpqtnp9o1x/input/LIGS Developing an LLM-infused Game System for Emergent.pdf",
+  "title": "LIGS: Developing an LLM-infused Game",
+  "path": "/tmp/tmp285z9iyx/input/010-LIGS-Developing-an-LLM-infused-Game-System-for-Emergent.pdf",
   "source_type": "pdf",
   "source_uri": "pdf://sha1/deaa9846b4d02a99d0b4a805448d5fd968f0996e",
-  "imported_at": "2026-02-28T09:21:32+00:00",
+  "parser_engine": "legacy",
+  "title_source": "metadata",
+  "title_confidence": 0.85,
+  "imported_at": "2026-03-30T20:21:27+00:00",
   "status": "active",
   "fingerprint": "deaa9846b4d02a99d0b4a805448d5fd968f0996e",
   "ingest_metadata": {
-    "file_name": "LIGS Developing an LLM-infused Game System for Emergent.pdf",
-    "legacy_paper_id": "11bfac26a346",
-    "legacy_source_path": "/tmp/tmpqtnp9o1x/input/LIGS Developing an LLM-infused Game System for Emergent.pdf"
+    "file_name": "010-LIGS-Developing-an-LLM-infused-Game-System-for-Emergent.pdf",
+    "file_ext": ".pdf",
+    "parser_mode": "base_only",
+    "base_parser": "legacy",
+    "enhanced_parser": "",
+    "route_family": "pdf",
+    "controlled_skip": false,
+    "controlled_skip_reason": "",
+    "legacy_paper_id": "72240da0f86f",
+    "legacy_source_path": "/tmp/tmp285z9iyx/input/010-LIGS-Developing-an-LLM-infused-Game-System-for-Emergent.pdf",
+    "parser_fallback": false,
+    "parser_fallback_stage": "",
+    "parser_fallback_reason": "",
+    "marker_attempt_duration_sec": 0.0,
+    "marker_stage_timings": {},
+    "structure_parse_status": "unavailable",
+    "structure_parse_reason": "marker_disabled_or_legacy_parser",
+    "section_count": 0,
+    "indexed_section_count": 0,
+    "title_layer": "metadata",
+    "title_decision_trace": [
+      {
+        "layer": "marker_h1",
+        "status": "missing",
+        "reason": "no_candidates"
+      },
+      {
+        "layer": "marker_h2",
+        "status": "missing",
+        "reason": "no_candidates"
+      },
+      {
+        "layer": "marker_markdown_first_line",
+        "status": "missing",
+        "reason": "no_candidates"
+      },
+      {
+        "layer": "marker",
+        "status": "missing",
+        "reason": "no_candidates"
+      },
+      {
+        "layer": "metadata",
+        "status": "accepted",
+        "reason": "selected"
+      }
+    ],
+    "structured_title_candidates": [],
+    "structured_title_candidate_counts": {},
+    "markdown_available": false,
+    "markdown_consumption_status": "missing",
+    "block_semantics_available": false,
+    "block_semantics_preserved": false,
+    "block_types": []
   }
 },
 {
   "paper_id": "pdf_0ec6a8b26149",
-  "title": "Learning Visuomotor Policies for Aerial Navigation",
-  "path": "/tmp/tmpqtnp9o1x/input/Learning Visuomotor Policies for Aerial Navigation Using Cross-Modal Representations.pdf",
+  "title": "Learning Visuomotor Policies for Aerial",
+  "path": "/tmp/tmp285z9iyx/input/011-Learning-Visuomotor-Policies-for-Aerial-Navigation-Using-Cross-Modal-Representations.pdf",
   "source_type": "pdf",
   "source_uri": "pdf://sha1/0ec6a8b26149150edff10ca640d44d47bfa4f918",
-  "imported_at": "2026-02-28T09:21:32+00:00",
+  "parser_engine": "legacy",
+  "title_source": "fallback_first_line",
+  "title_confidence": 0.85,
+  "imported_at": "2026-03-30T20:21:27+00:00",
   "status": "active",
   "fingerprint": "0ec6a8b26149150edff10ca640d44d47bfa4f918",
   "ingest_metadata": {
-    "file_name": "Learning Visuomotor Policies for Aerial Navigation Using Cross-Modal Representations.pdf",
-    "legacy_paper_id": "e634d8985f45",
-    "legacy_source_path": "/tmp/tmpqtnp9o1x/input/Learning Visuomotor Policies for Aerial Navigation Using Cross-Modal Representations.pdf"
+    "file_name": "011-Learning-Visuomotor-Policies-for-Aerial-Navigation-Using-Cross-Modal-Representations.pdf",
+    "file_ext": ".pdf",
+    "parser_mode": "base_only",
+    "base_parser": "legacy",
+    "enhanced_parser": "",
+    "route_family": "pdf",
+    "controlled_skip": false,
+    "controlled_skip_reason": "",
+    "legacy_paper_id": "d45a731723be",
+    "legacy_source_path": "/tmp/tmp285z9iyx/input/011-Learning-Visuomotor-Policies-for-Aerial-Navigation-Using-Cross-Modal-Representations.pdf",
+    "parser_fallback": false,
+    "parser_fallback_stage": "",
+    "parser_fallback_reason": "",
+    "marker_attempt_duration_sec": 0.0,
+    "marker_stage_timings": {},
+    "structure_parse_status": "unavailable",
+    "structure_parse_reason": "marker_disabled_or_legacy_parser",
+    "section_count": 0,
+    "indexed_section_count": 0,
+    "title_layer": "fallback_first_line",
+    "title_decision_trace": [
+      {
+        "layer": "marker_h1",
+        "status": "missing",
+        "reason": "no_candidates"
+      },
+      {
+        "layer": "marker_h2",
+        "status": "missing",
+        "reason": "no_candidates"
+      },
+      {
+        "layer": "marker_markdown_first_line",
+        "status": "missing",
+        "reason": "no_candidates"
+      },
+      {
+        "layer": "marker",
+        "status": "missing",
+        "reason": "no_candidates"
+      },
+      {
+        "layer": "metadata",
+        "status": "missing",
+        "reason": "no_candidates"
+      },
+      {
+        "layer": "fallback_first_line",
+        "status": "accepted",
+        "reason": "selected"
+      }
+    ],
+    "structured_title_candidates": [],
+    "structured_title_candidate_counts": {},
+    "markdown_available": false,
+    "markdown_consumption_status": "missing",
+    "block_semantics_available": false,
+    "block_semantics_preserved": false,
+    "block_types": []
   }
 },
 {
   "paper_id": "pdf_aa16122e3643",
   "title": "Microsoft Word - 14802742024140917Draft06CameraReady.docx",
-  "path": "/tmp/tmpqtnp9o1x/input/Balancing_Game_Satisfaction_and_Resource_Efficiency_LLM_and_Pursuit_Learning_Automata_for_NPC_Dialogues.pdf",
+  "path": "/tmp/tmp285z9iyx/input/025-Balancing_Game_Satisfaction_and_Resource_Efficiency_LLM_and_Pursuit_Learning_Automata_for_NPC_Dialogues.pdf",
   "source_type": "pdf",
   "source_uri": "pdf://sha1/aa16122e3643b7d861b61615f8dda546e261ffb6",
-  "imported_at": "2026-02-28T09:21:32+00:00",
+  "parser_engine": "legacy",
+  "title_source": "metadata",
+  "title_confidence": 0.85,
+  "imported_at": "2026-03-30T20:21:27+00:00",
   "status": "active",
   "fingerprint": "aa16122e3643b7d861b61615f8dda546e261ffb6",
   "ingest_metadata": {
-    "file_name": "Balancing_Game_Satisfaction_and_Resource_Efficiency_LLM_and_Pursuit_Learning_Automata_for_NPC_Dialogues.pdf",
-    "legacy_paper_id": "4bcaeb31cf32",
-    "legacy_source_path": "/tmp/tmpqtnp9o1x/input/Balancing_Game_Satisfaction_and_Resource_Efficiency_LLM_and_Pursuit_Learning_Automata_for_NPC_Dialogues.pdf"
-  }
-},
-{
-  "paper_id": "pdf_d788f6ee64aa",
-  "title": "Preprint. Under review.",
-  "path": "/tmp/tmpqtnp9o1x/input/LoRI Reducing Cross-Task Interference in Multi-Task LowRank Adaptation.pdf",
-  "source_type": "pdf",
-  "source_uri": "pdf://sha1/d788f6ee64aa50c06c045e162529aaedce528692",
-  "imported_at": "2026-02-28T09:21:32+00:00",
-  "status": "active",
-  "fingerprint": "d788f6ee64aa50c06c045e162529aaedce528692",
-  "ingest_metadata": {
-    "file_name": "LoRI Reducing Cross-Task Interference in Multi-Task LowRank Adaptation.pdf",
-    "legacy_paper_id": "a7234f6289e5",
-    "legacy_source_path": "/tmp/tmpqtnp9o1x/input/LoRI Reducing Cross-Task Interference in Multi-Task LowRank Adaptation.pdf"
-  }
-},
-{
-  "paper_id": "pdf_a639448e61be",
-  "title": "Provided proper attribution is provided, Google hereby grants permission to",
-  "path": "/tmp/tmpqtnp9o1x/input/Attention Is All You Need.pdf",
-  "source_type": "pdf",
-  "source_uri": "pdf://sha1/a639448e61be3ab2a6fb696c0e910b0a3e5fd57f",
-  "imported_at": "2026-02-28T09:21:32+00:00",
-  "status": "active",
-  "fingerprint": "a639448e61be3ab2a6fb696c0e910b0a3e5fd57f",
-  "ingest_metadata": {
-    "file_name": "Attention Is All You Need.pdf",
-    "legacy_paper_id": "56c301aea545",
-    "legacy_source_path": "/tmp/tmpqtnp9o1x/input/Attention Is All You Need.pdf"
+    "file_name": "025-Balancing_Game_Satisfaction_and_Resource_Efficiency_LLM_and_Pursuit_Learning_Automata_for_NPC_Dialogues.pdf",
+    "file_ext": ".pdf",
+    "parser_mode": "base_only",
+    "base_parser": "legacy",
+    "enhanced_parser": "",
+    "route_family": "pdf",
+    "controlled_skip": false,
+    "controlled_skip_reason": "",
+    "legacy_paper_id": "7438e0f9c886",
+    "legacy_source_path": "/tmp/tmp285z9iyx/input/025-Balancing_Game_Satisfaction_and_Resource_Efficiency_LLM_and_Pursuit_Learning_Automata_for_NPC_Dialogues.pdf",
+    "parser_fallback": false,
+    "parser_fallback_stage": "",
+    "parser_fallback_reason": "",
+    "marker_attempt_duration_sec": 0.0,
+    "marker_stage_timings": {},
+    "structure_parse_status": "unavailable",
+    "structure_parse_reason": "marker_disabled_or_legacy_parser",
+    "section_count": 0,
+    "indexed_section_count": 0,
+    "title_layer": "metadata",
+    "title_decision_trace": [
+      {
+        "layer": "marker_h1",
+        "status": "missing",
+        "reason": "no_candidates"
+      },
+      {
+        "layer": "marker_h2",
+        "status": "missing",
+        "reason": "no_candidates"
+      },
+      {
+        "layer": "marker_markdown_first_line",
+        "status": "missing",
+        "reason": "no_candidates"
+      },
+      {
+        "layer": "marker",
+        "status": "missing",
+        "reason": "no_candidates"
+      },
+      {
+        "layer": "metadata",
+        "status": "accepted",
+        "reason": "selected"
+      }
+    ],
+    "structured_title_candidates": [],
+    "structured_title_candidate_counts": {},
+    "markdown_available": false,
+    "markdown_consumption_status": "missing",
+    "block_semantics_available": false,
+    "block_semantics_preserved": false,
+    "block_types": []
   }
 },
 {
   "paper_id": "pdf_eee3d4941333",
-  "title": "Reinforcement Learning-Based Autonomous Landing of AirSim Simulated Quadcopter in Unreal Engine",
-  "path": "/tmp/tmpqtnp9o1x/input/Reinforcement_Learning-Based_Autonomous_Landing_of_AirSim_Simulated_Quadcopter_in_Unreal_Engine.pdf",
+  "title": "Reinforcement Learning-Based Autonomous Landing of",
+  "path": "/tmp/tmp285z9iyx/input/006-Reinforcement_Learning-Based_Autonomous_Landing_of_AirSim_Simulated_Quadcopter_in_Unreal_Engine.pdf",
   "source_type": "pdf",
   "source_uri": "pdf://sha1/eee3d4941333bd3f52898d49634db8beffece239",
-  "imported_at": "2026-02-28T09:21:32+00:00",
+  "parser_engine": "legacy",
+  "title_source": "metadata",
+  "title_confidence": 0.85,
+  "imported_at": "2026-03-30T20:21:27+00:00",
   "status": "active",
   "fingerprint": "eee3d4941333bd3f52898d49634db8beffece239",
   "ingest_metadata": {
-    "file_name": "Reinforcement_Learning-Based_Autonomous_Landing_of_AirSim_Simulated_Quadcopter_in_Unreal_Engine.pdf",
-    "legacy_paper_id": "3d467c28bfa6",
-    "legacy_source_path": "/tmp/tmpqtnp9o1x/input/Reinforcement_Learning-Based_Autonomous_Landing_of_AirSim_Simulated_Quadcopter_in_Unreal_Engine.pdf"
+    "file_name": "006-Reinforcement_Learning-Based_Autonomous_Landing_of_AirSim_Simulated_Quadcopter_in_Unreal_Engine.pdf",
+    "file_ext": ".pdf",
+    "parser_mode": "base_only",
+    "base_parser": "legacy",
+    "enhanced_parser": "",
+    "route_family": "pdf",
+    "controlled_skip": false,
+    "controlled_skip_reason": "",
+    "legacy_paper_id": "d2ed4de82bb0",
+    "legacy_source_path": "/tmp/tmp285z9iyx/input/006-Reinforcement_Learning-Based_Autonomous_Landing_of_AirSim_Simulated_Quadcopter_in_Unreal_Engine.pdf",
+    "parser_fallback": false,
+    "parser_fallback_stage": "",
+    "parser_fallback_reason": "",
+    "marker_attempt_duration_sec": 0.0,
+    "marker_stage_timings": {},
+    "structure_parse_status": "unavailable",
+    "structure_parse_reason": "marker_disabled_or_legacy_parser",
+    "section_count": 0,
+    "indexed_section_count": 0,
+    "title_layer": "metadata",
+    "title_decision_trace": [
+      {
+        "layer": "marker_h1",
+        "status": "missing",
+        "reason": "no_candidates"
+      },
+      {
+        "layer": "marker_h2",
+        "status": "missing",
+        "reason": "no_candidates"
+      },
+      {
+        "layer": "marker_markdown_first_line",
+        "status": "missing",
+        "reason": "no_candidates"
+      },
+      {
+        "layer": "marker",
+        "status": "missing",
+        "reason": "no_candidates"
+      },
+      {
+        "layer": "metadata",
+        "status": "accepted",
+        "reason": "selected"
+      }
+    ],
+    "structured_title_candidates": [],
+    "structured_title_candidate_counts": {},
+    "markdown_available": false,
+    "markdown_consumption_status": "missing",
+    "block_semantics_available": false,
+    "block_semantics_preserved": false,
+    "block_types": []
   }
 },
 {
   "paper_id": "pdf_9dd6ad58a36c",
   "title": "Report from Dagstuhl Seminar 19511",
-  "path": "/tmp/tmpqtnp9o1x/input/Artificial and Computational Intelligence in Games Revolutions in Computational Game AI.PDF",
+  "path": "/tmp/tmp285z9iyx/input/027-Artificial-and-Computational-Intelligence-in-Games-Revolutions-in-Computational-Game-AI.PDF",
   "source_type": "pdf",
   "source_uri": "pdf://sha1/9dd6ad58a36c034bd27420a8d773a0ca2deaea58",
-  "imported_at": "2026-02-28T09:21:32+00:00",
+  "parser_engine": "legacy",
+  "title_source": "fallback_first_line",
+  "title_confidence": 0.85,
+  "imported_at": "2026-03-30T20:21:27+00:00",
   "status": "active",
   "fingerprint": "9dd6ad58a36c034bd27420a8d773a0ca2deaea58",
   "ingest_metadata": {
-    "file_name": "Artificial and Computational Intelligence in Games Revolutions in Computational Game AI.PDF",
-    "legacy_paper_id": "db1edcdb1df5",
-    "legacy_source_path": "/tmp/tmpqtnp9o1x/input/Artificial and Computational Intelligence in Games Revolutions in Computational Game AI.PDF"
+    "file_name": "027-Artificial-and-Computational-Intelligence-in-Games-Revolutions-in-Computational-Game-AI.PDF",
+    "file_ext": ".pdf",
+    "parser_mode": "base_only",
+    "base_parser": "legacy",
+    "enhanced_parser": "",
+    "route_family": "pdf",
+    "controlled_skip": false,
+    "controlled_skip_reason": "",
+    "legacy_paper_id": "2d3897a6aa71",
+    "legacy_source_path": "/tmp/tmp285z9iyx/input/027-Artificial-and-Computational-Intelligence-in-Games-Revolutions-in-Computational-Game-AI.PDF",
+    "parser_fallback": false,
+    "parser_fallback_stage": "",
+    "parser_fallback_reason": "",
+    "marker_attempt_duration_sec": 0.0,
+    "marker_stage_timings": {},
+    "structure_parse_status": "unavailable",
+    "structure_parse_reason": "marker_disabled_or_legacy_parser",
+    "section_count": 0,
+    "indexed_section_count": 0,
+    "title_layer": "fallback_first_line",
+    "title_decision_trace": [
+      {
+        "layer": "marker_h1",
+        "status": "missing",
+        "reason": "no_candidates"
+      },
+      {
+        "layer": "marker_h2",
+        "status": "missing",
+        "reason": "no_candidates"
+      },
+      {
+        "layer": "marker_markdown_first_line",
+        "status": "missing",
+        "reason": "no_candidates"
+      },
+      {
+        "layer": "marker",
+        "status": "missing",
+        "reason": "no_candidates"
+      },
+      {
+        "layer": "metadata",
+        "status": "missing",
+        "reason": "no_candidates"
+      },
+      {
+        "layer": "fallback_first_line",
+        "status": "accepted",
+        "reason": "selected"
+      }
+    ],
+    "structured_title_candidates": [],
+    "structured_title_candidate_counts": {},
+    "markdown_available": false,
+    "markdown_consumption_status": "missing",
+    "block_semantics_available": false,
+    "block_semantics_preserved": false,
+    "block_types": []
   }
 },
 {
   "paper_id": "pdf_4c5a8be99f11",
-  "title": "Research on Artificial Intelligence Algorithm and Its Application in Games",
-  "path": "/tmp/tmpqtnp9o1x/input/Research_on_Artificial_Intelligence_Algorithm_and_Its_Application_in_Games.pdf",
+  "title": "Research on Artificial Intelligence Algorithm",
+  "path": "/tmp/tmp285z9iyx/input/005-Research_on_Artificial_Intelligence_Algorithm_and_Its_Application_in_Games.pdf",
   "source_type": "pdf",
   "source_uri": "pdf://sha1/4c5a8be99f11da793e11611ca3170515d5e16193",
-  "imported_at": "2026-02-28T09:21:32+00:00",
+  "parser_engine": "legacy",
+  "title_source": "metadata",
+  "title_confidence": 0.7,
+  "imported_at": "2026-03-30T20:21:27+00:00",
   "status": "active",
   "fingerprint": "4c5a8be99f11da793e11611ca3170515d5e16193",
   "ingest_metadata": {
-    "file_name": "Research_on_Artificial_Intelligence_Algorithm_and_Its_Application_in_Games.pdf",
-    "legacy_paper_id": "045b9754d572",
-    "legacy_source_path": "/tmp/tmpqtnp9o1x/input/Research_on_Artificial_Intelligence_Algorithm_and_Its_Application_in_Games.pdf"
+    "file_name": "005-Research_on_Artificial_Intelligence_Algorithm_and_Its_Application_in_Games.pdf",
+    "file_ext": ".pdf",
+    "parser_mode": "base_only",
+    "base_parser": "legacy",
+    "enhanced_parser": "",
+    "route_family": "pdf",
+    "controlled_skip": false,
+    "controlled_skip_reason": "",
+    "legacy_paper_id": "2224cd4e559d",
+    "legacy_source_path": "/tmp/tmp285z9iyx/input/005-Research_on_Artificial_Intelligence_Algorithm_and_Its_Application_in_Games.pdf",
+    "parser_fallback": false,
+    "parser_fallback_stage": "",
+    "parser_fallback_reason": "",
+    "marker_attempt_duration_sec": 0.0,
+    "marker_stage_timings": {},
+    "structure_parse_status": "unavailable",
+    "structure_parse_reason": "marker_disabled_or_legacy_parser",
+    "section_count": 0,
+    "indexed_section_count": 0,
+    "title_layer": "metadata",
+    "title_decision_trace": [
+      {
+        "layer": "marker_h1",
+        "status": "missing",
+        "reason": "no_candidates"
+      },
+      {
+        "layer": "marker_h2",
+        "status": "missing",
+        "reason": "no_candidates"
+      },
+      {
+        "layer": "marker_markdown_first_line",
+        "status": "missing",
+        "reason": "no_candidates"
+      },
+      {
+        "layer": "marker",
+        "status": "missing",
+        "reason": "no_candidates"
+      },
+      {
+        "layer": "metadata",
+        "status": "accepted",
+        "reason": "selected"
+      }
+    ],
+    "structured_title_candidates": [],
+    "structured_title_candidate_counts": {},
+    "markdown_available": false,
+    "markdown_consumption_status": "missing",
+    "block_semantics_available": false,
+    "block_semantics_preserved": false,
+    "block_types": []
   }
 },
 {
   "paper_id": "pdf_b3a5372699e5",
-  "title": "Role play with large language models",
-  "path": "/tmp/tmpqtnp9o1x/input/Role play with large language models.pdf",
+  "title": "Role play with large language",
+  "path": "/tmp/tmp285z9iyx/input/004-Role-play-with-large-language-models.pdf",
   "source_type": "pdf",
   "source_uri": "pdf://sha1/b3a5372699e51e59f015af8697b14b084b12e070",
-  "imported_at": "2026-02-28T09:21:32+00:00",
+  "parser_engine": "legacy",
+  "title_source": "metadata",
+  "title_confidence": 0.85,
+  "imported_at": "2026-03-30T20:21:27+00:00",
   "status": "active",
   "fingerprint": "b3a5372699e51e59f015af8697b14b084b12e070",
   "ingest_metadata": {
-    "file_name": "Role play with large language models.pdf",
-    "legacy_paper_id": "97dcbe001e98",
-    "legacy_source_path": "/tmp/tmpqtnp9o1x/input/Role play with large language models.pdf"
+    "file_name": "004-Role-play-with-large-language-models.pdf",
+    "file_ext": ".pdf",
+    "parser_mode": "base_only",
+    "base_parser": "legacy",
+    "enhanced_parser": "",
+    "route_family": "pdf",
+    "controlled_skip": false,
+    "controlled_skip_reason": "",
+    "legacy_paper_id": "654a70da0b31",
+    "legacy_source_path": "/tmp/tmp285z9iyx/input/004-Role-play-with-large-language-models.pdf",
+    "parser_fallback": false,
+    "parser_fallback_stage": "",
+    "parser_fallback_reason": "",
+    "marker_attempt_duration_sec": 0.0,
+    "marker_stage_timings": {},
+    "structure_parse_status": "unavailable",
+    "structure_parse_reason": "marker_disabled_or_legacy_parser",
+    "section_count": 0,
+    "indexed_section_count": 0,
+    "title_layer": "metadata",
+    "title_decision_trace": [
+      {
+        "layer": "marker_h1",
+        "status": "missing",
+        "reason": "no_candidates"
+      },
+      {
+        "layer": "marker_h2",
+        "status": "missing",
+        "reason": "no_candidates"
+      },
+      {
+        "layer": "marker_markdown_first_line",
+        "status": "missing",
+        "reason": "no_candidates"
+      },
+      {
+        "layer": "marker",
+        "status": "missing",
+        "reason": "no_candidates"
+      },
+      {
+        "layer": "metadata",
+        "status": "accepted",
+        "reason": "selected"
+      }
+    ],
+    "structured_title_candidates": [],
+    "structured_title_candidate_counts": {},
+    "markdown_available": false,
+    "markdown_consumption_status": "missing",
+    "block_semantics_available": false,
+    "block_semantics_preserved": false,
+    "block_types": []
   }
 },
 {
   "paper_id": "pdf_979dd1640086",
-  "title": "STELLAR: Storage Tuning Engine Leveraging LLM Autonomous Reasoning for High Performance Parallel File Systems",
-  "path": "/tmp/tmpqtnp9o1x/input/2602.23220v1-1772270491464059827.pdf",
+  "title": "STELLAR: Storage Tuning Engine Leveraging",
+  "path": "/tmp/tmp285z9iyx/input/031-2602.23220v1.pdf",
   "source_type": "pdf",
   "source_uri": "pdf://sha1/979dd1640086abe62bcae030a43fea4994623d1e",
-  "imported_at": "2026-02-28T09:21:32+00:00",
+  "parser_engine": "legacy",
+  "title_source": "metadata",
+  "title_confidence": 0.85,
+  "imported_at": "2026-03-30T20:21:27+00:00",
   "status": "active",
   "fingerprint": "979dd1640086abe62bcae030a43fea4994623d1e",
   "ingest_metadata": {
-    "file_name": "2602.23220v1-1772270491464059827.pdf",
-    "legacy_paper_id": "7286f6297a5c",
-    "legacy_source_path": "/tmp/tmpqtnp9o1x/input/2602.23220v1-1772270491464059827.pdf"
+    "file_name": "031-2602.23220v1.pdf",
+    "file_ext": ".pdf",
+    "parser_mode": "base_only",
+    "base_parser": "legacy",
+    "enhanced_parser": "",
+    "route_family": "pdf",
+    "controlled_skip": false,
+    "controlled_skip_reason": "",
+    "legacy_paper_id": "d5a33f5d918a",
+    "legacy_source_path": "/tmp/tmp285z9iyx/input/031-2602.23220v1.pdf",
+    "parser_fallback": false,
+    "parser_fallback_stage": "",
+    "parser_fallback_reason": "",
+    "marker_attempt_duration_sec": 0.0,
+    "marker_stage_timings": {},
+    "structure_parse_status": "unavailable",
+    "structure_parse_reason": "marker_disabled_or_legacy_parser",
+    "section_count": 0,
+    "indexed_section_count": 0,
+    "title_layer": "metadata",
+    "title_decision_trace": [
+      {
+        "layer": "marker_h1",
+        "status": "missing",
+        "reason": "no_candidates"
+      },
+      {
+        "layer": "marker_h2",
+        "status": "missing",
+        "reason": "no_candidates"
+      },
+      {
+        "layer": "marker_markdown_first_line",
+        "status": "missing",
+        "reason": "no_candidates"
+      },
+      {
+        "layer": "marker",
+        "status": "missing",
+        "reason": "no_candidates"
+      },
+      {
+        "layer": "metadata",
+        "status": "accepted",
+        "reason": "selected"
+      }
+    ],
+    "structured_title_candidates": [],
+    "structured_title_candidate_counts": {},
+    "markdown_available": false,
+    "markdown_consumption_status": "missing",
+    "block_semantics_available": false,
+    "block_semantics_preserved": false,
+    "block_types": []
   }
 },
 {
   "paper_id": "pdf_6989b99586c2",
-  "title": "The Effect of LLM-Based NPC Emotional States on Player Emotions: An Analysis of Interactive Game Play",
-  "path": "/tmp/tmpqtnp9o1x/input/The_Effect_of_LLM-Based_NPC_Emotional_States_on_Player_Emotions_An_Analysis_of_Interactive_Game_Play.pdf",
+  "title": "The Effect of LLM-Based NPC",
+  "path": "/tmp/tmp285z9iyx/input/002-The_Effect_of_LLM-Based_NPC_Emotional_States_on_Player_Emotions_An_Analysis_of_Interactive_Game_Play.pdf",
   "source_type": "pdf",
   "source_uri": "pdf://sha1/6989b99586c2d8f8fba79af5940af80510c4f8e9",
-  "imported_at": "2026-02-28T09:21:32+00:00",
+  "parser_engine": "legacy",
+  "title_source": "metadata",
+  "title_confidence": 0.85,
+  "imported_at": "2026-03-30T20:21:27+00:00",
   "status": "active",
   "fingerprint": "6989b99586c2d8f8fba79af5940af80510c4f8e9",
   "ingest_metadata": {
-    "file_name": "The_Effect_of_LLM-Based_NPC_Emotional_States_on_Player_Emotions_An_Analysis_of_Interactive_Game_Play.pdf",
-    "legacy_paper_id": "9d6e20de77f1",
-    "legacy_source_path": "/tmp/tmpqtnp9o1x/input/The_Effect_of_LLM-Based_NPC_Emotional_States_on_Player_Emotions_An_Analysis_of_Interactive_Game_Play.pdf"
+    "file_name": "002-The_Effect_of_LLM-Based_NPC_Emotional_States_on_Player_Emotions_An_Analysis_of_Interactive_Game_Play.pdf",
+    "file_ext": ".pdf",
+    "parser_mode": "base_only",
+    "base_parser": "legacy",
+    "enhanced_parser": "",
+    "route_family": "pdf",
+    "controlled_skip": false,
+    "controlled_skip_reason": "",
+    "legacy_paper_id": "e9ac6b412df5",
+    "legacy_source_path": "/tmp/tmp285z9iyx/input/002-The_Effect_of_LLM-Based_NPC_Emotional_States_on_Player_Emotions_An_Analysis_of_Interactive_Game_Play.pdf",
+    "parser_fallback": false,
+    "parser_fallback_stage": "",
+    "parser_fallback_reason": "",
+    "marker_attempt_duration_sec": 0.0,
+    "marker_stage_timings": {},
+    "structure_parse_status": "unavailable",
+    "structure_parse_reason": "marker_disabled_or_legacy_parser",
+    "section_count": 0,
+    "indexed_section_count": 0,
+    "title_layer": "metadata",
+    "title_decision_trace": [
+      {
+        "layer": "marker_h1",
+        "status": "missing",
+        "reason": "no_candidates"
+      },
+      {
+        "layer": "marker_h2",
+        "status": "missing",
+        "reason": "no_candidates"
+      },
+      {
+        "layer": "marker_markdown_first_line",
+        "status": "missing",
+        "reason": "no_candidates"
+      },
+      {
+        "layer": "marker",
+        "status": "missing",
+        "reason": "no_candidates"
+      },
+      {
+        "layer": "metadata",
+        "status": "accepted",
+        "reason": "selected"
+      }
+    ],
+    "structured_title_candidates": [],
+    "structured_title_candidate_counts": {},
+    "markdown_available": false,
+    "markdown_consumption_status": "missing",
+    "block_semantics_available": false,
+    "block_semantics_preserved": false,
+    "block_types": []
   }
 },
 {
   "paper_id": "pdf_10633ae97479",
   "title": "The N-Tuple Bandit Evolutionary Algorithm",
-  "path": "/tmp/tmpqtnp9o1x/input/The N-Tuple Bandit Evolutionary Algorithm for Automatic Game Improvement.pdf",
+  "path": "/tmp/tmp285z9iyx/input/003-The-N-Tuple-Bandit-Evolutionary-Algorithm-for-Automatic-Game-Improvement.pdf",
   "source_type": "pdf",
   "source_uri": "pdf://sha1/10633ae97479dcd927f4b90148bde32841c7c68a",
-  "imported_at": "2026-02-28T09:21:32+00:00",
+  "parser_engine": "legacy",
+  "title_source": "fallback_first_line",
+  "title_confidence": 0.85,
+  "imported_at": "2026-03-30T20:21:27+00:00",
   "status": "active",
   "fingerprint": "10633ae97479dcd927f4b90148bde32841c7c68a",
   "ingest_metadata": {
-    "file_name": "The N-Tuple Bandit Evolutionary Algorithm for Automatic Game Improvement.pdf",
-    "legacy_paper_id": "f39896d8fb6e",
-    "legacy_source_path": "/tmp/tmpqtnp9o1x/input/The N-Tuple Bandit Evolutionary Algorithm for Automatic Game Improvement.pdf"
+    "file_name": "003-The-N-Tuple-Bandit-Evolutionary-Algorithm-for-Automatic-Game-Improvement.pdf",
+    "file_ext": ".pdf",
+    "parser_mode": "base_only",
+    "base_parser": "legacy",
+    "enhanced_parser": "",
+    "route_family": "pdf",
+    "controlled_skip": false,
+    "controlled_skip_reason": "",
+    "legacy_paper_id": "fcba8b3c9808",
+    "legacy_source_path": "/tmp/tmp285z9iyx/input/003-The-N-Tuple-Bandit-Evolutionary-Algorithm-for-Automatic-Game-Improvement.pdf",
+    "parser_fallback": false,
+    "parser_fallback_stage": "",
+    "parser_fallback_reason": "",
+    "marker_attempt_duration_sec": 0.0,
+    "marker_stage_timings": {},
+    "structure_parse_status": "unavailable",
+    "structure_parse_reason": "marker_disabled_or_legacy_parser",
+    "section_count": 0,
+    "indexed_section_count": 0,
+    "title_layer": "fallback_first_line",
+    "title_decision_trace": [
+      {
+        "layer": "marker_h1",
+        "status": "missing",
+        "reason": "no_candidates"
+      },
+      {
+        "layer": "marker_h2",
+        "status": "missing",
+        "reason": "no_candidates"
+      },
+      {
+        "layer": "marker_markdown_first_line",
+        "status": "missing",
+        "reason": "no_candidates"
+      },
+      {
+        "layer": "marker",
+        "status": "missing",
+        "reason": "no_candidates"
+      },
+      {
+        "layer": "metadata",
+        "status": "missing",
+        "reason": "no_candidates"
+      },
+      {
+        "layer": "fallback_first_line",
+        "status": "accepted",
+        "reason": "selected"
+      }
+    ],
+    "structured_title_candidates": [],
+    "structured_title_candidate_counts": {},
+    "markdown_available": false,
+    "markdown_consumption_status": "missing",
+    "block_semantics_available": false,
+    "block_semantics_preserved": false,
+    "block_types": []
+  }
+},
+{
+  "paper_id": "pdf_a639448e61be",
+  "title": "Untitled Paper",
+  "path": "/tmp/tmp285z9iyx/input/026-Attention-Is-All-You-Need.pdf",
+  "source_type": "pdf",
+  "source_uri": "pdf://sha1/a639448e61be3ab2a6fb696c0e910b0a3e5fd57f",
+  "parser_engine": "legacy",
+  "title_source": "fallback_untitled",
+  "title_confidence": 0.0,
+  "imported_at": "2026-03-30T20:21:27+00:00",
+  "status": "active",
+  "fingerprint": "a639448e61be3ab2a6fb696c0e910b0a3e5fd57f",
+  "ingest_metadata": {
+    "file_name": "026-Attention-Is-All-You-Need.pdf",
+    "file_ext": ".pdf",
+    "parser_mode": "base_only",
+    "base_parser": "legacy",
+    "enhanced_parser": "",
+    "route_family": "pdf",
+    "controlled_skip": false,
+    "controlled_skip_reason": "",
+    "legacy_paper_id": "128fbd08ef1d",
+    "legacy_source_path": "/tmp/tmp285z9iyx/input/026-Attention-Is-All-You-Need.pdf",
+    "parser_fallback": false,
+    "parser_fallback_stage": "",
+    "parser_fallback_reason": "",
+    "marker_attempt_duration_sec": 0.0,
+    "marker_stage_timings": {},
+    "structure_parse_status": "unavailable",
+    "structure_parse_reason": "marker_disabled_or_legacy_parser",
+    "section_count": 0,
+    "indexed_section_count": 0,
+    "title_layer": "fallback_untitled",
+    "title_decision_trace": [
+      {
+        "layer": "marker_h1",
+        "status": "missing",
+        "reason": "no_candidates"
+      },
+      {
+        "layer": "marker_h2",
+        "status": "missing",
+        "reason": "no_candidates"
+      },
+      {
+        "layer": "marker_markdown_first_line",
+        "status": "missing",
+        "reason": "no_candidates"
+      },
+      {
+        "layer": "marker",
+        "status": "missing",
+        "reason": "no_candidates"
+      },
+      {
+        "layer": "metadata",
+        "status": "missing",
+        "reason": "no_candidates"
+      },
+      {
+        "layer": "fallback_first_line",
+        "status": "rejected",
+        "reason": "quality_gate_rejected"
+      }
+    ],
+    "structured_title_candidates": [],
+    "structured_title_candidate_counts": {},
+    "markdown_available": false,
+    "markdown_consumption_status": "missing",
+    "block_semantics_available": false,
+    "block_semantics_preserved": false,
+    "block_types": []
+  }
+},
+{
+  "paper_id": "pdf_d788f6ee64aa",
+  "title": "Untitled Paper",
+  "path": "/tmp/tmp285z9iyx/input/009-LoRI-Reducing-Cross-Task-Interference-in-Multi-Task-LowRank-Adaptation.pdf",
+  "source_type": "pdf",
+  "source_uri": "pdf://sha1/d788f6ee64aa50c06c045e162529aaedce528692",
+  "parser_engine": "legacy",
+  "title_source": "fallback_untitled",
+  "title_confidence": 0.0,
+  "imported_at": "2026-03-30T20:21:27+00:00",
+  "status": "active",
+  "fingerprint": "d788f6ee64aa50c06c045e162529aaedce528692",
+  "ingest_metadata": {
+    "file_name": "009-LoRI-Reducing-Cross-Task-Interference-in-Multi-Task-LowRank-Adaptation.pdf",
+    "file_ext": ".pdf",
+    "parser_mode": "base_only",
+    "base_parser": "legacy",
+    "enhanced_parser": "",
+    "route_family": "pdf",
+    "controlled_skip": false,
+    "controlled_skip_reason": "",
+    "legacy_paper_id": "2c7955cfe779",
+    "legacy_source_path": "/tmp/tmp285z9iyx/input/009-LoRI-Reducing-Cross-Task-Interference-in-Multi-Task-LowRank-Adaptation.pdf",
+    "parser_fallback": false,
+    "parser_fallback_stage": "",
+    "parser_fallback_reason": "",
+    "marker_attempt_duration_sec": 0.0,
+    "marker_stage_timings": {},
+    "structure_parse_status": "unavailable",
+    "structure_parse_reason": "marker_disabled_or_legacy_parser",
+    "section_count": 0,
+    "indexed_section_count": 0,
+    "title_layer": "fallback_untitled",
+    "title_decision_trace": [
+      {
+        "layer": "marker_h1",
+        "status": "missing",
+        "reason": "no_candidates"
+      },
+      {
+        "layer": "marker_h2",
+        "status": "missing",
+        "reason": "no_candidates"
+      },
+      {
+        "layer": "marker_markdown_first_line",
+        "status": "missing",
+        "reason": "no_candidates"
+      },
+      {
+        "layer": "marker",
+        "status": "missing",
+        "reason": "no_candidates"
+      },
+      {
+        "layer": "metadata",
+        "status": "missing",
+        "reason": "no_candidates"
+      },
+      {
+        "layer": "fallback_first_line",
+        "status": "rejected",
+        "reason": "quality_gate_rejected"
+      }
+    ],
+    "structured_title_candidates": [],
+    "structured_title_candidate_counts": {},
+    "markdown_available": false,
+    "markdown_consumption_status": "missing",
+    "block_semantics_available": false,
+    "block_semantics_preserved": false,
+    "block_types": []
   }
 },
 {
   "paper_id": "pdf_9dbf1cfb033a",
-  "title": "World and Human Action Models towards gameplay ideation",
-  "path": "/tmp/tmpqtnp9o1x/input/World and Human Action Models towards Gameplay Ideation.pdf",
+  "title": "World and Human Action Models",
+  "path": "/tmp/tmp285z9iyx/input/001-World-and-Human-Action-Models-towards-Gameplay-Ideation.pdf",
   "source_type": "pdf",
   "source_uri": "pdf://sha1/9dbf1cfb033a6bd18a950f1fdb37f9262186a2e1",
-  "imported_at": "2026-02-28T09:21:32+00:00",
+  "parser_engine": "legacy",
+  "title_source": "metadata",
+  "title_confidence": 0.85,
+  "imported_at": "2026-03-30T20:21:27+00:00",
   "status": "active",
   "fingerprint": "9dbf1cfb033a6bd18a950f1fdb37f9262186a2e1",
   "ingest_metadata": {
-    "file_name": "World and Human Action Models towards Gameplay Ideation.pdf",
-    "legacy_paper_id": "2d8e0aeaf0cd",
-    "legacy_source_path": "/tmp/tmpqtnp9o1x/input/World and Human Action Models towards Gameplay Ideation.pdf"
+    "file_name": "001-World-and-Human-Action-Models-towards-Gameplay-Ideation.pdf",
+    "file_ext": ".pdf",
+    "parser_mode": "base_only",
+    "base_parser": "legacy",
+    "enhanced_parser": "",
+    "route_family": "pdf",
+    "controlled_skip": false,
+    "controlled_skip_reason": "",
+    "legacy_paper_id": "335bc442891c",
+    "legacy_source_path": "/tmp/tmp285z9iyx/input/001-World-and-Human-Action-Models-towards-Gameplay-Ideation.pdf",
+    "parser_fallback": false,
+    "parser_fallback_stage": "",
+    "parser_fallback_reason": "",
+    "marker_attempt_duration_sec": 0.0,
+    "marker_stage_timings": {},
+    "structure_parse_status": "unavailable",
+    "structure_parse_reason": "marker_disabled_or_legacy_parser",
+    "section_count": 0,
+    "indexed_section_count": 0,
+    "title_layer": "metadata",
+    "title_decision_trace": [
+      {
+        "layer": "marker_h1",
+        "status": "missing",
+        "reason": "no_candidates"
+      },
+      {
+        "layer": "marker_h2",
+        "status": "missing",
+        "reason": "no_candidates"
+      },
+      {
+        "layer": "marker_markdown_first_line",
+        "status": "missing",
+        "reason": "no_candidates"
+      },
+      {
+        "layer": "marker",
+        "status": "missing",
+        "reason": "no_candidates"
+      },
+      {
+        "layer": "metadata",
+        "status": "accepted",
+        "reason": "selected"
+      }
+    ],
+    "structured_title_candidates": [],
+    "structured_title_candidate_counts": {},
+    "markdown_available": false,
+    "markdown_consumption_status": "missing",
+    "block_semantics_available": false,
+    "block_semantics_preserved": false,
+    "block_types": []
   }
 }
 ]

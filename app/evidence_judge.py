@@ -176,6 +176,7 @@ def judge_semantic_evidence(
         use_litellm_sdk=bool(getattr(config, "llm_use_litellm_sdk", True)),
         use_legacy_client=bool(getattr(config, "llm_use_legacy_client", False)),
         temperature=0.0,
+        debug_stage="sufficiency_judge",
     )
     if not result.ok:
         return _judge_error(

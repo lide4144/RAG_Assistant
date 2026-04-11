@@ -57,6 +57,11 @@ interface ImportLatestResult {
     paper_id: string;
     source_uri: string;
     parser_engine: string;
+    parser_mode?: string;
+    base_parser?: string | null;
+    enhanced_parser?: string | null;
+    controlled_skip?: boolean;
+    controlled_skip_reason?: string | null;
     parser_fallback: boolean;
     parser_fallback_stage?: string | null;
     parser_fallback_reason?: string | null;
@@ -370,6 +375,11 @@ export function PipelineWorkbenchPanel({
                 paper_id: String((item as { paper_id?: string }).paper_id ?? ''),
                 source_uri: String((item as { source_uri?: string }).source_uri ?? ''),
                 parser_engine: String((item as { parser_engine?: string }).parser_engine ?? 'legacy'),
+                parser_mode: String((item as { parser_mode?: string }).parser_mode ?? 'base_only'),
+                base_parser: ((item as { base_parser?: string | null }).base_parser ?? null) as string | null,
+                enhanced_parser: ((item as { enhanced_parser?: string | null }).enhanced_parser ?? null) as string | null,
+                controlled_skip: Boolean((item as { controlled_skip?: boolean }).controlled_skip),
+                controlled_skip_reason: ((item as { controlled_skip_reason?: string | null }).controlled_skip_reason ?? null) as string | null,
                 parser_fallback: Boolean((item as { parser_fallback?: boolean }).parser_fallback),
                 parser_fallback_stage: ((item as { parser_fallback_stage?: string | null }).parser_fallback_stage ?? null) as string | null,
                 parser_fallback_reason: ((item as { parser_fallback_reason?: string | null }).parser_fallback_reason ?? null) as string | null,
@@ -613,7 +623,7 @@ export function PipelineWorkbenchPanel({
 
   const submitImportFiles = async () => {
     if (!importFiles.length) {
-      setImportSubmitMessage('请先选择 PDF 文件。');
+      setImportSubmitMessage('请先选择本地文档文件。');
       return;
     }
     setImportSubmitLoading(true);
@@ -843,7 +853,7 @@ export function PipelineWorkbenchPanel({
             <input
               type="file"
               multiple
-              accept=".pdf,application/pdf"
+              accept=".pdf,.txt,.md,.mdx,.html,.htm,.tex,.json,.xml,.yaml,.yml,.csv,.log,.conf,.ini,.properties,.sql,.docx,.pptx,.xlsx,.rtf,.odt,.epub"
               onChange={(event) => setImportFiles(Array.from(event.target.files ?? []))}
               className="w-full rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm"
             />
@@ -1072,9 +1082,12 @@ export function PipelineWorkbenchPanel({
                   <span className="text-xs font-medium text-slate-900">{(item.marker_attempt_duration_sec ?? 0).toFixed(3)}s</span>
                 </div>
                 <p className="mt-1 text-xs text-slate-600">
-                  parser: {item.parser_engine}
-                  {item.parser_fallback ? ` -> legacy (${item.parser_fallback_stage || 'unknown'})` : ' -> marker'}
+                  模式: {item.parser_mode || (item.parser_fallback ? 'degraded_from_marker' : 'base_only')} · 基础解析器: {item.base_parser || item.parser_engine}
+                  {item.enhanced_parser ? ` · 增强解析器: ${item.enhanced_parser}` : ''}
                 </p>
+                {item.controlled_skip ? (
+                  <p className="mt-1 text-[11px] text-amber-700">{item.controlled_skip_reason || '该文件已按类型受控跳过'}</p>
+                ) : null}
                 {item.parser_fallback_reason ? <p className="mt-1 text-[11px] text-rose-600">{item.parser_fallback_reason}</p> : null}
                 {item.marker_stage_timings && Object.keys(item.marker_stage_timings).length ? (
                   <div className="mt-2 flex flex-wrap gap-2 text-[11px] text-slate-500">

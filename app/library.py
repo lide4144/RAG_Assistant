@@ -14,6 +14,7 @@ from app.build_indexes import main as run_build_indexes
 from app.fs_utils import atomic_text_writer
 from app.fs_utils import FileLockTimeoutError, file_lock
 from app.ingest import run_ingest
+from app.parser import SUPPORTED_LOCAL_DOC_EXTENSIONS
 from app.paths import CONFIGS_DIR, DATA_DIR, RUNS_DIR
 
 DEFAULT_PAPERS_PATH = DATA_DIR / "processed" / "papers.json"
@@ -229,7 +230,7 @@ def run_import_workflow(
             "success_count": 0,
             "failed_count": 0,
             "failure_reasons": ["未选择任何文件。"],
-            "next_steps": ["请先选择至少一个 PDF 文件。"],
+            "next_steps": ["请先选择至少一个本地文档文件。"],
             "message": "未选择文件",
         }
 
@@ -258,15 +259,15 @@ def run_import_workflow(
     )
     failed_reason_map: dict[str, str] = {}
     for src in uploaded_files:
-        if not src.exists() or src.suffix.lower() != ".pdf":
+        if not src.exists() or src.suffix.lower() not in SUPPORTED_LOCAL_DOC_EXTENSIONS:
             failed_count += 1
-            reason = f"{src.name}: 仅支持 PDF 文件"
+            reason = f"{src.name}: 当前首版仅支持常见本地文档类型"
             failure_reasons.append(reason)
             failed_reason_map[src.name] = reason
             continue
         dst = DEFAULT_RAW_IMPORT_DIR / src.name
         if dst.exists():
-            dst = DEFAULT_RAW_IMPORT_DIR / f"{src.stem}-{src.stat().st_mtime_ns}.pdf"
+            dst = DEFAULT_RAW_IMPORT_DIR / f"{src.stem}-{src.stat().st_mtime_ns}{src.suffix.lower()}"
         shutil.copyfile(src, dst)
         copied.append(dst)
         success_count += 1
@@ -297,9 +298,9 @@ def run_import_workflow(
             "ok": False,
             "success_count": 0,
             "failed_count": failed_count,
-            "failure_reasons": failure_reasons or ["未检测到可导入的 PDF 文件。"],
-            "next_steps": ["请确认文件为 .pdf 且文件可读后重试。"],
-            "message": "未检测到可导入的 PDF 文件",
+            "failure_reasons": failure_reasons or ["未检测到可导入的本地文档文件。"],
+            "next_steps": ["请确认文件扩展名属于首版支持范围且文件可读后重试。"],
+            "message": "未检测到可导入的本地文档文件",
         }
 
     with tempfile.TemporaryDirectory() as tmp:
@@ -323,7 +324,7 @@ def run_import_workflow(
         def _on_ingest_progress(event: dict[str, Any]) -> None:
             event_name = str(event.get("event", "")).strip().lower()
             paper_name = _normalize_item_name(str(event.get("paper_name", "")).strip())
-            if event_name == "pdf_started":
+            if event_name in {"document_started", "pdf_started"}:
                 _emit_progress(
                     stage="import_clean",
                     stage_processed=max(0, int(event.get("pdf_completed", 0) or 0)),
@@ -342,7 +343,7 @@ def run_import_workflow(
                     ),
                 )
                 return
-            if event_name == "pdf_finished":
+            if event_name in {"document_finished", "pdf_finished"}:
                 status = str(event.get("status", "")).strip().lower()
                 if status == "failed":
                     reason = str(event.get("reason", "解析失败")).strip() or "解析失败"
@@ -411,12 +412,12 @@ def run_import_workflow(
                 "ok": False,
                 "success_count": success_count,
                 "failed_count": failed_count,
-                "failure_reasons": failure_reasons + ["入库失败：PDF 解析或清洗未通过。"],
+                "failure_reasons": failure_reasons + ["入库失败：本地文档解析或清洗未通过。"],
                 "next_steps": [
-                    "确认 PDF 未损坏且包含可提取正文。",
+                    "确认文档未损坏且包含可提取正文。",
                     "缩小批次先导入 1-2 篇定位问题文件。",
                 ],
-                    "message": "导入失败，请检查 PDF 内容是否可解析。",
+                    "message": "导入失败，请检查文档内容是否可解析。",
                 }
 
         import_summary = ingest_report.get("import_summary")
@@ -425,6 +426,50 @@ def run_import_workflow(
         import_outcomes = ingest_report.get("import_outcomes", [])
         terminal_completed = int(import_summary.get("added", 0) or 0) + int(import_summary.get("skipped", 0) or 0)
         terminal_failed = int(import_summary.get("failed", 0) or 0)
+        if int(import_summary.get("added", 0) or 0) == 0 and terminal_failed == 0 and terminal_completed > 0:
+            recent_items = _recent_items_from_outcomes(import_outcomes, stage="done")
+            no_op_updated_at = datetime.fromtimestamp(ingest_finished_at, timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
+            _emit_progress(
+                stage="done",
+                stage_processed=max(1, len(copied)),
+                stage_total=max(1, len(copied)),
+                message="导入完成",
+                batch_completed=terminal_completed,
+                batch_running=0,
+                batch_failed=0,
+                current_item_name=None,
+                recent_items=recent_items,
+            )
+            if bool(import_summary.get("controlled_skip")):
+                message = "导入完成，本批文件已按类型受控跳过。"
+                next_steps = [
+                    "检查受控跳过提示，确认当前文件类型是否已支持稳定抽取。",
+                    "必要时转换为 txt、md、docx 或 PDF 后重试。",
+                    "若只需增强解析，可在设置页开启 Marker 后重新导入 PDF。",
+                ]
+            else:
+                message = "导入完成，未发现需要新增的文档。"
+                next_steps = [
+                    "切换到 Library 或 Chat，继续使用当前已导入文档。",
+                    "如需强制重跑，请先替换文件内容或清理旧产物后再导入。",
+                ]
+            return {
+                "ok": True,
+                "success_count": success_count,
+                "failed_count": failed_count,
+                "failure_reasons": failure_reasons,
+                "import_summary": import_summary,
+                "fallback_reason": ingest_report.get("fallback_reason"),
+                "fallback_path": ingest_report.get("fallback_path"),
+                "confidence_note": ingest_report.get("confidence_note"),
+                "import_outcomes": import_outcomes,
+                "recent_items": recent_items,
+                "import_stage": {"updated_at": no_op_updated_at},
+                "clean_stage": {"updated_at": no_op_updated_at},
+                "index_stage": {"status": "success", "duration_sec": 0.0, "updated_at": no_op_updated_at},
+                "next_steps": next_steps,
+                "message": message,
+            }
         _emit_progress(
             stage="index_build",
             stage_processed=terminal_completed + terminal_failed,
