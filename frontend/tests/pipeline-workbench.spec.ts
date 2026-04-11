@@ -572,7 +572,7 @@ test('pipeline workbench submits import task and refreshes after task completion
   await page.getByTestId('pipeline-import-submit-btn').click();
 
   await expect.poll(() => importRequestCount).toBe(1);
-  await expect(page.getByText('导入完成，可以直接前往 Chat 提问或生成灵感卡片。')).toBeVisible();
+  await expect(page.getByText('导入完成，可以直接前往 Chat 提问或生成灵感卡片。').first()).toBeVisible();
   await expect(page.getByTestId('pipeline-import-added')).toContainText('1');
   await expect(page.getByTestId('pipeline-import-failed')).toContainText('0');
   await expect(page.getByTestId('pipeline-batch-summary')).toContainText('1/1');

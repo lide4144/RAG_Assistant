@@ -1,12 +1,12 @@
 {
   "answer": {
-    "provider": "siliconflow",
-    "api_base": "https://api.siliconflow.cn/v1",
-    "api_key": "sk-uoijizemjbmqxcaycjuumqzcjuhstjawjtwmoagwoiszznnv",
+    "provider": "openai",
+    "api_base": "https://api.deepseek.com/v1",
+    "api_key": "sk-681ff60480c74638ac0bba02c9420a73",
     "model": "Pro/deepseek-ai/DeepSeek-V3.2"
   },
   "embedding": {
-    "provider": "siliconflow",
+    "provider": "openai",
     "api_base": "https://api.siliconflow.cn/v1",
     "api_key": "sk-uoijizemjbmqxcaycjuumqzcjuhstjawjtwmoagwoiszznnv",
     "model": "Qwen/Qwen3-Embedding-8B"
@@ -18,16 +18,22 @@
     "model": "Qwen/Qwen3-Reranker-8B"
   },
   "rewrite": {
-    "provider": "siliconflow",
+    "provider": "openai",
     "api_base": "https://api.siliconflow.cn/v1",
     "api_key": "sk-uoijizemjbmqxcaycjuumqzcjuhstjawjtwmoagwoiszznnv",
     "model": "Qwen/Qwen3.5-9B"
   },
   "graph_entity": {
-    "provider": "siliconflow",
+    "provider": "openai",
+    "api_base": "https://api.siliconflow.cn/v1",
+    "api_key": "sk-uoijizemjbmqxcaycjuumqzcjuhstjawjtwmoagwoiszznnv",
+    "model": "Pro/moonshotai/Kimi-K2.5"
+  },
+  "sufficiency_judge": {
+    "provider": "openai",
     "api_base": "https://api.siliconflow.cn/v1",
     "api_key": "sk-uoijizemjbmqxcaycjuumqzcjuhstjawjtwmoagwoiszznnv",
     "model": "Pro/deepseek-ai/DeepSeek-V3.2"
   },
-  "updated_at": "2026-03-09T15:20:45Z"
+  "updated_at": "2026-03-30T20:20:41Z"
 }

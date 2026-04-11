@@ -1760,6 +1760,7 @@ def _try_llm_answer_with_evidence(
             max_retries=config.llm_max_retries,
             temperature=0.0,
             on_delta=on_stream_delta,
+            debug_stage="answer",
         )
     else:
         result = call_chat_completion(
@@ -1781,6 +1782,7 @@ def _try_llm_answer_with_evidence(
             timeout_ms=timeout_ms,
             max_retries=config.llm_max_retries,
             temperature=0.0,
+            debug_stage="answer",
         )
 
     first_token_latency = getattr(result, "first_token_latency_ms", None)

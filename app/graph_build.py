@@ -16,6 +16,8 @@ from pydantic import BaseModel, Field, ValidationError
 
 from app.config import load_config
 from app.config_governance import load_resolved_llm_stage
+from app.llm_client import emit_llm_debug_event
+from app.llm_observability import format_llm_debug_text
 
 
 DEFAULT_LLM_SYSTEM_PROMPT = (
@@ -258,6 +260,16 @@ def _sanitize_entities(payload: EntityExtractionResult) -> list[str]:
     return names
 
 
+def _graph_response_debug_text(response: Any) -> str | None:
+    text = getattr(response, "text", None)
+    if isinstance(text, str) and text:
+        return format_llm_debug_text(text)
+    try:
+        return format_llm_debug_text(response.json())
+    except Exception:
+        return format_llm_debug_text(str(response))
+
+
 async def extract_entities_from_text_llm(
     clean_text: str,
     cfg: LLMEntityExtractionConfig,
@@ -293,6 +305,7 @@ async def extract_entities_from_text_llm(
             {"role": "user", "content": prompt},
         ],
     }
+    request_payload = format_llm_debug_text(payload)
     endpoint = _chat_completions_endpoint(cfg.base_url, cfg.provider)
     timeout_s = max(0.1, float(cfg.timeout_ms) / 1000.0)
     own_client = client is None
@@ -315,6 +328,24 @@ async def extract_entities_from_text_llm(
                 if metrics is not None:
                     metrics.elapsed_ms += int((time.perf_counter() - t0) * 1000)
             except (httpx.TimeoutException, httpx.TransportError):
+                emit_llm_debug_event(
+                    {
+                        "event": "request_failure",
+                        "stage": "completion",
+                        "debug_stage": "graph_entity",
+                        "provider": cfg.provider,
+                        "model": cfg.model,
+                        "api_base": cfg.base_url,
+                        "endpoint": endpoint,
+                        "transport": "httpx",
+                        "attempts_used": attempt + 1,
+                        "reason": "timeout_or_transport",
+                        "error_category": "network",
+                        "system_prompt": DEFAULT_LLM_SYSTEM_PROMPT,
+                        "user_prompt": prompt,
+                        "request_payload": request_payload,
+                    }
+                )
                 if attempt < max(0, int(cfg.max_retries)):
                     if metrics is not None:
                         metrics.retries += 1
@@ -328,6 +359,27 @@ async def extract_entities_from_text_llm(
                 return EntityExtractionResult()
 
             if response.status_code == 429:
+                emit_llm_debug_event(
+                    {
+                        "event": "request_failure",
+                        "stage": "completion",
+                        "debug_stage": "graph_entity",
+                        "provider": cfg.provider,
+                        "model": cfg.model,
+                        "api_base": cfg.base_url,
+                        "endpoint": endpoint,
+                        "transport": "httpx",
+                        "attempts_used": attempt + 1,
+                        "elapsed_ms": int((time.perf_counter() - t0) * 1000),
+                        "reason": "rate_limit",
+                        "status_code": 429,
+                        "error_category": "rate_limit",
+                        "system_prompt": DEFAULT_LLM_SYSTEM_PROMPT,
+                        "user_prompt": prompt,
+                        "request_payload": request_payload,
+                        "response_payload": _graph_response_debug_text(response),
+                    }
+                )
                 if metrics is not None:
                     metrics.rate_limits += 1
                 if attempt < max(0, int(cfg.max_retries)):
@@ -343,6 +395,27 @@ async def extract_entities_from_text_llm(
                 return EntityExtractionResult()
 
             if response.status_code >= 400:
+                emit_llm_debug_event(
+                    {
+                        "event": "request_failure",
+                        "stage": "completion",
+                        "debug_stage": "graph_entity",
+                        "provider": cfg.provider,
+                        "model": cfg.model,
+                        "api_base": cfg.base_url,
+                        "endpoint": endpoint,
+                        "transport": "httpx",
+                        "attempts_used": attempt + 1,
+                        "elapsed_ms": int((time.perf_counter() - t0) * 1000),
+                        "reason": "http_error",
+                        "status_code": int(response.status_code),
+                        "error_category": "http",
+                        "system_prompt": DEFAULT_LLM_SYSTEM_PROMPT,
+                        "user_prompt": prompt,
+                        "request_payload": request_payload,
+                        "response_payload": _graph_response_debug_text(response),
+                    }
+                )
                 if metrics is not None:
                     metrics.failures += 1
                     metrics.fallback_empty += 1
@@ -361,8 +434,48 @@ async def extract_entities_from_text_llm(
                     raw_json = content
                 else:
                     raw_json = json.loads(str(content or "{}"))
+                emit_llm_debug_event(
+                    {
+                        "event": "request_success",
+                        "stage": "completion",
+                        "debug_stage": "graph_entity",
+                        "provider": cfg.provider,
+                        "model": cfg.model,
+                        "api_base": cfg.base_url,
+                        "endpoint": endpoint,
+                        "transport": "httpx",
+                        "attempts_used": attempt + 1,
+                        "elapsed_ms": int((time.perf_counter() - t0) * 1000),
+                        "system_prompt": DEFAULT_LLM_SYSTEM_PROMPT,
+                        "user_prompt": prompt,
+                        "request_payload": request_payload,
+                        "response_payload": format_llm_debug_text(data),
+                        "response_text": format_llm_debug_text(raw_json),
+                    }
+                )
                 return EntityExtractionResult.model_validate(raw_json)
             except (json.JSONDecodeError, ValidationError, TypeError, ValueError):
+                emit_llm_debug_event(
+                    {
+                        "event": "request_failure",
+                        "stage": "completion",
+                        "debug_stage": "graph_entity",
+                        "provider": cfg.provider,
+                        "model": cfg.model,
+                        "api_base": cfg.base_url,
+                        "endpoint": endpoint,
+                        "transport": "httpx",
+                        "attempts_used": attempt + 1,
+                        "elapsed_ms": int((time.perf_counter() - t0) * 1000),
+                        "reason": "invalid_json_or_schema",
+                        "status_code": int(response.status_code),
+                        "error_category": "other",
+                        "system_prompt": DEFAULT_LLM_SYSTEM_PROMPT,
+                        "user_prompt": prompt,
+                        "request_payload": request_payload,
+                        "response_payload": _graph_response_debug_text(response),
+                    }
+                )
                 if attempt < max(0, int(cfg.max_retries)):
                     if metrics is not None:
                         metrics.retries += 1

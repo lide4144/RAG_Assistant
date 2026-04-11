@@ -12,11 +12,15 @@ from app.config import PipelineConfig
 from app.graph_build import ChunkGraph, GraphBuildStats, GraphNode, save_graph
 from app.index_bm25 import build_bm25_index
 from app.index_vec import build_vec_index
+from app.llm_client import clear_llm_event_callbacks, register_llm_event_callback
 from app.rerank import rerank_candidates
 from app.retrieve import RetrievalCandidate, expand_candidates_with_graph, load_indexes_and_config, retrieve_candidates
 
 
 class RerankTests(unittest.TestCase):
+    def setUp(self) -> None:
+        clear_llm_event_callbacks()
+
     def _write_chunks(self, path: Path) -> None:
         rows = [
             {
@@ -223,6 +227,8 @@ class RerankTests(unittest.TestCase):
         cfg = PipelineConfig()
         cfg.rerank.enabled = True
         cfg.rerank.provider = "siliconflow"
+        cfg.rerank.api_base = "https://api.siliconflow.cn/v1"
+        cfg.rerank.model = "rerank-model"
         cfg.rerank.top_n = 2
         cfg.rerank.max_retries = 0
         cfg.rerank.api_key_env = "TEST_SF_KEY"
@@ -268,6 +274,74 @@ class RerankTests(unittest.TestCase):
         self.assertEqual(outcome.candidates[0].chunk_id, "b")
         self.assertFalse(outcome.used_fallback)
         self.assertNotIn("rerank_fallback_to_retrieval", outcome.warnings)
+
+    def test_siliconflow_provider_emits_observability(self) -> None:
+        cfg = PipelineConfig()
+        cfg.rerank.enabled = True
+        cfg.rerank.provider = "siliconflow"
+        cfg.rerank.api_base = "https://api.siliconflow.cn/v1"
+        cfg.rerank.model = "rerank-model"
+        cfg.rerank.top_n = 2
+        cfg.rerank.max_retries = 0
+        cfg.rerank.api_key_env = "TEST_SF_KEY"
+
+        candidates = [
+            RetrievalCandidate(
+                chunk_id="a",
+                score=0.3,
+                payload={"source": "hybrid", "dense_backend": "tfidf", "score_retrieval": 0.3},
+                text="doc a",
+                clean_text="doc a",
+            ),
+            RetrievalCandidate(
+                chunk_id="b",
+                score=0.2,
+                payload={"source": "hybrid", "dense_backend": "tfidf", "score_retrieval": 0.2},
+                text="doc b",
+                clean_text="doc b",
+            ),
+        ]
+        events: list[dict[str, object]] = []
+        register_llm_event_callback(events.append)
+
+        class _Resp:
+            headers = {"x-trace-id": "rerank-trace-1"}
+
+            def __init__(self, payload: dict) -> None:
+                self._payload = payload
+
+            def __enter__(self) -> "_Resp":
+                return self
+
+            def __exit__(self, exc_type, exc, tb) -> None:
+                return None
+
+            def read(self) -> bytes:
+                return json.dumps(self._payload, ensure_ascii=False).encode("utf-8")
+
+        with patch.dict(os.environ, {"TEST_SF_KEY": "x"}):
+            with patch(
+                "urllib.request.urlopen",
+                return_value=_Resp(
+                    {
+                        "results": [
+                            {"index": 1, "relevance_score": 0.8},
+                            {"index": 0, "relevance_score": 0.1},
+                        ]
+                    }
+                ),
+            ):
+                outcome = rerank_candidates(query="doc b", candidates=candidates, config=cfg)
+
+        self.assertEqual(outcome.candidates[0].chunk_id, "b")
+        success_event = next(e for e in events if str(e.get("event")) == "request_success")
+        self.assertEqual(success_event.get("debug_stage"), "rerank")
+        self.assertEqual(success_event.get("endpoint"), "https://api.siliconflow.cn/v1/rerank")
+        self.assertEqual(success_event.get("transport"), "urllib")
+        self.assertIn('"query": "doc b"', str(success_event.get("request_payload")))
+        self.assertIn('"documents": [', str(success_event.get("request_payload")))
+        self.assertIn('"relevance_score": 0.8', str(success_event.get("response_payload")))
+        self.assertIn('"score_count": 2', str(success_event.get("response_text")))
 
     def test_siliconflow_provider_success_data_shape_with_retry(self) -> None:
         cfg = PipelineConfig()

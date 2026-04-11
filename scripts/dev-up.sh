@@ -24,6 +24,13 @@ if [[ -z "$FRONTEND_KERNEL_BASE_URL" && "$KERNEL_HOST" != "0.0.0.0" ]]; then
 fi
 
 FRONTEND_GATEWAY_WS_URL="${NEXT_PUBLIC_GATEWAY_WS_URL:-}"
+if [[ -z "$FRONTEND_GATEWAY_WS_URL" ]]; then
+  if [[ "$GATEWAY_HOST" == "0.0.0.0" ]]; then
+    FRONTEND_GATEWAY_WS_URL="ws://127.0.0.1:$GATEWAY_PORT/ws"
+  else
+    FRONTEND_GATEWAY_WS_URL="ws://$GATEWAY_HOST:$GATEWAY_PORT/ws"
+  fi
+fi
 
 KERNEL_CMD=(venv/bin/python -m uvicorn app.kernel_api:app --host "$KERNEL_HOST" --port "$KERNEL_PORT")
 GATEWAY_CMD=(npm run dev)

@@ -374,6 +374,7 @@ def retrieve_candidates(
                         base_url=api_base,
                         model=model,
                         api_key_env=api_key_env,
+                        provider=config.embedding.provider,
                     )
                     metrics["embedding_query_time_ms"] = int((perf_counter() - t0) * 1000)
                     metrics["embedding_cache_hit"] = False

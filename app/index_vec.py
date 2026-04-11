@@ -274,6 +274,7 @@ def _fetch_with_guard(
             base_url=cfg.base_url,
             model=cfg.model,
             api_key_env=cfg.api_key_env,
+            provider=cfg.provider,
         )
 
 

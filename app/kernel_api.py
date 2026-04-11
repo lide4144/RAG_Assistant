@@ -16,9 +16,9 @@ from uuid import uuid4
 
 import httpx
 from starlette.datastructures import UploadFile as StarletteUploadFile
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse
+from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel, Field
 import yaml
 
@@ -29,14 +29,19 @@ from app.config_governance import resolve_effective_llm_stages, runtime_source_l
 from app.graph_build import run_graph_build
 from app.library import load_papers, run_import_workflow
 from app.llm_routing import build_stage_policy, get_last_stage_failure
+from app.llm_client import llm_debug_scope, register_llm_event_callback, unregister_llm_event_callback
+from app.llm_log_config import resolve_effective_llm_log_config
 from app.pipeline_runtime_config import (
+    default_marker_enabled,
     default_marker_llm,
     default_marker_tuning,
     load_pipeline_runtime_config,
     mask_marker_llm_secrets,
+    resolve_effective_marker_enabled,
     resolve_effective_marker_llm,
     save_pipeline_runtime_config,
     validate_marker_llm_payload,
+    validate_marker_enabled_payload,
     validate_marker_tuning_payload,
     resolve_effective_marker_tuning,
 )
@@ -51,6 +56,17 @@ from app.planner_runtime_config import (
 from app.planner_shadow_review import save_shadow_review
 from app.planner_runtime import HAS_LANGGRAPH, run_planner_runtime
 from app.index_vec import load_vec_index
+from app.job_store import (
+    ConfigSnapshotRecord,
+    JobEventRecord,
+    JobRecord,
+    append_job_event,
+    get_job as get_stored_job,
+    list_job_events,
+    list_jobs as list_stored_jobs,
+    save_config_snapshot,
+    upsert_job,
+)
 from app.qa import parse_args, run_qa
 
 app = FastAPI(title="RAG GPT Kernel API", version="0.1.0")
@@ -65,11 +81,103 @@ app.add_middleware(
     allow_headers=["*"],
 )
 ADMIN_UPSTREAM_TIMEOUT_SEC = max(1.0, float(os.getenv("KERNEL_ADMIN_UPSTREAM_TIMEOUT_SEC", "10")))
+STREAM_FALLBACK_CHUNK_SIZE = max(8, int(os.getenv("KERNEL_STREAM_FALLBACK_CHUNK_SIZE", "48")))
+LLM_DEBUG_TRACE_LIMIT = max(1, int(os.getenv("KERNEL_LLM_DEBUG_TRACE_LIMIT", "64")))
+_LLM_DEBUG_STORE_LOCK = threading.Lock()
+_LLM_DEBUG_STORE: dict[str, dict[str, Any]] = {}
 
 
 class HistoryMessage(BaseModel):
     role: Literal["user", "assistant"]
     content: str
+
+
+def _chunk_stream_fallback_answer(text: str, *, chunk_size: int = STREAM_FALLBACK_CHUNK_SIZE) -> list[str]:
+    normalized_size = max(8, int(chunk_size))
+    if not text:
+        return [""]
+    return [text[index : index + normalized_size] for index in range(0, len(text), normalized_size)]
+
+
+def _store_llm_debug_event(event: dict[str, Any]) -> None:
+    trace_id = str(event.get("trace_id") or "").strip()
+    if not trace_id:
+        return
+    record = {
+        "event": str(event.get("event") or ""),
+        "stage": str(event.get("stage") or "") or None,
+        "debug_stage": str(event.get("debug_stage") or "") or None,
+        "provider": str(event.get("provider") or "") or None,
+        "model": str(event.get("model") or "") or None,
+        "api_base": str(event.get("api_base") or "") or None,
+        "endpoint": str(event.get("endpoint") or "") or None,
+        "transport": str(event.get("transport") or "") or None,
+        "route_id": str(event.get("route_id") or "") or None,
+        "attempts_used": int(event.get("attempts_used")) if isinstance(event.get("attempts_used"), int) else None,
+        "elapsed_ms": int(event.get("elapsed_ms")) if isinstance(event.get("elapsed_ms"), int) else None,
+        "reason": str(event.get("reason") or "") or None,
+        "status_code": int(event.get("status_code")) if isinstance(event.get("status_code"), int) else None,
+        "error_category": str(event.get("error_category") or "") or None,
+        "fallback_reason": str(event.get("fallback_reason") or "") or None,
+        "first_token_latency_ms": int(event.get("first_token_latency_ms")) if isinstance(event.get("first_token_latency_ms"), int) else None,
+        "chunks_received": int(event.get("chunks_received")) if isinstance(event.get("chunks_received"), int) else None,
+        "system_prompt": str(event.get("system_prompt") or "") or None,
+        "user_prompt": str(event.get("user_prompt") or "") or None,
+        "request_payload": str(event.get("request_payload") or "") or None,
+        "response_payload": str(event.get("response_payload") or "") or None,
+        "response_text": str(event.get("response_text") or "") or None,
+        "timestamp": datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z"),
+    }
+    with _LLM_DEBUG_STORE_LOCK:
+        bucket = _LLM_DEBUG_STORE.setdefault(trace_id, {"trace_id": trace_id, "records": []})
+        bucket_records = list(bucket.get("records") or [])
+        bucket_records.append(record)
+        bucket["records"] = bucket_records[-LLM_DEBUG_TRACE_LIMIT:]
+
+
+register_llm_event_callback(_store_llm_debug_event)
+
+
+def _reconcile_unfinished_jobs_after_restart() -> int:
+    active_jobs = list_stored_jobs(states={"queued", "running"}, limit=500)
+    if not active_jobs:
+        return 0
+    cancelled_at = _iso_now()
+    recovered = 0
+    for record in active_jobs:
+        metadata = dict(record.metadata or {})
+        metadata["recovered_after_restart"] = True
+        metadata["recovered_at"] = cancelled_at
+        error_payload = dict(record.error_payload or {})
+        error_payload.setdefault("code", "JOB_INTERRUPTED_BY_RESTART")
+        error_payload.setdefault("message", "任务在服务重启后被中断，已自动标记为取消。")
+        updated = record.model_copy(
+            update={
+                "state": "cancelled",
+                "updated_at": cancelled_at,
+                "progress_stage": "cancelled",
+                "metadata": metadata,
+                "error_payload": error_payload,
+            }
+        )
+        upsert_job(updated)
+        append_job_event(
+            job_id=record.job_id,
+            event_type="state_changed",
+            created_at=cancelled_at,
+            payload={
+                "state": "cancelled",
+                "reason": "process_restart",
+                "message": "任务在服务重启后被自动取消。",
+            },
+        )
+        recovered += 1
+    return recovered
+
+
+@app.on_event("startup")
+def _startup_reconcile_unfinished_jobs() -> None:
+    _reconcile_unfinished_jobs_after_restart()
 
 
 class KernelChatRequest(BaseModel):
@@ -96,6 +204,7 @@ class KernelChatResponse(BaseModel):
     traceId: str
     answer: str
     sources: list[SourceItem]
+    runId: str | None = None
 
 
 class AdminDetectModelsRequest(BaseModel):
@@ -184,6 +293,7 @@ class MarkerLLMPayload(BaseModel):
 
 
 class AdminSavePipelineConfigRequest(BaseModel):
+    marker_enabled: bool = Field(default_factory=default_marker_enabled)
     marker_tuning: MarkerTuningPayload
     marker_llm: MarkerLLMPayload = Field(default_factory=MarkerLLMPayload)
 
@@ -214,6 +324,38 @@ class PlannerShadowReviewResponse(BaseModel):
     planner_source_mode: str | None = None
     updated_at: str
     allowed_labels: list[str]
+
+
+class LlmDebugRecord(BaseModel):
+    event: str
+    stage: str | None = None
+    debug_stage: str | None = None
+    provider: str | None = None
+    model: str | None = None
+    api_base: str | None = None
+    endpoint: str | None = None
+    transport: str | None = None
+    route_id: str | None = None
+    attempts_used: int | None = None
+    elapsed_ms: int | None = None
+    reason: str | None = None
+    status_code: int | None = None
+    error_category: str | None = None
+    fallback_reason: str | None = None
+    first_token_latency_ms: int | None = None
+    chunks_received: int | None = None
+    system_prompt: str | None = None
+    user_prompt: str | None = None
+    request_payload: str | None = None
+    response_payload: str | None = None
+    response_text: str | None = None
+    timestamp: str | None = None
+
+
+class LlmDebugTraceResponse(BaseModel):
+    trace_id: str
+    count: int
+    records: list[LlmDebugRecord]
 
 
 TaskState = Literal["idle", "queued", "running", "succeeded", "failed", "cancelled"]
@@ -266,15 +408,58 @@ class TaskStatusResponse(BaseModel):
     state: TaskState
     created_at: str
     updated_at: str
+    job_id: str | None = None
+    job_kind: str | None = None
     accepted: bool = True
     progress: TaskProgressInfo | None = None
     error: TaskErrorInfo | None = None
     result: dict[str, Any] | None = None
 
 
-_TASKS_LOCK = threading.Lock()
+class JobEventResponse(BaseModel):
+    job_id: str
+    seq: int
+    event_type: str
+    created_at: str
+    payload: dict[str, Any] = Field(default_factory=dict)
+
+
+class JobStatusResponse(BaseModel):
+    job_id: str
+    kind: str
+    state: str
+    created_at: str
+    updated_at: str
+    accepted: bool = True
+    session_id: str | None = None
+    trace_id: str | None = None
+    run_id: str | None = None
+    config_version_id: str | None = None
+    progress_stage: str | None = None
+    latest_output_text: str | None = None
+    result: dict[str, Any] | None = None
+    error: dict[str, Any] | None = None
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class JobCreateResponse(BaseModel):
+    ok: bool = True
+    job: JobStatusResponse
+
+
+class JobCancelResponse(BaseModel):
+    job_id: str
+    kind: str
+    state: str
+    cancelled: bool
+    updated_at: str
+    message: str
+
+
+_TASKS_LOCK = threading.RLock()
 _TASKS: dict[str, TaskStatusResponse] = {}
 _TASK_CANCEL_EVENTS: dict[str, threading.Event] = {}
+_JOB_CANCEL_EVENTS: dict[str, threading.Event] = {}
 _PIPELINE_STATUS_PATH = DATA_DIR / "processed" / "pipeline_status_latest.json"
 _ARTIFACT_INDEX = (
     ("indexes:bmp25", DATA_DIR / "indexes" / "bm25_index.json", "bm25-index", "index"),
@@ -653,7 +838,7 @@ def _run_qa_pipeline(
 
     sources = _build_sources_from_qa_report(qa_report)
     trace_id = payload.traceId or f"trace_{run_id}"
-    return KernelChatResponse(traceId=trace_id, answer=answer, sources=sources), run_id
+    return KernelChatResponse(traceId=trace_id, answer=answer, sources=sources, runId=run_id), run_id
 
 
 def _run_qa_once(payload: KernelChatRequest, on_stream_delta: Callable[[str], None] | None = None) -> KernelChatResponse:
@@ -1121,7 +1306,8 @@ def _build_streaming_chat_response(
 
         def worker() -> None:
             try:
-                response = runner(payload, on_delta)
+                with llm_debug_scope(trace_id=trace_id):
+                    response = runner(payload, on_delta)
                 queue.put(
                     {
                         "event": "sources",
@@ -1130,21 +1316,23 @@ def _build_streaming_chat_response(
                             "traceId": trace_id,
                             "mode": payload.mode,
                             "sources": [_serialize_source_item(item) for item in response.sources],
+                            "runId": getattr(response, "runId", None),
                         },
                     }
                 )
                 if streamed_chunks == 0:
-                    queue.put(
-                        {
-                            "event": "message",
-                            "data": {
-                                "type": "message",
-                                "traceId": trace_id,
-                                "mode": payload.mode,
-                                "content": response.answer,
-                            },
-                        }
-                    )
+                    for piece in _chunk_stream_fallback_answer(response.answer):
+                        queue.put(
+                            {
+                                "event": "message",
+                                "data": {
+                                    "type": "message",
+                                    "traceId": trace_id,
+                                    "mode": payload.mode,
+                                    "content": piece,
+                                },
+                            }
+                        )
                 queue.put(
                     {
                         "event": "messageEnd",
@@ -1152,6 +1340,7 @@ def _build_streaming_chat_response(
                             "type": "messageEnd",
                             "traceId": trace_id,
                             "mode": payload.mode,
+                            "runId": getattr(response, "runId", None),
                         },
                     }
                 )
@@ -1262,13 +1451,14 @@ def _build_planner_streaming_chat_response(payload: KernelChatRequest) -> Stream
                         }
                     )
                     return
-                result = run_planner_runtime(
-                    payload,
-                    fact_qa_executor=_planner_runtime_route_executor,
-                    compat_executor=_planner_runtime_route_executor,
-                    legacy_executor=_planner_runtime_route_executor,
-                    on_stream_delta=on_delta,
-                )
+                with llm_debug_scope(trace_id=trace_id):
+                    result = run_planner_runtime(
+                        payload,
+                        fact_qa_executor=_planner_runtime_route_executor,
+                        compat_executor=_planner_runtime_route_executor,
+                        legacy_executor=_planner_runtime_route_executor,
+                        on_stream_delta=on_delta,
+                    )
                 response = result["response"]
                 observation = result.get("observation")
                 response_trace_id = getattr(response, "traceId", None) or trace_id
@@ -1282,21 +1472,23 @@ def _build_planner_streaming_chat_response(payload: KernelChatRequest) -> Stream
                             "traceId": response_trace_id,
                             "mode": payload.mode,
                             "sources": [_serialize_source_item(item) for item in response.sources],
+                            "runId": getattr(response, "runId", None),
                         },
                     }
                 )
                 if streamed_chunks == 0:
-                    queue.put(
-                        {
-                            "event": "message",
-                            "data": {
-                                "type": "message",
-                                "traceId": response_trace_id,
-                                "mode": payload.mode,
-                                "content": response.answer,
-                            },
-                        }
-                    )
+                    for piece in _chunk_stream_fallback_answer(response.answer):
+                        queue.put(
+                            {
+                                "event": "message",
+                                "data": {
+                                    "type": "message",
+                                    "traceId": response_trace_id,
+                                    "mode": payload.mode,
+                                    "content": piece,
+                                },
+                            }
+                        )
                 queue.put(
                     {
                         "event": "messageEnd",
@@ -1304,6 +1496,7 @@ def _build_planner_streaming_chat_response(payload: KernelChatRequest) -> Stream
                             "type": "messageEnd",
                             "traceId": response_trace_id,
                             "mode": payload.mode,
+                            "runId": getattr(response, "runId", None),
                         },
                     }
                 )
@@ -1636,22 +1829,33 @@ def _extract_ingest_degradation(payload: dict[str, Any]) -> dict[str, Any]:
     rows = payload.get("parser_observability")
     if not isinstance(rows, list):
         rows = []
-    fallback_rows = [row for row in rows if isinstance(row, dict) and bool(row.get("parser_fallback"))]
-    if not fallback_rows:
+    fallback_rows = [
+        row for row in rows if isinstance(row, dict) and str(row.get("parser_mode", "")).strip() == "degraded_from_marker"
+    ]
+    controlled_skip_rows = [row for row in rows if isinstance(row, dict) and bool(row.get("controlled_skip"))]
+    if not fallback_rows and not controlled_skip_rows:
         return {
             "degraded": False,
             "fallback_reason": None,
             "fallback_path": None,
-            "confidence_note": "最近一次导入未检测到 Marker 降级路径。",
+            "confidence_note": "最近一次导入未检测到增强降级路径。",
         }
-    first = fallback_rows[0]
-    reason = str(first.get("parser_fallback_reason", "")).strip() or "marker parser fallback"
-    stage = str(first.get("parser_fallback_stage", "")).strip() or "unknown"
+    if fallback_rows:
+        first = fallback_rows[0]
+        reason = str(first.get("parser_fallback_reason", "")).strip() or "marker parser fallback"
+        stage = str(first.get("parser_fallback_stage", "")).strip() or "unknown"
+        return {
+            "degraded": True,
+            "fallback_reason": reason,
+            "fallback_path": f"marker -> legacy ({stage})",
+            "confidence_note": "当前结果来自增强失败后的降级导入路径，建议检查 Marker 配置后重跑。",
+        }
+    first_skip = controlled_skip_rows[0]
     return {
-        "degraded": True,
-        "fallback_reason": reason,
-        "fallback_path": f"marker -> legacy ({stage})",
-        "confidence_note": "当前结果来自降级导入路径，建议检查 Marker LLM/解析配置后重跑以恢复最佳结构化质量。",
+        "degraded": False,
+        "fallback_reason": str(first_skip.get("controlled_skip_reason", "")).strip() or "controlled skip",
+        "fallback_path": f"controlled-skip ({str(first_skip.get('file_ext', '')).strip() or 'unknown'})",
+        "confidence_note": "最近一次导入包含按类型受控跳过的文件，请检查支持范围或文件内容。",
     }
 
 
@@ -1671,6 +1875,11 @@ def _extract_parser_diagnostics(payload: dict[str, Any]) -> list[dict[str, Any]]
                 "paper_id": str(row.get("paper_id", "")).strip(),
                 "source_uri": str(row.get("source_uri", "")).strip(),
                 "parser_engine": str(row.get("parser_engine", "")).strip() or "legacy",
+                "parser_mode": str(row.get("parser_mode", "")).strip() or "base_only",
+                "base_parser": str(row.get("base_parser", "")).strip() or None,
+                "enhanced_parser": str(row.get("enhanced_parser", "")).strip() or None,
+                "controlled_skip": bool(row.get("controlled_skip")),
+                "controlled_skip_reason": str(row.get("controlled_skip_reason", "")).strip() or None,
                 "parser_fallback": bool(row.get("parser_fallback")),
                 "parser_fallback_stage": str(row.get("parser_fallback_stage", "")).strip() or None,
                 "parser_fallback_reason": str(row.get("parser_fallback_reason", "")).strip() or None,
@@ -1680,6 +1889,14 @@ def _extract_parser_diagnostics(payload: dict[str, Any]) -> list[dict[str, Any]]
         )
     diagnostics.sort(key=lambda item: float(item.get("marker_attempt_duration_sec", 0.0) or 0.0), reverse=True)
     return diagnostics[:10]
+
+
+def _resolve_marker_mode_summary(*, marker_enabled: bool, degraded: bool) -> str:
+    if not marker_enabled:
+        return "base_only"
+    if degraded:
+        return "degraded_available"
+    return "enhanced"
 
 
 def _build_runtime_status(
@@ -1782,7 +1999,10 @@ def _iso_now() -> str:
 
 def _task_snapshot(task: TaskStatusResponse) -> TaskStatusResponse:
     # Pydantic model copy to avoid mutating shared state outside lock.
-    return TaskStatusResponse.model_validate(task.model_dump())
+    payload = task.model_dump()
+    payload["job_id"] = payload.get("job_id") or payload["task_id"]
+    payload["job_kind"] = payload.get("job_kind") or payload["task_kind"]
+    return TaskStatusResponse.model_validate(payload)
 
 
 def _task_label(task_kind: TaskKind) -> str:
@@ -1802,6 +2022,426 @@ def _find_active_task(task_kind: TaskKind) -> TaskStatusResponse | None:
 def _save_task(task: TaskStatusResponse) -> None:
     with _TASKS_LOCK:
         _TASKS[task.task_id] = task
+    _sync_task_to_job_store(task)
+
+
+def _task_to_job_record(task: TaskStatusResponse) -> JobRecord:
+    progress = task.progress.model_dump() if task.progress is not None else None
+    error = task.error.model_dump() if task.error is not None else None
+    latest_output_text = None
+    if isinstance(task.result, dict):
+        latest_output_text = str(task.result.get("answer") or task.result.get("message") or "") or None
+    return JobRecord(
+        job_id=task.task_id,
+        kind=task.task_kind,
+        state=task.state,
+        created_at=task.created_at,
+        updated_at=task.updated_at,
+        accepted=bool(task.accepted),
+        progress_stage=task.progress.stage if task.progress is not None else None,
+        latest_output_text=latest_output_text,
+        result_payload=dict(task.result or {}),
+        error_payload=error,
+        metadata={"task_progress": progress or {}},
+    )
+
+
+def _sync_task_to_job_store(task: TaskStatusResponse, *, event_type: str = "task_snapshot") -> None:
+    snapshot = _task_snapshot(task)
+    upsert_job(_task_to_job_record(snapshot))
+    append_job_event(
+        job_id=snapshot.task_id,
+        event_type=event_type,
+        created_at=snapshot.updated_at,
+        payload={
+            "taskId": snapshot.task_id,
+            "taskKind": snapshot.task_kind,
+            "state": snapshot.state,
+            "updatedAt": snapshot.updated_at,
+            "accepted": snapshot.accepted,
+            "progress": snapshot.progress.model_dump() if snapshot.progress is not None else None,
+            "error": snapshot.error.model_dump() if snapshot.error is not None else None,
+            "result": snapshot.result,
+        },
+    )
+
+
+def _job_response(record: JobRecord) -> JobStatusResponse:
+    return JobStatusResponse(
+        job_id=record.job_id,
+        kind=record.kind,
+        state=record.state,
+        created_at=record.created_at,
+        updated_at=record.updated_at,
+        accepted=record.accepted,
+        session_id=record.session_id,
+        trace_id=record.trace_id,
+        run_id=record.run_id,
+        config_version_id=record.config_version_id,
+        progress_stage=record.progress_stage,
+        latest_output_text=record.latest_output_text,
+        result=record.result_payload,
+        error=record.error_payload,
+        metadata=record.metadata,
+    )
+
+
+def _job_event_response(record: JobEventRecord) -> JobEventResponse:
+    return JobEventResponse(
+        job_id=record.job_id,
+        seq=record.seq,
+        event_type=record.event_type,
+        created_at=record.created_at,
+        payload=record.payload,
+    )
+
+
+def _job_cancel_response(record: JobRecord, *, cancelled: bool, message: str) -> JobCancelResponse:
+    return JobCancelResponse(
+        job_id=record.job_id,
+        kind=record.kind,
+        state=record.state,
+        cancelled=cancelled,
+        updated_at=record.updated_at,
+        message=message,
+    )
+
+
+def _active_job_summaries() -> list[dict[str, Any]]:
+    jobs = list_stored_jobs(states={"queued", "running"})
+    return [
+        {
+            "jobId": item.job_id,
+            "kind": item.kind,
+            "state": item.state,
+            "updatedAt": item.updated_at,
+            "progressStage": item.progress_stage,
+        }
+        for item in jobs
+    ]
+
+
+def _ensure_no_active_jobs_for_settings() -> None:
+    active_jobs = _active_job_summaries()
+    if not active_jobs:
+        return
+    raise HTTPException(
+        status_code=409,
+        detail={
+            "code": "SETTINGS_LOCKED_BY_ACTIVE_JOB",
+            "message": "当前存在运行中的任务，设置已锁定为只读。",
+            "activeJobs": active_jobs,
+        },
+    )
+
+
+def _create_config_snapshot(*, scope: str, payload: KernelChatRequest, planner: bool) -> ConfigSnapshotRecord:
+    llm_cfg, _ = load_runtime_llm_config()
+    planner_cfg, _ = load_planner_runtime_config()
+    pipeline_cfg, _ = load_pipeline_runtime_config()
+    snapshot = ConfigSnapshotRecord(
+        config_version_id=f"cfg_{uuid4().hex}",
+        scope=scope,
+        created_at=_iso_now(),
+        payload={
+            "request": {
+                "sessionId": payload.sessionId,
+                "traceId": payload.traceId,
+                "mode": payload.mode,
+                "configPath": payload.configPath,
+                "historyLength": len(payload.history),
+                "query": payload.query,
+                "planner": planner,
+            },
+            "runtime": {
+                "llm": asdict(llm_cfg) if llm_cfg is not None else None,
+                "planner": asdict(planner_cfg) if planner_cfg is not None else None,
+                "pipeline": asdict(pipeline_cfg) if pipeline_cfg is not None else None,
+            },
+        },
+        metadata={"planner": planner},
+    )
+    return save_config_snapshot(snapshot)
+
+
+def _append_chat_job_delta(job_id: str, trace_id: str, mode: str, piece: str) -> None:
+    if not piece:
+        return
+    current = get_stored_job(job_id)
+    latest_output = f"{current.latest_output_text or ''}{piece}" if current is not None else piece
+    if current is not None:
+        upsert_job(current.model_copy(update={"latest_output_text": latest_output, "updated_at": _iso_now()}))
+    append_job_event(
+        job_id=job_id,
+        event_type="message",
+        created_at=_iso_now(),
+        payload={"type": "message", "traceId": trace_id, "mode": mode, "content": piece},
+    )
+
+
+def _update_chat_job_progress_stage(job_id: str, stage: str) -> None:
+    normalized = str(stage or "").strip()
+    if not normalized:
+        return
+    current = get_stored_job(job_id)
+    if current is None or current.progress_stage == normalized:
+        return
+    upsert_job(current.model_copy(update={"progress_stage": normalized, "updated_at": _iso_now()}))
+
+
+def _append_chat_job_agent_event(job_id: str, event: dict[str, Any]) -> None:
+    payload = dict(event.get("data") or {})
+    if not payload:
+        return
+    append_job_event(
+        job_id=job_id,
+        event_type="agent_event",
+        created_at=_iso_now(),
+        payload=payload,
+    )
+
+
+def _append_chat_job_llm_stage_event(job_id: str, trace_id: str, mode: str, event: dict[str, Any]) -> None:
+    debug_stage = str(event.get("debug_stage") or event.get("stage") or "").strip()
+    event_name = str(event.get("event") or "").strip()
+    if not debug_stage or not event_name:
+        return
+    payload = {
+        "type": "llmStage",
+        "traceId": trace_id,
+        "mode": mode,
+        "stage": debug_stage,
+        "event": event_name,
+        "provider": str(event.get("provider") or "").strip() or None,
+        "model": str(event.get("model") or "").strip() or None,
+        "statusCode": int(event.get("status_code")) if isinstance(event.get("status_code"), int) else None,
+        "elapsedMs": int(event.get("elapsed_ms")) if isinstance(event.get("elapsed_ms"), int) else None,
+        "reason": str(event.get("reason") or "").strip() or None,
+        "timestamp": str(event.get("timestamp") or _iso_now()),
+    }
+    append_job_event(
+        job_id=job_id,
+        event_type="llm_stage",
+        created_at=_iso_now(),
+        payload=payload,
+    )
+    _update_chat_job_progress_stage(job_id, debug_stage)
+
+
+def _list_llm_log_files(*, limit: int = 12) -> list[dict[str, Any]]:
+    effective = resolve_effective_llm_log_config()
+    safe_root = Path(effective.safe_root)
+    current_name = Path(effective.log_path).name
+    rows: list[dict[str, Any]] = []
+    if not safe_root.exists():
+        return rows
+    for path in safe_root.glob("llm-api-*.log"):
+        if not path.is_file():
+            continue
+        stat = path.stat()
+        rows.append(
+            {
+                "file_name": path.name,
+                "path": str(path),
+                "size_bytes": int(stat.st_size),
+                "updated_at": datetime.fromtimestamp(stat.st_mtime, timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z"),
+                "current": path.name == current_name,
+                "download_url": f"/api/admin/llm-logs/download?filename={path.name}",
+            }
+        )
+    rows.sort(key=lambda item: str(item.get("updated_at") or ""), reverse=True)
+    return rows[: max(1, int(limit))]
+
+
+def _resolve_llm_log_download_target(filename: str | None) -> Path:
+    effective = resolve_effective_llm_log_config()
+    safe_root = Path(effective.safe_root).resolve()
+    if not filename:
+        return Path(effective.log_path)
+    normalized_name = Path(str(filename)).name
+    if normalized_name != str(filename):
+        raise HTTPException(status_code=400, detail={"code": "INVALID_LLM_LOG_FILENAME", "message": "filename must not include path segments"})
+    target = (safe_root / normalized_name).resolve()
+    try:
+        target.relative_to(safe_root)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail={"code": "INVALID_LLM_LOG_FILENAME", "message": "filename is outside llm log safe root"}) from exc
+    return target
+
+
+def _create_background_chat_job(payload: KernelChatRequest, *, planner: bool) -> JobStatusResponse:
+    trace_id = payload.traceId or f"trace_{uuid4().hex}"
+    job_id = f"job_{'planner' if planner else 'chat'}_{uuid4().hex}"
+    snapshot = _create_config_snapshot(scope="planner_chat" if planner else "chat_answer", payload=payload, planner=planner)
+    queued_at = _iso_now()
+    initial = JobRecord(
+        job_id=job_id,
+        kind="planner_chat" if planner else "chat_answer",
+        state="queued",
+        created_at=queued_at,
+        updated_at=queued_at,
+        accepted=True,
+        session_id=payload.sessionId,
+        trace_id=trace_id,
+        config_version_id=snapshot.config_version_id,
+        metadata={"mode": payload.mode, "configPath": payload.configPath, "historyLength": len(payload.history)},
+    )
+    upsert_job(initial)
+    append_job_event(
+        job_id=job_id,
+        event_type="state_changed",
+        created_at=queued_at,
+        payload={"state": "queued", "traceId": trace_id, "mode": payload.mode},
+    )
+    cancel_event = threading.Event()
+    with _TASKS_LOCK:
+        _JOB_CANCEL_EVENTS[job_id] = cancel_event
+
+    def worker() -> None:
+        started_at = _iso_now()
+        running_stage = "planner" if planner else "answer"
+        running = initial.model_copy(update={"state": "running", "updated_at": started_at, "progress_stage": running_stage})
+        upsert_job(running)
+        append_job_event(
+            job_id=job_id,
+            event_type="state_changed",
+            created_at=started_at,
+            payload={"state": "running", "traceId": trace_id, "mode": payload.mode, "progressStage": running_stage},
+        )
+        streamed_chunks = 0
+
+        def on_llm_event(event: dict[str, Any]) -> None:
+            event_trace_id = str(event.get("trace_id") or "").strip()
+            if event_trace_id != trace_id:
+                return
+            _append_chat_job_llm_stage_event(job_id, trace_id, payload.mode, event)
+
+        def on_delta(piece: str) -> None:
+            nonlocal streamed_chunks
+            if cancel_event.is_set():
+                raise _TaskCancelledError("task cancelled by user")
+            if not piece:
+                return
+            streamed_chunks += 1
+            _append_chat_job_delta(job_id, trace_id, payload.mode, piece)
+
+        try:
+            register_llm_event_callback(on_llm_event)
+            if cancel_event.is_set():
+                raise _TaskCancelledError("task cancelled by user")
+            runner = _run_planner_shell_once if planner else _run_qa_once
+            with llm_debug_scope(trace_id=trace_id):
+                response = runner(payload.model_copy(update={"traceId": trace_id}), on_delta)
+            if cancel_event.is_set():
+                raise _TaskCancelledError("task cancelled by user")
+            if streamed_chunks == 0:
+                for piece in _chunk_stream_fallback_answer(response.answer):
+                    if cancel_event.is_set():
+                        raise _TaskCancelledError("task cancelled by user")
+                    _append_chat_job_delta(job_id, trace_id, payload.mode, piece)
+            if cancel_event.is_set():
+                raise _TaskCancelledError("task cancelled by user")
+            append_job_event(
+                job_id=job_id,
+                event_type="sources",
+                created_at=_iso_now(),
+                payload={
+                    "type": "sources",
+                    "traceId": trace_id,
+                    "mode": payload.mode,
+                    "runId": getattr(response, "runId", None),
+                    "sources": [_serialize_source_item(item) for item in response.sources],
+                },
+            )
+            completed_at = _iso_now()
+            upsert_job(
+                running.model_copy(
+                    update={
+                        "state": "succeeded",
+                        "updated_at": completed_at,
+                        "run_id": getattr(response, "runId", None),
+                        "progress_stage": "completed",
+                        "latest_output_text": response.answer,
+                        "result_payload": {
+                            "answer": response.answer,
+                            "sources": [_serialize_source_item(item) for item in response.sources],
+                            "runId": getattr(response, "runId", None),
+                            "traceId": trace_id,
+                        },
+                    }
+                )
+            )
+            append_job_event(
+                job_id=job_id,
+                event_type="messageEnd",
+                created_at=completed_at,
+                payload={"type": "messageEnd", "traceId": trace_id, "mode": payload.mode, "runId": getattr(response, "runId", None)},
+            )
+        except _TaskCancelledError:
+            cancelled_at = _iso_now()
+            current = get_stored_job(job_id) or running
+            if current.state != "cancelled":
+                upsert_job(
+                    current.model_copy(
+                        update={
+                            "state": "cancelled",
+                            "updated_at": cancelled_at,
+                            "progress_stage": "cancelled",
+                        }
+                    )
+                )
+                append_job_event(
+                    job_id=job_id,
+                    event_type="state_changed",
+                    created_at=cancelled_at,
+                    payload={"state": "cancelled", "traceId": trace_id, "mode": payload.mode},
+                )
+        except HTTPException as exc:
+            failed_at = _iso_now()
+            detail = exc.detail if isinstance(exc.detail, dict) else {"message": str(exc.detail)}
+            upsert_job(
+                running.model_copy(
+                    update={
+                        "state": "failed",
+                        "updated_at": failed_at,
+                        "progress_stage": "failed",
+                        "error_payload": {"status_code": exc.status_code, **detail},
+                    }
+                )
+            )
+            append_job_event(
+                job_id=job_id,
+                event_type="error",
+                created_at=failed_at,
+                payload={"type": "error", "traceId": trace_id, "statusCode": exc.status_code, "detail": detail},
+            )
+        except Exception as exc:
+            failed_at = _iso_now()
+            upsert_job(
+                running.model_copy(
+                    update={
+                        "state": "failed",
+                        "updated_at": failed_at,
+                        "progress_stage": "failed",
+                        "error_payload": {"message": str(exc)},
+                    }
+                )
+            )
+            append_job_event(
+                job_id=job_id,
+                event_type="error",
+                created_at=failed_at,
+                payload={"type": "error", "traceId": trace_id, "message": str(exc)},
+            )
+        finally:
+            unregister_llm_event_callback(on_llm_event)
+            with _TASKS_LOCK:
+                _JOB_CANCEL_EVENTS.pop(job_id, None)
+
+    threading.Thread(target=worker, daemon=True).start()
+    created = get_stored_job(job_id)
+    assert created is not None
+    return _job_response(created)
 
 
 def _extract_import_failure_reasons(report: dict[str, Any]) -> list[str]:
@@ -1956,6 +2596,8 @@ def _start_library_import_task(*, task_id: str, upload_paths: list[Path], topic:
         state="queued",
         created_at=now,
         updated_at=now,
+        job_id=task_id,
+        job_kind="library_import",
         progress=_build_task_progress(
             stage="queued",
             processed=0,
@@ -2012,7 +2654,7 @@ def _start_library_import_task(*, task_id: str, upload_paths: list[Path], topic:
                         for idx, path in enumerate(upload_paths[:6])
                     ],
                 )
-                _TASKS[task_id] = local
+                _save_task(local)
 
             def on_progress(event: dict[str, Any]) -> None:
                 nonlocal latest_stage
@@ -2026,7 +2668,7 @@ def _start_library_import_task(*, task_id: str, upload_paths: list[Path], topic:
                         raise _TaskCancelledError("task cancelled by user")
                     local.progress = _task_progress_from_event(event, elapsed_ms=elapsed_ms)
                     local.updated_at = _iso_now()
-                    _TASKS[task_id] = local
+                    _save_task(local)
 
             result = run_import_workflow(uploaded_files=upload_paths, topic=topic, progress_callback=on_progress)
             finished_at = _iso_now()
@@ -2051,7 +2693,7 @@ def _start_library_import_task(*, task_id: str, upload_paths: list[Path], topic:
                         else TaskErrorInfo(
                             stage=latest_stage or "library_import",
                             message=str(result.get("message", "") or "论文导入失败"),
-                            recovery="请检查 PDF 内容、批次大小或稍后分批重试",
+                            recovery="请检查本地文档内容、批次大小或稍后分批重试",
                         )
                     )
                 if local.progress is None:
@@ -2107,7 +2749,7 @@ def _start_library_import_task(*, task_id: str, upload_paths: list[Path], topic:
                         stage_total=max(1, total_candidates),
                         recent_items=recent_items,
                     )
-                _TASKS[task_id] = local
+                _save_task(local)
         except _TaskCancelledError:
             with _TASKS_LOCK:
                 local = _TASKS[task_id]
@@ -2129,7 +2771,7 @@ def _start_library_import_task(*, task_id: str, upload_paths: list[Path], topic:
                     stage_total=local.progress.stage_total if local.progress else len(upload_paths),
                     recent_items=local.progress.recent_items if local.progress else [],
                 )
-                _TASKS[task_id] = local
+                _save_task(local)
         except Exception as exc:  # pragma: no cover - defensive
             with _TASKS_LOCK:
                 local = _TASKS[task_id]
@@ -2156,7 +2798,7 @@ def _start_library_import_task(*, task_id: str, upload_paths: list[Path], topic:
                     stage_total=local.progress.stage_total if local.progress else len(upload_paths),
                     recent_items=local.progress.recent_items if local.progress else [],
                 )
-                _TASKS[task_id] = local
+                _save_task(local)
         finally:
             shutil.rmtree(DATA_DIR / "raw" / "_api_upload_staging" / task_id, ignore_errors=True)
             with _TASKS_LOCK:
@@ -2355,12 +2997,10 @@ def _read_latest_pipeline_status() -> dict[str, Any] | None:
 
 
 def _safe_upload_name(raw: str, idx: int) -> str:
-    name = Path(raw or f"upload-{idx}.pdf").name
+    name = Path(raw or f"upload-{idx}.txt").name
     cleaned = re.sub(r"[^A-Za-z0-9._-]+", "-", name).strip("-")
     if not cleaned:
-        cleaned = f"upload-{idx}.pdf"
-    if not cleaned.lower().endswith(".pdf"):
-        cleaned = f"{cleaned}.pdf"
+        cleaned = f"upload-{idx}.txt"
     return cleaned
 
 
@@ -2519,6 +3159,19 @@ def _load_import_history(limit: int = 20) -> list[ImportHistoryEntryResponse]:
             )
         )
     return out
+
+
+@app.get("/api/admin/llm-debug/{trace_id}", response_model=LlmDebugTraceResponse)
+def get_llm_debug_trace(trace_id: str) -> LlmDebugTraceResponse:
+    normalized = str(trace_id or "").strip()
+    if not normalized:
+        raise HTTPException(status_code=400, detail={"code": "INVALID_TRACE_ID", "message": "trace_id is required"})
+    with _LLM_DEBUG_STORE_LOCK:
+        payload = dict(_LLM_DEBUG_STORE.get(normalized) or {})
+    records = list(payload.get("records") or [])
+    if not records:
+        raise HTTPException(status_code=404, detail={"code": "LLM_DEBUG_NOT_FOUND", "message": "No llm debug records for trace_id"})
+    return LlmDebugTraceResponse(trace_id=normalized, count=len(records), records=[LlmDebugRecord(**record) for record in records])
 
 
 def _get_task_or_404(task_id: str) -> TaskStatusResponse:
@@ -2707,6 +3360,7 @@ def get_admin_llm_config() -> dict[str, Any]:
 
 @app.post("/api/admin/llm-config")
 def save_admin_llm_config(payload: AdminSaveLLMConfigRequest) -> dict[str, Any]:
+    _ensure_no_active_jobs_for_settings()
     try:
         answer_stage = _build_stage_payload(
             stage_name="answer",
@@ -2840,6 +3494,7 @@ def get_admin_pipeline_config() -> dict[str, Any]:
     saved, err = load_pipeline_runtime_config()
     if err:
         raise HTTPException(status_code=500, detail={"code": "CONFIG_INVALID", "message": err})
+    effective_enabled = resolve_effective_marker_enabled()
     effective = resolve_effective_marker_tuning()
     effective_llm = resolve_effective_marker_llm()
     saved_values = asdict(saved.marker_tuning) if saved is not None else asdict(default_marker_tuning())
@@ -2847,15 +3502,17 @@ def get_admin_pipeline_config() -> dict[str, Any]:
     return {
         "configured": saved is not None,
         "saved": {
+            "marker_enabled": saved.marker_enabled if saved is not None else default_marker_enabled(),
             "marker_tuning": saved_values,
             "marker_llm": mask_marker_llm_secrets(saved_marker_llm),
         },
         "effective": {
+            "marker_enabled": effective_enabled.value,
             "marker_tuning": asdict(effective.values),
             "marker_llm": mask_marker_llm_secrets(asdict(effective_llm.values)),
         },
-        "effective_source": {"marker_tuning": effective.source, "marker_llm": effective_llm.source},
-        "warnings": effective.warnings + effective_llm.warnings,
+        "effective_source": {"marker_enabled": effective_enabled.source, "marker_tuning": effective.source, "marker_llm": effective_llm.source},
+        "warnings": effective_enabled.warnings + effective.warnings + effective_llm.warnings,
         "updated_at": saved.updated_at if saved is not None else None,
     }
 
@@ -2875,6 +3532,7 @@ def get_admin_planner_config() -> dict[str, Any]:
 
 @app.post("/api/admin/planner-config")
 def save_admin_planner_config(payload: AdminSavePlannerConfigRequest) -> dict[str, Any]:
+    _ensure_no_active_jobs_for_settings()
     try:
         saved = save_planner_runtime_config(
             service_mode=payload.service_mode,
@@ -2891,13 +3549,34 @@ def save_admin_planner_config(payload: AdminSavePlannerConfigRequest) -> dict[st
     return {"ok": True, "config": {"configured": True, **mask_planner_runtime_secrets(saved), "service_mode": saved.service_mode}}
 
 
+@app.get("/api/admin/llm-logs")
+def list_llm_logs(limit: int = Query(default=12, ge=1, le=50)) -> dict[str, Any]:
+    effective = resolve_effective_llm_log_config()
+    return {
+        "safe_root": effective.safe_root,
+        "current_log_path": effective.log_path,
+        "files": _list_llm_log_files(limit=limit),
+    }
+
+
+@app.get("/api/admin/llm-logs/download")
+def download_llm_logs(filename: str | None = None) -> FileResponse:
+    target = _resolve_llm_log_download_target(filename)
+    if not target.exists():
+        raise HTTPException(status_code=404, detail={"code": "LLM_LOG_NOT_FOUND", "message": "No llm log file available yet"})
+    return FileResponse(path=target, filename=target.name, media_type="text/plain; charset=utf-8")
+
+
 @app.post("/api/admin/pipeline-config")
 def save_admin_pipeline_config(payload: AdminSavePipelineConfigRequest) -> dict[str, Any]:
+    _ensure_no_active_jobs_for_settings()
+    enabled_payload = payload.marker_enabled
     marker_payload = payload.marker_tuning.model_dump()
     marker_llm_payload = payload.marker_llm.model_dump()
+    _, enabled_errors = validate_marker_enabled_payload(enabled_payload)
     _, field_errors = validate_marker_tuning_payload(marker_payload)
     _, marker_llm_errors = validate_marker_llm_payload(marker_llm_payload)
-    merged_errors = {**field_errors, **marker_llm_errors}
+    merged_errors = {**enabled_errors, **field_errors, **marker_llm_errors}
     if merged_errors:
         raise HTTPException(
             status_code=400,
@@ -2908,39 +3587,56 @@ def save_admin_pipeline_config(payload: AdminSavePipelineConfigRequest) -> dict[
             },
         )
     try:
-        saved = save_pipeline_runtime_config(marker_tuning=marker_payload, marker_llm=marker_llm_payload)
+        saved = save_pipeline_runtime_config(marker_enabled=enabled_payload, marker_tuning=marker_payload, marker_llm=marker_llm_payload)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail={"code": "INVALID_PARAMS", "message": str(exc)}) from exc
     except Exception as exc:  # pragma: no cover - defensive
         raise HTTPException(status_code=500, detail={"code": "CONFIG_SAVE_FAILED", "message": str(exc)}) from exc
 
+    effective_enabled = resolve_effective_marker_enabled()
     effective = resolve_effective_marker_tuning()
     effective_llm = resolve_effective_marker_llm()
     return {
         "ok": True,
         "config": {
+            "marker_enabled": saved.marker_enabled,
             "marker_tuning": asdict(saved.marker_tuning),
             "marker_llm": mask_marker_llm_secrets(saved.marker_llm),
             "updated_at": saved.updated_at,
         },
         "effective": {
+            "marker_enabled": effective_enabled.value,
             "marker_tuning": asdict(effective.values),
             "marker_llm": mask_marker_llm_secrets(asdict(effective_llm.values)),
         },
-        "effective_source": {"marker_tuning": effective.source, "marker_llm": effective_llm.source},
-        "warnings": effective.warnings + effective_llm.warnings,
+        "effective_source": {"marker_enabled": effective_enabled.source, "marker_tuning": effective.source, "marker_llm": effective_llm.source},
+        "warnings": effective_enabled.warnings + effective.warnings + effective_llm.warnings,
     }
 
 
 @app.get("/api/admin/runtime-overview")
 def get_runtime_overview() -> dict[str, Any]:
+    active_jobs = _active_job_summaries()
+    llm_log_cfg = resolve_effective_llm_log_config()
+    llm_logging_summary = {
+        "enabled": llm_log_cfg.enabled,
+        "max_body_chars": llm_log_cfg.max_body_chars,
+        "safe_root": llm_log_cfg.safe_root,
+        "log_path": llm_log_cfg.log_path,
+        "download_url": "/api/admin/llm-logs/download",
+        "recent_files": _list_llm_log_files(limit=8),
+        "source": llm_log_cfg.source.get("enabled", "default"),
+        "effective_source": llm_log_cfg.source,
+    }
     llm_cfg, llm_err = load_runtime_llm_config()
     if llm_err:
         return {
             "llm": {},
             "planner": {},
             "pipeline": {},
-            "status": {"level": "ERROR", "reasons": [llm_err]},
+            "observability": {"llm_logging": llm_logging_summary},
+            "jobs": {"active": active_jobs, "settings_locked": bool(active_jobs)},
+            "status": {"level": "ERROR", "reasons": [llm_err, *llm_log_cfg.warnings]},
             "updated_at": _iso_now(),
         }
     planner_cfg, planner_err = load_planner_runtime_config()
@@ -2949,7 +3645,9 @@ def get_runtime_overview() -> dict[str, Any]:
             "llm": {},
             "planner": {},
             "pipeline": {},
-            "status": {"level": "ERROR", "reasons": [planner_err]},
+            "observability": {"llm_logging": llm_logging_summary},
+            "jobs": {"active": active_jobs, "settings_locked": bool(active_jobs)},
+            "status": {"level": "ERROR", "reasons": [planner_err, *llm_log_cfg.warnings]},
             "updated_at": _iso_now(),
         }
 
@@ -3022,6 +3720,7 @@ def get_runtime_overview() -> dict[str, Any]:
         "source_label": runtime_source_label(planner_source.get("model", "default")),
         "effective_source": planner_source,
     }
+    effective_enabled = resolve_effective_marker_enabled()
     effective = resolve_effective_marker_tuning()
     effective_llm = resolve_effective_marker_llm()
     marker_llm_entry = _marker_llm_runtime_entry(asdict(effective_llm.values), effective_llm.source)
@@ -3031,7 +3730,7 @@ def get_runtime_overview() -> dict[str, Any]:
         llm=llm,
         planner=planner,
         marker_source=effective.source,
-        marker_warnings=effective_stage_llm.warnings + planner_warnings + effective.warnings + effective_llm.warnings + config_warnings,
+        marker_warnings=effective_stage_llm.warnings + planner_warnings + effective_enabled.warnings + effective.warnings + effective_llm.warnings + config_warnings + llm_log_cfg.warnings,
         marker_llm=marker_llm_entry,
         artifact_summary=artifact_summary,
         ingest_degradation={
@@ -3044,8 +3743,14 @@ def get_runtime_overview() -> dict[str, Any]:
         "llm": llm,
         "planner": planner,
         "pipeline": {
+            "marker_enabled": effective_enabled.value,
+            "marker_mode": "enhanced" if effective_enabled.value else "base_only",
+            "marker_mode_summary": _resolve_marker_mode_summary(
+                marker_enabled=effective_enabled.value,
+                degraded=bool(latest_import.degraded),
+            ),
             "marker_tuning": asdict(effective.values),
-            "effective_source": {"marker_tuning": effective.source},
+            "effective_source": {"marker_enabled": effective_enabled.source, "marker_tuning": effective.source},
             "marker_llm": marker_llm_entry,
             "last_ingest": {
                 "degraded": latest_import.degraded,
@@ -3056,6 +3761,11 @@ def get_runtime_overview() -> dict[str, Any]:
                 "stage_updated_at": latest_import.stage_updated_at,
             },
             "artifacts": artifact_summary,
+        },
+        "observability": {"llm_logging": llm_logging_summary},
+        "jobs": {
+            "active": active_jobs,
+            "settings_locked": bool(active_jobs),
         },
         "status": {
             "level": status_level,
@@ -3101,6 +3811,8 @@ def start_graph_build_task(payload: GraphBuildTaskStartRequest) -> TaskStatusRes
         state="queued",
         created_at=now,
         updated_at=now,
+        job_id=task_id,
+        job_kind="graph_build",
         progress=TaskProgressInfo(stage="queued", processed=0, total=0, elapsed_ms=0, message="任务已排队"),
     )
     _save_task(task)
@@ -3123,7 +3835,7 @@ def start_graph_build_task(payload: GraphBuildTaskStartRequest) -> TaskStatusRes
                     elapsed_ms=0,
                     message="图构建任务已启动",
                 )
-                _TASKS[task_id] = local
+                _save_task(local)
 
             def on_progress(progress: dict[str, Any]) -> None:
                 nonlocal latest_stage
@@ -3147,7 +3859,7 @@ def start_graph_build_task(payload: GraphBuildTaskStartRequest) -> TaskStatusRes
                         message=message,
                     )
                     local.updated_at = _iso_now()
-                    _TASKS[task_id] = local
+                    _save_task(local)
 
             run_kwargs: dict[str, Any] = {
                 "threshold": max(1, int(payload.threshold)),
@@ -3184,7 +3896,7 @@ def start_graph_build_task(payload: GraphBuildTaskStartRequest) -> TaskStatusRes
                         elapsed_ms=int((time.perf_counter() - started) * 1000),
                         message="图构建已取消",
                     )
-                _TASKS[task_id] = local
+                _save_task(local)
         except _TaskCancelledError:
             with _TASKS_LOCK:
                 local = _TASKS[task_id]
@@ -3206,7 +3918,7 @@ def start_graph_build_task(payload: GraphBuildTaskStartRequest) -> TaskStatusRes
                         elapsed_ms=int((time.perf_counter() - started) * 1000),
                         message="图构建已取消",
                     )
-                _TASKS[task_id] = local
+                _save_task(local)
         except Exception as exc:  # pragma: no cover - defensive
             with _TASKS_LOCK:
                 local = _TASKS[task_id]
@@ -3225,7 +3937,7 @@ def start_graph_build_task(payload: GraphBuildTaskStartRequest) -> TaskStatusRes
                         elapsed_ms=int((time.perf_counter() - started) * 1000),
                         message="图构建失败",
                     )
-                _TASKS[task_id] = local
+                _save_task(local)
         finally:
             with _TASKS_LOCK:
                 _TASK_CANCEL_EVENTS.pop(task_id, None)
@@ -3269,7 +3981,7 @@ def cancel_task(task_id: str) -> TaskCancelResponse:
             elapsed_ms=task.progress.elapsed_ms if task.progress else 0,
             message=f"{task_label}已取消",
         )
-        _TASKS[task_id] = task
+        _save_task(task)
         cancel_event = _TASK_CANCEL_EVENTS.get(task_id)
         if cancel_event is not None:
             cancel_event.set()
@@ -3291,6 +4003,71 @@ def list_tasks(limit: int = 20) -> list[TaskStatusResponse]:
         tasks = list(_TASKS.values())
     tasks.sort(key=lambda item: item.updated_at, reverse=True)
     return [_task_snapshot(item) for item in tasks[:safe_limit]]
+
+
+@app.get("/api/jobs", response_model=list[JobStatusResponse])
+def list_jobs(state: str | None = None, limit: int = 50) -> list[JobStatusResponse]:
+    states = {item.strip() for item in str(state or "").split(",") if item.strip()} or None
+    return [_job_response(item) for item in list_stored_jobs(states=states, limit=limit)]
+
+
+@app.get("/api/jobs/{job_id}", response_model=JobStatusResponse)
+def get_job_status(job_id: str) -> JobStatusResponse:
+    record = get_stored_job(job_id)
+    if record is None:
+        raise HTTPException(status_code=404, detail={"code": "JOB_NOT_FOUND", "message": f"job_id not found: {job_id}"})
+    return _job_response(record)
+
+
+@app.get("/api/jobs/{job_id}/events", response_model=list[JobEventResponse])
+def get_job_events(job_id: str, after_seq: int = 0, limit: int = 500) -> list[JobEventResponse]:
+    if get_stored_job(job_id) is None:
+        raise HTTPException(status_code=404, detail={"code": "JOB_NOT_FOUND", "message": f"job_id not found: {job_id}"})
+    return [_job_event_response(item) for item in list_job_events(job_id, after_seq=after_seq, limit=limit)]
+
+
+@app.get("/api/jobs/{job_id}/llm-debug", response_model=LlmDebugTraceResponse)
+def get_job_llm_debug(job_id: str) -> LlmDebugTraceResponse:
+    record = get_stored_job(job_id)
+    if record is None:
+        raise HTTPException(status_code=404, detail={"code": "JOB_NOT_FOUND", "message": f"job_id not found: {job_id}"})
+    trace_id = str(record.trace_id or "").strip()
+    if not trace_id:
+        raise HTTPException(status_code=404, detail={"code": "LLM_DEBUG_NOT_FOUND", "message": "job has no trace_id"})
+    return get_llm_debug_trace(trace_id)
+
+
+@app.post("/api/jobs/{job_id}/cancel", response_model=JobCancelResponse)
+def cancel_job(job_id: str) -> JobCancelResponse:
+    record = get_stored_job(job_id)
+    if record is None:
+        raise HTTPException(status_code=404, detail={"code": "JOB_NOT_FOUND", "message": f"job_id not found: {job_id}"})
+    if record.kind in {"graph_build", "library_import"}:
+        task_result = cancel_task(job_id)
+        latest = get_stored_job(job_id)
+        if latest is None:
+            latest = record.model_copy(update={"state": task_result.state, "updated_at": task_result.updated_at})
+        return _job_cancel_response(latest, cancelled=task_result.cancelled, message=task_result.message)
+    if record.kind not in {"chat_answer", "planner_chat"}:
+        raise HTTPException(status_code=409, detail={"code": "JOB_CANCEL_UNSUPPORTED", "message": f"job kind does not support cancel: {record.kind}"})
+    if record.state in {"succeeded", "failed", "cancelled"}:
+        return _job_cancel_response(record, cancelled=False, message=f"任务已处于终态：{record.state}")
+
+    cancelled_at = _iso_now()
+    updated = record.model_copy(update={"state": "cancelled", "updated_at": cancelled_at, "progress_stage": "cancelled"})
+    upsert_job(updated)
+    append_job_event(
+        job_id=job_id,
+        event_type="state_changed",
+        created_at=cancelled_at,
+        payload={"state": "cancelled", "traceId": record.trace_id, "mode": record.metadata.get("mode")},
+    )
+    with _TASKS_LOCK:
+        cancel_event = _JOB_CANCEL_EVENTS.get(job_id)
+    if cancel_event is not None:
+        cancel_event.set()
+    latest = get_stored_job(job_id) or updated
+    return _job_cancel_response(latest, cancelled=True, message="任务取消请求已接收")
 
 
 @app.get("/api/library/import-latest", response_model=ImportLatestResultResponse)
@@ -3394,11 +4171,18 @@ def import_library_from_dir(payload: LibraryImportFromDirRequest) -> LibraryImpo
             detail={"code": "DIR_NOT_FOUND", "message": f"目录不存在: {source_dir}"},
         )
 
-    pdf_paths = sorted(path for path in source_dir.rglob("*") if path.is_file() and path.suffix.lower() == ".pdf")
-    if not pdf_paths:
+    local_paths = sorted(
+        path
+        for path in source_dir.rglob("*")
+        if path.is_file() and path.suffix.lower() in {
+            ".pdf", ".txt", ".md", ".mdx", ".html", ".htm", ".tex", ".json", ".xml", ".yaml", ".yml", ".csv",
+            ".log", ".conf", ".ini", ".properties", ".sql", ".docx", ".pptx", ".xlsx", ".rtf", ".odt", ".epub"
+        }
+    )
+    if not local_paths:
         raise HTTPException(
             status_code=400,
-            detail={"code": "NO_PDF_FILES", "message": f"目录中未找到 PDF: {source_dir}"},
+            detail={"code": "NO_LOCAL_DOCS", "message": f"目录中未找到可导入文档: {source_dir}"},
         )
 
     active = _find_active_task("library_import")
@@ -3413,11 +4197,11 @@ def import_library_from_dir(payload: LibraryImportFromDirRequest) -> LibraryImpo
         )
 
     task_id = f"task_library_import_{uuid4().hex}"
-    task = _start_library_import_task(task_id=task_id, upload_paths=pdf_paths, topic=payload.topic)
+    task = _start_library_import_task(task_id=task_id, upload_paths=local_paths, topic=payload.topic)
     return LibraryImportResponse(
         ok=True,
-        message=f"已接收目录中的 {len(pdf_paths)} 个 PDF，后台正在导入。",
-        success_count=len(pdf_paths),
+        message=f"已接收目录中的 {len(local_paths)} 个文档，后台正在导入。",
+        success_count=len(local_paths),
         failed_count=0,
         task_id=task.task_id,
         task_kind=task.task_kind,
@@ -3436,6 +4220,11 @@ def qa(payload: KernelChatRequest) -> KernelChatResponse:
         raise HTTPException(status_code=500, detail={"code": "KERNEL_UNKNOWN", "message": str(exc)}) from exc
 
 
+@app.post("/api/jobs/chat", response_model=JobCreateResponse)
+def create_chat_job(payload: KernelChatRequest) -> JobCreateResponse:
+    return JobCreateResponse(job=_create_background_chat_job(payload, planner=False))
+
+
 @app.post("/qa/stream")
 def qa_stream(payload: KernelChatRequest) -> StreamingResponse:
     return _build_streaming_chat_response(payload, _run_qa_once)
@@ -3451,6 +4240,11 @@ def planner_qa(payload: KernelChatRequest) -> KernelChatResponse:
         raise HTTPException(status_code=500, detail={"code": "KERNEL_BAD_RESPONSE", "message": str(exc)}) from exc
     except Exception as exc:  # pragma: no cover - defensive
         raise HTTPException(status_code=500, detail={"code": "KERNEL_UNKNOWN", "message": str(exc)}) from exc
+
+
+@app.post("/api/jobs/planner", response_model=JobCreateResponse)
+def create_planner_job(payload: KernelChatRequest) -> JobCreateResponse:
+    return JobCreateResponse(job=_create_background_chat_job(payload, planner=True))
 
 
 @app.post("/planner/qa/stream")

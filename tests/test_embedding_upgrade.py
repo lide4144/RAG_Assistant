@@ -9,9 +9,10 @@ from pathlib import Path
 from unittest.mock import patch
 
 from app.config import PipelineConfig
-from app.embedding_api import EmbeddingAPIError
+from app.embedding_api import EmbeddingAPIError, fetch_embeddings
 from app.index_bm25 import build_bm25_index
 from app.index_vec import EmbeddingBuildStats, VecIndex, build_embedding_vec_index, build_vec_index, load_vec_index
+from app.llm_client import clear_llm_event_callbacks, register_llm_event_callback
 from app.qa import ensure_indexes
 from app.retrieve import load_indexes_and_config, retrieve_candidates
 
@@ -31,6 +32,9 @@ def _fake_fetch_embeddings(texts, **kwargs):
 
 
 class EmbeddingUpgradeTests(unittest.TestCase):
+    def setUp(self) -> None:
+        clear_llm_event_callbacks()
+
     def _write_chunks(self, path: Path) -> None:
         rows = [
             {
@@ -155,6 +159,43 @@ class EmbeddingUpgradeTests(unittest.TestCase):
             self.assertEqual(rows[0]["model"], "fake-model")
             self.assertEqual(rows[0]["retries"], 2)
             self.assertIn("synthetic-429", rows[0]["error"])
+
+    def test_fetch_embeddings_emits_observability(self) -> None:
+        events: list[dict[str, object]] = []
+        register_llm_event_callback(events.append)
+
+        class _Resp:
+            headers = {"x-trace-id": "embed-trace-1"}
+
+            def __enter__(self) -> "_Resp":
+                return self
+
+            def __exit__(self, exc_type, exc, tb) -> None:
+                return None
+
+            def read(self) -> bytes:
+                return json.dumps({"data": [{"embedding": [0.1, 0.2, 0.3]}]}, ensure_ascii=False).encode("utf-8")
+
+        with (
+            patch.dict("os.environ", {"TEST_EMBED_KEY": "token"}, clear=False),
+            patch("urllib.request.urlopen", return_value=_Resp()),
+        ):
+            vectors = fetch_embeddings(
+                ["semantic game details"],
+                base_url="https://api.example.com/v1",
+                model="embed-model",
+                api_key_env="TEST_EMBED_KEY",
+                provider="siliconflow",
+            )
+
+        self.assertEqual(vectors, [[0.1, 0.2, 0.3]])
+        success_event = next(e for e in events if str(e.get("event")) == "request_success")
+        self.assertEqual(success_event.get("debug_stage"), "embedding")
+        self.assertEqual(success_event.get("endpoint"), "https://api.example.com/v1/embeddings")
+        self.assertEqual(success_event.get("transport"), "urllib")
+        self.assertIn('"model": "embed-model"', str(success_event.get("request_payload")))
+        self.assertIn('"embedding": [', str(success_event.get("response_payload")))
+        self.assertIn('"embedding_count": 1', str(success_event.get("response_text")))
 
     def test_max_concurrent_requests_limits_real_parallelism(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

@@ -20,7 +20,15 @@ class PipelineRuntimeConfigApiTests(unittest.TestCase):
     def test_save_and_get_pipeline_config(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             runtime_path = Path(tmp) / "pipeline_runtime_config.json"
-            with patch("app.pipeline_runtime_config.PIPELINE_RUNTIME_CONFIG_PATH", runtime_path):
+            with patch("app.pipeline_runtime_config.PIPELINE_RUNTIME_CONFIG_PATH", runtime_path), patch.dict(
+                "os.environ",
+                {
+                    "OPENAI_MODEL": "",
+                    "OPENAI_BASE_URL": "",
+                    "MARKER_ENABLED": "",
+                },
+                clear=False,
+            ):
                 saved = save_admin_pipeline_config(
                     AdminSavePipelineConfigRequest(
                         marker_tuning={
@@ -93,6 +101,35 @@ class PipelineRuntimeConfigApiTests(unittest.TestCase):
     def test_runtime_overview_falls_back_to_static_baseline_when_runtime_missing(self) -> None:
         with (
             patch("app.kernel_api.load_runtime_llm_config", return_value=(None, None)),
+            patch("app.kernel_api.load_planner_runtime_config", return_value=(None, None)),
+            patch(
+                "app.kernel_api.resolve_effective_planner_runtime",
+                return_value=(
+                    type(
+                        "PlannerRuntime",
+                        (),
+                        {"service_mode": "production", "provider": "openai", "api_base": "https://api.example.com/v1", "api_key": "", "model": "gpt-4.1", "timeout_ms": 6000},
+                    )(),
+                    {"service_mode": "default", "provider": "default", "api_base": "default", "model": "default", "timeout_ms": "default"},
+                    [],
+                ),
+            ),
+            patch(
+                "app.kernel_api.evaluate_planner_service_state",
+                return_value={
+                    "service_mode": "production",
+                    "configured": True,
+                    "llm_required": True,
+                    "formal_chat_available": True,
+                    "blocked": False,
+                    "reason_code": None,
+                    "reason_message": None,
+                },
+            ),
+            patch(
+                "app.kernel_api.resolve_effective_marker_enabled",
+                return_value=type("MarkerEnabled", (), {"value": False, "source": "default", "warnings": []})(),
+            ),
             patch(
                 "app.kernel_api.resolve_effective_marker_tuning",
                 return_value=type(
@@ -141,6 +178,35 @@ class PipelineRuntimeConfigApiTests(unittest.TestCase):
         )
         with (
             patch("app.kernel_api.load_runtime_llm_config", return_value=(llm, None)),
+            patch("app.kernel_api.load_planner_runtime_config", return_value=(None, None)),
+            patch(
+                "app.kernel_api.resolve_effective_planner_runtime",
+                return_value=(
+                    type(
+                        "PlannerRuntime",
+                        (),
+                        {"service_mode": "production", "provider": "openai", "api_base": "https://api.example.com/v1", "api_key": "", "model": "gpt-4.1", "timeout_ms": 6000},
+                    )(),
+                    {"service_mode": "default", "provider": "default", "api_base": "default", "model": "default", "timeout_ms": "default"},
+                    [],
+                ),
+            ),
+            patch(
+                "app.kernel_api.evaluate_planner_service_state",
+                return_value={
+                    "service_mode": "production",
+                    "configured": True,
+                    "llm_required": True,
+                    "formal_chat_available": True,
+                    "blocked": False,
+                    "reason_code": None,
+                    "reason_message": None,
+                },
+            ),
+            patch(
+                "app.kernel_api.resolve_effective_marker_enabled",
+                return_value=type("MarkerEnabled", (), {"value": False, "source": "runtime", "warnings": []})(),
+            ),
             patch(
                 "app.kernel_api.resolve_effective_marker_tuning",
                 return_value=type(
@@ -192,6 +258,35 @@ class PipelineRuntimeConfigApiTests(unittest.TestCase):
         )
         with (
             patch("app.kernel_api.load_runtime_llm_config", return_value=(llm, None)),
+            patch("app.kernel_api.load_planner_runtime_config", return_value=(None, None)),
+            patch(
+                "app.kernel_api.resolve_effective_planner_runtime",
+                return_value=(
+                    type(
+                        "PlannerRuntime",
+                        (),
+                        {"service_mode": "production", "provider": "openai", "api_base": "https://api.example.com/v1", "api_key": "", "model": "gpt-4.1", "timeout_ms": 6000},
+                    )(),
+                    {"service_mode": "default", "provider": "default", "api_base": "default", "model": "default", "timeout_ms": "default"},
+                    [],
+                ),
+            ),
+            patch(
+                "app.kernel_api.evaluate_planner_service_state",
+                return_value={
+                    "service_mode": "production",
+                    "configured": True,
+                    "llm_required": True,
+                    "formal_chat_available": True,
+                    "blocked": False,
+                    "reason_code": None,
+                    "reason_message": None,
+                },
+            ),
+            patch(
+                "app.kernel_api.resolve_effective_marker_enabled",
+                return_value=type("MarkerEnabled", (), {"value": False, "source": "runtime", "warnings": []})(),
+            ),
             patch(
                 "app.kernel_api.resolve_effective_marker_tuning",
                 return_value=type(
@@ -216,6 +311,78 @@ class PipelineRuntimeConfigApiTests(unittest.TestCase):
             payload = get_runtime_overview()
         self.assertEqual(payload["pipeline"]["last_ingest"]["updated_at"], "2026-03-12T16:15:30Z")
         self.assertEqual(payload["pipeline"]["last_ingest"]["stage_updated_at"]["clean"], "2026-03-12T16:15:24Z")
+
+    def test_runtime_overview_exposes_degraded_marker_mode_summary(self) -> None:
+        llm = RuntimeLLMConfig(
+            answer=RuntimeStageConfig(provider="openai", api_base="https://api.example.com/v1", api_key="a", model="gpt-4.1"),
+            embedding=RuntimeStageConfig(provider="siliconflow", api_base="https://api.example.com/v1", api_key="b", model="bge"),
+            rerank=RuntimeStageConfig(provider="siliconflow", api_base="https://api.example.com/v1", api_key="c", model="rerank"),
+            rewrite=RuntimeStageConfig(provider="siliconflow", api_base="https://api.example.com/v1", api_key="d", model="rewrite"),
+            graph_entity=RuntimeStageConfig(provider="siliconflow", api_base="https://api.example.com/v1", api_key="e", model="graph"),
+            sufficiency_judge=RuntimeStageConfig(provider="siliconflow", api_base="https://api.example.com/v1", api_key="f", model="judge"),
+            updated_at="2026-03-07T00:00:00Z",
+        )
+        latest_import = ImportLatestResultResponse(
+            degraded=True,
+            fallback_reason="marker parse timeout",
+            fallback_path="marker -> legacy (parse_timeout)",
+            artifact_summary={"counts": {"healthy": 1, "missing": 0, "stale": 0}},
+        )
+        with (
+            patch("app.kernel_api.load_runtime_llm_config", return_value=(llm, None)),
+            patch("app.kernel_api.load_planner_runtime_config", return_value=(None, None)),
+            patch(
+                "app.kernel_api.resolve_effective_planner_runtime",
+                return_value=(
+                    type(
+                        "PlannerRuntime",
+                        (),
+                        {"service_mode": "production", "provider": "openai", "api_base": "https://api.example.com/v1", "api_key": "", "model": "gpt-4.1", "timeout_ms": 6000},
+                    )(),
+                    {"service_mode": "default", "provider": "default", "api_base": "default", "model": "default", "timeout_ms": "default"},
+                    [],
+                ),
+            ),
+            patch(
+                "app.kernel_api.evaluate_planner_service_state",
+                return_value={
+                    "service_mode": "production",
+                    "configured": True,
+                    "llm_required": True,
+                    "formal_chat_available": True,
+                    "blocked": False,
+                    "reason_code": None,
+                    "reason_message": None,
+                },
+            ),
+            patch(
+                "app.kernel_api.resolve_effective_marker_enabled",
+                return_value=type("MarkerEnabled", (), {"value": True, "source": "runtime", "warnings": []})(),
+            ),
+            patch(
+                "app.kernel_api.resolve_effective_marker_tuning",
+                return_value=type(
+                    "EffectiveMarker",
+                    (),
+                    {
+                        "values": MarkerTuning(),
+                        "source": {
+                            "recognition_batch_size": "runtime",
+                            "detector_batch_size": "runtime",
+                            "layout_batch_size": "runtime",
+                            "ocr_error_batch_size": "runtime",
+                            "table_rec_batch_size": "runtime",
+                            "model_dtype": "runtime",
+                        },
+                        "warnings": [],
+                    },
+                )(),
+            ),
+            patch("app.kernel_api._load_latest_import_result", return_value=latest_import),
+        ):
+            payload = get_runtime_overview()
+        self.assertEqual(payload["pipeline"]["marker_mode"], "enhanced")
+        self.assertEqual(payload["pipeline"]["marker_mode_summary"], "degraded_available")
 
     def test_runtime_overview_marks_llm_stage_env_override(self) -> None:
         llm = RuntimeLLMConfig(

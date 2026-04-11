@@ -348,6 +348,8 @@ class PlannerShellTests(unittest.TestCase):
         self.assertEqual(result["observation"]["selected_path"], "controlled_terminate")
         self.assertEqual(result["observation"]["planner_validation"]["status"], "reject")
         self.assertEqual(result["observation"]["tool_results"], [])
+        self.assertIn("系统暂不支持", result["response"].answer)
+        self.assertIn("unknown_tool", result["response"].answer)
 
     def test_missing_dependencies_rejects_llm_plan_before_tool_dispatch(self) -> None:
         planner_result = self._planner_result(
@@ -370,6 +372,8 @@ class PlannerShellTests(unittest.TestCase):
         self.assertEqual(result["observation"]["planner_shell_fallback_reason"], "missing_dependencies:paper_set")
         self.assertEqual(result["observation"]["selected_path"], "controlled_terminate")
         self.assertEqual(result["observation"]["planner_validation"]["status"], "reject")
+        self.assertIn("缺少必要的前置结果", result["response"].answer)
+        self.assertIn("paper_set", result["response"].answer)
 
     def test_action_plan_step_limit_exceeded_sets_planner_fallback_observation(self) -> None:
         planner_result = self._planner_result(
@@ -395,6 +399,7 @@ class PlannerShellTests(unittest.TestCase):
         self.assertTrue(result["observation"]["planner_shell_fallback"])
         self.assertEqual(result["observation"]["planner_shell_fallback_reason"], "action_plan_step_limit_exceeded")
         self.assertEqual(result["observation"]["selected_path"], "controlled_terminate")
+        self.assertIn("执行步骤过多", result["response"].answer)
 
     def test_multi_step_plan_executes_catalog_then_summary(self) -> None:
         planner_result = self._planner_result(

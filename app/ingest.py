@@ -25,16 +25,24 @@ from app.document_structure import (
 from app.fs_utils import FileLockTimeoutError, file_lock
 from app.marker_parser import MarkerParseError, parse_pdf_with_marker
 from app.models import ChunkRecord, PageText, PaperRecord
-from app.pipeline_runtime_config import resolve_effective_marker_llm, resolve_effective_marker_tuning, validate_marker_llm_payload
+from app.pipeline_runtime_config import (
+    resolve_effective_marker_enabled,
+    resolve_effective_marker_llm,
+    resolve_effective_marker_tuning,
+    validate_marker_llm_payload,
+)
 from app.paths import CONFIGS_DIR, RUNS_DIR
 from app.paper_summary import build_paper_summaries
 from app.parser import (
     choose_best_title,
     # Kept for backward-compatible test patch targets.
     extract_title,
+    list_local_document_files,
     list_pdf_files,
     make_paper_id,
+    parse_local_document_pages,
     parse_pdf_pages,
+    resolve_document_route,
     stable_pdf_paper_id,
 )
 from app.runlog import create_run_dir, save_json, validate_trace_schema
@@ -81,17 +89,25 @@ class ImportCandidate:
 
 
 @dataclass
-class ParsedPdf:
+class ParsedDocument:
     pages: list[PageText]
     page_errors: list[str]
     metadata_title: str | None
     title_candidates: list[str]
     structured_title_candidates: list[dict[str, Any]]
     parser_engine: str
+    parser_mode: str
     parser_fallback: bool
     parser_fallback_stage: str
     parser_fallback_reason: str
+    base_parser: str
+    enhanced_parser: str
+    route_family: str
+    source_type: str
+    file_ext: str
     structured_segments: list[dict[str, Any]]
+    controlled_skip: bool = False
+    controlled_skip_reason: str = ""
     diagnostics: dict[str, Any] | None = None
     structure_parse_status: str = STRUCTURE_UNAVAILABLE
     structure_parse_reason: str = ""
@@ -411,7 +427,7 @@ def _merge_candidates(
 
 
 def _marker_preflight_check(config: Any) -> tuple[bool, str, str]:
-    marker_enabled = bool(getattr(config, "marker_enabled", True))
+    marker_enabled = bool(getattr(config, "marker_enabled", False))
     if not marker_enabled:
         return True, "", ""
     try:
@@ -443,28 +459,64 @@ def _marker_preflight_check(config: Any) -> tuple[bool, str, str]:
     return True, "", ""
 
 
-def _parse_pdf_with_fallback(
-    pdf_path: Path,
+def _parse_local_document(
+    document_path: Path,
     config: Any,
     *,
     marker_ready: bool,
     marker_preflight_stage: str,
     marker_preflight_reason: str,
-) -> ParsedPdf:
-    marker_enabled = bool(getattr(config, "marker_enabled", True))
+) -> ParsedDocument:
+    route = resolve_document_route(document_path)
+    marker_enabled = bool(getattr(config, "marker_enabled", False))
     marker_timeout = float(getattr(config, "marker_timeout_sec", 30.0))
+    if route.route_family != "pdf":
+        pages, page_errors, metadata_title, _route = parse_local_document_pages(document_path)
+        controlled_skip = not bool(pages)
+        skip_reason = page_errors[0] if page_errors else f"{route.base_parser} produced no readable content"
+        return ParsedDocument(
+            pages=pages,
+            page_errors=page_errors,
+            metadata_title=metadata_title,
+            title_candidates=[],
+            structured_title_candidates=[],
+            parser_engine=route.base_parser,
+            parser_mode="controlled_skip" if controlled_skip else "base_only",
+            parser_fallback=False,
+            parser_fallback_stage="",
+            parser_fallback_reason="",
+            base_parser=route.base_parser,
+            enhanced_parser="",
+            route_family=route.route_family,
+            source_type=route.source_type,
+            file_ext=document_path.suffix.lower(),
+            controlled_skip=controlled_skip,
+            controlled_skip_reason=skip_reason if controlled_skip else "",
+            structured_segments=[],
+            diagnostics={},
+            structure_parse_status=STRUCTURE_UNAVAILABLE,
+            structure_parse_reason=skip_reason if controlled_skip else f"{route.base_parser}_base_parser",
+            marker_attempt_duration_sec=0.0,
+            marker_stage_timings={},
+        )
     if marker_enabled and not marker_ready:
-        pages, page_errors, metadata_title = parse_pdf_pages(pdf_path)
-        return ParsedPdf(
+        pages, page_errors, metadata_title = parse_pdf_pages(document_path)
+        return ParsedDocument(
             pages=pages,
             page_errors=page_errors,
             metadata_title=metadata_title,
             title_candidates=[],
             structured_title_candidates=[],
             parser_engine="legacy",
+            parser_mode="degraded_from_marker",
             parser_fallback=True,
             parser_fallback_stage=marker_preflight_stage or "preflight",
             parser_fallback_reason=marker_preflight_reason or "marker preflight failed",
+            base_parser="legacy",
+            enhanced_parser="marker",
+            route_family=route.route_family,
+            source_type=route.source_type,
+            file_ext=document_path.suffix.lower(),
             structured_segments=[],
             diagnostics={},
             structure_parse_status=STRUCTURE_UNAVAILABLE,
@@ -475,7 +527,7 @@ def _parse_pdf_with_fallback(
     if marker_enabled and marker_ready:
         marker_started = time.perf_counter()
         try:
-            marker_result = parse_pdf_with_marker(pdf_path, timeout_sec=marker_timeout)
+            marker_result = parse_pdf_with_marker(document_path, timeout_sec=marker_timeout)
             structured_segments = [
                 {
                     "page": block.page_num,
@@ -486,16 +538,22 @@ def _parse_pdf_with_fallback(
                 }
                 for block in marker_result.blocks
             ]
-            return ParsedPdf(
+            return ParsedDocument(
                 pages=marker_result.pages,
                 page_errors=[],
                 metadata_title=None,
                 title_candidates=marker_result.title_candidates,
                 structured_title_candidates=marker_result.structured_title_candidates,
                 parser_engine="marker",
+                parser_mode="enhanced",
                 parser_fallback=False,
                 parser_fallback_stage="",
                 parser_fallback_reason="",
+                base_parser="legacy",
+                enhanced_parser="marker",
+                route_family=route.route_family,
+                source_type=route.source_type,
+                file_ext=document_path.suffix.lower(),
                 structured_segments=structured_segments,
                 diagnostics=marker_result.diagnostics,
                 structure_parse_status=STRUCTURE_READY if structured_segments else STRUCTURE_UNAVAILABLE,
@@ -504,18 +562,24 @@ def _parse_pdf_with_fallback(
                 marker_stage_timings=marker_result.stage_timings,
             )
         except MarkerParseError as exc:
-            pages, page_errors, metadata_title = parse_pdf_pages(pdf_path)
+            pages, page_errors, metadata_title = parse_pdf_pages(document_path)
             stage = str(getattr(exc, "stage", "")).strip() or "unknown"
-            return ParsedPdf(
+            return ParsedDocument(
                 pages=pages,
                 page_errors=page_errors,
                 metadata_title=metadata_title,
                 title_candidates=[],
                 structured_title_candidates=[],
                 parser_engine="legacy",
+                parser_mode="degraded_from_marker",
                 parser_fallback=True,
                 parser_fallback_stage=stage,
                 parser_fallback_reason=str(exc),
+                base_parser="legacy",
+                enhanced_parser="marker",
+                route_family=route.route_family,
+                source_type=route.source_type,
+                file_ext=document_path.suffix.lower(),
                 structured_segments=[],
                 diagnostics={},
                 structure_parse_status=STRUCTURE_UNAVAILABLE,
@@ -523,17 +587,23 @@ def _parse_pdf_with_fallback(
                 marker_attempt_duration_sec=round(time.perf_counter() - marker_started, 3),
                 marker_stage_timings={},
             )
-    pages, page_errors, metadata_title = parse_pdf_pages(pdf_path)
-    return ParsedPdf(
+    pages, page_errors, metadata_title = parse_pdf_pages(document_path)
+    return ParsedDocument(
         pages=pages,
         page_errors=page_errors,
         metadata_title=metadata_title,
         title_candidates=[],
         structured_title_candidates=[],
         parser_engine="legacy",
+        parser_mode="base_only",
         parser_fallback=False,
         parser_fallback_stage="",
         parser_fallback_reason="",
+        base_parser="legacy",
+        enhanced_parser="",
+        route_family=route.route_family,
+        source_type=route.source_type,
+        file_ext=document_path.suffix.lower(),
         structured_segments=[],
         diagnostics={},
         structure_parse_status=STRUCTURE_UNAVAILABLE,
@@ -652,8 +722,10 @@ def _build_structure_entry(
 
 def _aggregate_parser_observability(rows: list[dict[str, Any]]) -> dict[str, Any]:
     parser_engine_counts: dict[str, int] = {}
+    parser_mode_counts: dict[str, int] = {}
     title_source_counts: dict[str, int] = {}
     parser_fallback_stage_counts: dict[str, int] = {}
+    controlled_skip_reason_counts: dict[str, int] = {}
     structure_status_counts: dict[str, int] = {}
     structured_missing_count = 0
     structured_missing_reasons: dict[str, int] = {}
@@ -662,12 +734,17 @@ def _aggregate_parser_observability(rows: list[dict[str, Any]]) -> dict[str, Any
         if not isinstance(row, dict):
             continue
         parser_engine = str(row.get("parser_engine", "")).strip() or "unknown"
+        parser_mode = str(row.get("parser_mode", "")).strip() or "unknown"
         title_source = str(row.get("title_source", "")).strip() or "unknown"
         parser_engine_counts[parser_engine] = parser_engine_counts.get(parser_engine, 0) + 1
+        parser_mode_counts[parser_mode] = parser_mode_counts.get(parser_mode, 0) + 1
         title_source_counts[title_source] = title_source_counts.get(title_source, 0) + 1
         if bool(row.get("parser_fallback")):
             stage = str(row.get("parser_fallback_stage", "")).strip() or "unknown"
             parser_fallback_stage_counts[stage] = parser_fallback_stage_counts.get(stage, 0) + 1
+        if bool(row.get("controlled_skip")):
+            reason = str(row.get("controlled_skip_reason", "")).strip() or "unknown"
+            controlled_skip_reason_counts[reason] = controlled_skip_reason_counts.get(reason, 0) + 1
         structure_status = str(row.get("structure_parse_status", "")).strip() or STRUCTURE_UNAVAILABLE
         structure_status_counts[structure_status] = structure_status_counts.get(structure_status, 0) + 1
         if bool(row.get("structured_segments_missing")):
@@ -696,8 +773,10 @@ def _aggregate_parser_observability(rows: list[dict[str, Any]]) -> dict[str, Any
         }
     return {
         "parser_engine_counts": parser_engine_counts,
+        "parser_mode_counts": parser_mode_counts,
         "title_source_counts": title_source_counts,
         "parser_fallback_stage_counts": parser_fallback_stage_counts,
+        "controlled_skip_reason_counts": controlled_skip_reason_counts,
         "structure_status_counts": structure_status_counts,
         "structured_segments_missing_count": structured_missing_count,
         "structured_segments_missing_reasons": structured_missing_reasons,
@@ -707,6 +786,8 @@ def _aggregate_parser_observability(rows: list[dict[str, Any]]) -> dict[str, Any
 
 def run_ingest(args: argparse.Namespace) -> int:
     config, config_warnings = load_and_validate_config(args.config)
+    marker_enabled_effective = resolve_effective_marker_enabled()
+    config.marker_enabled = marker_enabled_effective.value
     marker_tuning_effective = resolve_effective_marker_tuning()
     marker_tuning_values = marker_tuning_effective.values
     marker_tuning_source = marker_tuning_effective.source
@@ -729,65 +810,67 @@ def run_ingest(args: argparse.Namespace) -> int:
         print(f"[config-warning] {warning}", file=sys.stderr)
 
     input_dir = getattr(args, "input", None)
-    pdf_paths = list_pdf_files(input_dir) if input_dir else []
+    local_paths = list_local_document_files(input_dir) if input_dir else []
     urls, invalid_urls = load_urls_from_inputs(
         list(getattr(args, "url", []) or []),
         getattr(args, "url_file", None),
     )
-    if not pdf_paths and not urls:
+    if not local_paths and not urls:
         if input_dir:
-            print(f"No PDF files found under: {input_dir}", file=sys.stderr)
+            print(f"No supported local documents found under: {input_dir}", file=sys.stderr)
         else:
-            print("No valid input detected (PDF or URL).", file=sys.stderr)
+            print("No valid input detected (local documents or URL).", file=sys.stderr)
         return 2
 
     now_iso = _now_iso()
     candidates: list[ImportCandidate] = []
     parse_errors: list[str] = []
     paper_failures: list[str] = []
+    controlled_skip_outcomes: list[dict[str, Any]] = []
     url_failures: list[dict[str, str]] = list(invalid_urls)
     parser_observability: list[dict[str, Any]] = []
     structure_entries: list[dict[str, Any]] = []
     marker_ready, marker_preflight_stage, marker_preflight_reason = _marker_preflight_check(config)
     progress_callback = getattr(args, "progress_callback", None)
-    pdf_total = len(pdf_paths)
-    pdf_completed = 0
+    doc_total = len(local_paths)
+    doc_completed = 0
 
     def _emit_progress(event: dict[str, Any]) -> None:
         if callable(progress_callback):
             progress_callback(event)
 
-    for pdf_index, pdf_path in enumerate(pdf_paths, start=1):
+    for doc_index, document_path in enumerate(local_paths, start=1):
         _emit_progress(
             {
-                "event": "pdf_started",
-                "paper_name": pdf_path.name,
-                "paper_index": pdf_index,
-                "pdf_total": pdf_total,
-                "pdf_completed": pdf_completed,
+                "event": "document_started",
+                "paper_name": document_path.name,
+                "paper_index": doc_index,
+                "pdf_total": doc_total,
+                "pdf_completed": doc_completed,
                 "pdf_failed": len(paper_failures),
             }
         )
-        stable_paper_id, fingerprint = stable_pdf_paper_id(pdf_path)
-        legacy_paper_id = make_paper_id(pdf_path)
+        route = resolve_document_route(document_path)
+        stable_paper_id, fingerprint = stable_pdf_paper_id(document_path)
+        legacy_paper_id = make_paper_id(document_path)
         try:
-            parsed_pdf = _parse_pdf_with_fallback(
-                pdf_path,
+            parsed_doc = _parse_local_document(
+                document_path,
                 config,
                 marker_ready=marker_ready,
                 marker_preflight_stage=marker_preflight_stage,
                 marker_preflight_reason=marker_preflight_reason,
             )
         except Exception as exc:
-            paper_failures.append(f"{pdf_path.name}: {exc}")
-            pdf_completed += 1
+            paper_failures.append(f"{document_path.name}: {exc}")
+            doc_completed += 1
             _emit_progress(
                 {
-                    "event": "pdf_finished",
-                    "paper_name": pdf_path.name,
-                    "paper_index": pdf_index,
-                    "pdf_total": pdf_total,
-                    "pdf_completed": pdf_completed,
+                    "event": "document_finished",
+                    "paper_name": document_path.name,
+                    "paper_index": doc_index,
+                    "pdf_total": doc_total,
+                    "pdf_completed": doc_completed,
                     "pdf_failed": len(paper_failures),
                     "status": "failed",
                     "reason": str(exc),
@@ -795,52 +878,116 @@ def run_ingest(args: argparse.Namespace) -> int:
             )
             continue
 
-        parse_errors.extend(parsed_pdf.page_errors)
-        if not parsed_pdf.pages:
-            paper_failures.append(f"{pdf_path.name}: no readable pages")
-            pdf_completed += 1
+        parse_errors.extend(parsed_doc.page_errors)
+        if parsed_doc.controlled_skip or not parsed_doc.pages:
+            reason = parsed_doc.controlled_skip_reason or "no readable pages"
+            source_uri = f"{parsed_doc.source_type or route.source_type}://sha1/{fingerprint}"
+            parser_observability.append(
+                {
+                    "paper_id": stable_paper_id,
+                    "source_uri": source_uri,
+                    "parser_engine": parsed_doc.parser_engine,
+                    "parser_mode": parsed_doc.parser_mode,
+                    "base_parser": parsed_doc.base_parser,
+                    "enhanced_parser": parsed_doc.enhanced_parser,
+                    "route_family": parsed_doc.route_family,
+                    "source_type": parsed_doc.source_type,
+                    "file_ext": parsed_doc.file_ext,
+                    "controlled_skip": parsed_doc.controlled_skip,
+                    "controlled_skip_reason": parsed_doc.controlled_skip_reason,
+                    "parser_fallback": parsed_doc.parser_fallback,
+                    "parser_fallback_stage": parsed_doc.parser_fallback_stage,
+                    "parser_fallback_reason": parsed_doc.parser_fallback_reason,
+                    "marker_tuning": {
+                        **asdict(marker_tuning_values),
+                        "effective_source": marker_tuning_source,
+                    },
+                    "marker_timing": {
+                        "attempt_duration_sec": round(float(parsed_doc.marker_attempt_duration_sec or 0.0), 3),
+                        "stage_timings": parsed_doc.marker_stage_timings or {},
+                    },
+                    "marker_llm": {
+                        "use_llm": marker_llm_summary["use_llm"],
+                        "llm_service": marker_llm_summary["llm_service"],
+                        "configured": marker_llm_summary["configured"],
+                        "summary_fields": marker_llm_summary["summary_fields"],
+                        "effective_source": marker_llm_summary["effective_source"],
+                        "degraded": bool(parsed_doc.parser_fallback) and bool(marker_llm_summary["use_llm"]),
+                    },
+                    "structured_segments_missing": False,
+                    "structured_segments_missing_reason": "",
+                    "structure_parse_status": STRUCTURE_UNAVAILABLE,
+                    "structure_parse_reason": parsed_doc.structure_parse_reason,
+                    "section_count": 0,
+                    "indexed_section_count": 0,
+                    "title_source": "",
+                    "title_layer": "",
+                    "title_confidence": 0.0,
+                    "title_decision_trace": [],
+                    "structured_title_candidates": [],
+                    "structured_title_candidate_counts": {},
+                    "markdown_available": False,
+                    "markdown_consumption_status": "missing",
+                    "block_semantics_available": False,
+                    "block_semantics_preserved": False,
+                    "block_types": [],
+                }
+            )
+            if parsed_doc.controlled_skip:
+                controlled_skip_outcomes.append(
+                    {
+                        "paper_id": "",
+                        "title": document_path.name,
+                        "source_uri": source_uri,
+                        "status": "skipped",
+                        "reason": reason,
+                    }
+                )
+            else:
+                paper_failures.append(f"{document_path.name}: {reason}")
+            doc_completed += 1
             _emit_progress(
                 {
-                    "event": "pdf_finished",
-                    "paper_name": pdf_path.name,
-                    "paper_index": pdf_index,
-                    "pdf_total": pdf_total,
-                    "pdf_completed": pdf_completed,
+                    "event": "document_finished",
+                    "paper_name": document_path.name,
+                    "paper_index": doc_index,
+                    "pdf_total": doc_total,
+                    "pdf_completed": doc_completed,
                     "pdf_failed": len(paper_failures),
-                    "status": "failed",
-                    "reason": "no readable pages",
+                    "status": "skipped" if parsed_doc.controlled_skip else "failed",
+                    "reason": reason,
                 }
             )
             continue
 
         title_decision = choose_best_title(
-            metadata_title=parsed_pdf.metadata_title,
-            pages=parsed_pdf.pages,
-            title_candidates=parsed_pdf.structured_title_candidates or parsed_pdf.title_candidates,
+            metadata_title=parsed_doc.metadata_title,
+            pages=parsed_doc.pages,
+            title_candidates=parsed_doc.structured_title_candidates or parsed_doc.title_candidates,
             confidence_threshold=config.title_confidence_threshold,
             blacklist_patterns=config.title_blacklist_patterns,
         )
         chunk_kwargs: dict[str, Any] = {
             "paper_id": stable_paper_id,
-            "pages": parsed_pdf.pages,
+            "pages": parsed_doc.pages,
             "chunk_size": config.chunk_size,
             "overlap": config.overlap,
         }
-        if parsed_pdf.structured_segments:
-            chunk_kwargs["structured_segments"] = parsed_pdf.structured_segments
-        structured_segments_missing = parsed_pdf.parser_engine == "marker" and not bool(parsed_pdf.structured_segments)
+        if parsed_doc.structured_segments:
+            chunk_kwargs["structured_segments"] = parsed_doc.structured_segments
+        structured_segments_missing = parsed_doc.parser_engine == "marker" and not bool(parsed_doc.structured_segments)
         structured_segments_missing_reason = "marker_blocks_empty" if structured_segments_missing else ""
         chunks = build_chunks(**chunk_kwargs)
         if not chunks:
-            paper_failures.append(f"{pdf_path.name}: no chunks generated")
-            pdf_completed += 1
+            paper_failures.append(f"{document_path.name}: no chunks generated")
+            doc_completed += 1
             _emit_progress(
                 {
-                    "event": "pdf_finished",
-                    "paper_name": pdf_path.name,
-                    "paper_index": pdf_index,
-                    "pdf_total": pdf_total,
-                    "pdf_completed": pdf_completed,
+                    "event": "document_finished",
+                    "paper_name": document_path.name,
+                    "paper_index": doc_index,
+                    "pdf_total": doc_total,
+                    "pdf_completed": doc_completed,
                     "pdf_failed": len(paper_failures),
                     "status": "failed",
                     "reason": "no chunks generated",
@@ -849,30 +996,30 @@ def run_ingest(args: argparse.Namespace) -> int:
             continue
         structure_entry = _build_structure_entry(
             paper_id=stable_paper_id,
-            parser_engine=parsed_pdf.parser_engine,
-            parser_fallback=parsed_pdf.parser_fallback,
-            structure_parse_status=parsed_pdf.structure_parse_status,
-            structure_parse_reason=parsed_pdf.structure_parse_reason,
-            structured_segments=parsed_pdf.structured_segments,
+            parser_engine=parsed_doc.parser_engine,
+            parser_fallback=parsed_doc.parser_fallback,
+            structure_parse_status=parsed_doc.structure_parse_status,
+            structure_parse_reason=parsed_doc.structure_parse_reason,
+            structured_segments=parsed_doc.structured_segments,
             chunks=chunks,
         )
 
-        source_uri = f"pdf://sha1/{fingerprint}"
+        source_uri = f"{parsed_doc.source_type or route.source_type}://sha1/{fingerprint}"
         block_types = sorted(
             {
                 str(block.get("block_type", "")).strip()
-                for block in parsed_pdf.structured_segments
+                for block in parsed_doc.structured_segments
                 if str(block.get("block_type", "")).strip()
             }
         )
         markdown_diagnostics = (
-            parsed_pdf.diagnostics.get("markdown", {})
-            if isinstance(parsed_pdf.diagnostics, dict)
+            parsed_doc.diagnostics.get("markdown", {})
+            if isinstance(parsed_doc.diagnostics, dict)
             else {}
         )
         block_semantics = (
-            parsed_pdf.diagnostics.get("block_semantics", {})
-            if isinstance(parsed_pdf.diagnostics, dict)
+            parsed_doc.diagnostics.get("block_semantics", {})
+            if isinstance(parsed_doc.diagnostics, dict)
             else {}
         )
         if not block_semantics:
@@ -884,17 +1031,25 @@ def run_ingest(args: argparse.Namespace) -> int:
             {
                 "paper_id": stable_paper_id,
                 "source_uri": source_uri,
-                "parser_engine": parsed_pdf.parser_engine,
-                "parser_fallback": parsed_pdf.parser_fallback,
-                "parser_fallback_stage": parsed_pdf.parser_fallback_stage,
-                "parser_fallback_reason": parsed_pdf.parser_fallback_reason,
+                "parser_engine": parsed_doc.parser_engine,
+                "parser_mode": parsed_doc.parser_mode,
+                "base_parser": parsed_doc.base_parser,
+                "enhanced_parser": parsed_doc.enhanced_parser,
+                "route_family": parsed_doc.route_family,
+                "source_type": parsed_doc.source_type,
+                "file_ext": parsed_doc.file_ext,
+                "controlled_skip": parsed_doc.controlled_skip,
+                "controlled_skip_reason": parsed_doc.controlled_skip_reason,
+                "parser_fallback": parsed_doc.parser_fallback,
+                "parser_fallback_stage": parsed_doc.parser_fallback_stage,
+                "parser_fallback_reason": parsed_doc.parser_fallback_reason,
                 "marker_tuning": {
                     **asdict(marker_tuning_values),
                     "effective_source": marker_tuning_source,
                 },
                 "marker_timing": {
-                    "attempt_duration_sec": round(float(parsed_pdf.marker_attempt_duration_sec or 0.0), 3),
-                    "stage_timings": parsed_pdf.marker_stage_timings or {},
+                    "attempt_duration_sec": round(float(parsed_doc.marker_attempt_duration_sec or 0.0), 3),
+                    "stage_timings": parsed_doc.marker_stage_timings or {},
                 },
                 "marker_llm": {
                     "use_llm": marker_llm_summary["use_llm"],
@@ -902,7 +1057,7 @@ def run_ingest(args: argparse.Namespace) -> int:
                     "configured": marker_llm_summary["configured"],
                     "summary_fields": marker_llm_summary["summary_fields"],
                     "effective_source": marker_llm_summary["effective_source"],
-                    "degraded": bool(parsed_pdf.parser_fallback) and bool(marker_llm_summary["use_llm"]),
+                    "degraded": bool(parsed_doc.parser_fallback) and bool(marker_llm_summary["use_llm"]),
                 },
                 "structured_segments_missing": structured_segments_missing,
                 "structured_segments_missing_reason": structured_segments_missing_reason,
@@ -914,10 +1069,10 @@ def run_ingest(args: argparse.Namespace) -> int:
                 "title_layer": title_decision.adopted_layer,
                 "title_confidence": round(float(title_decision.confidence), 4),
                 "title_decision_trace": list(title_decision.decision_trace or []),
-                "structured_title_candidates": parsed_pdf.structured_title_candidates,
+                "structured_title_candidates": parsed_doc.structured_title_candidates,
                 "structured_title_candidate_counts": (
-                    parsed_pdf.diagnostics.get("structured_title_candidate_counts", {})
-                    if isinstance(parsed_pdf.diagnostics, dict)
+                    parsed_doc.diagnostics.get("structured_title_candidate_counts", {})
+                    if isinstance(parsed_doc.diagnostics, dict)
                     else {}
                 ),
                 "markdown_available": bool(markdown_diagnostics.get("available")),
@@ -933,34 +1088,41 @@ def run_ingest(args: argparse.Namespace) -> int:
                 paper=PaperRecord(
                     paper_id=stable_paper_id,
                     title=title_decision.title,
-                    path=str(pdf_path),
-                    source_type="pdf",
+                    path=str(document_path),
+                    source_type=parsed_doc.source_type,
                     source_uri=source_uri,
-                    parser_engine=parsed_pdf.parser_engine,
+                    parser_engine=parsed_doc.parser_engine,
                     title_source=title_decision.source,
                     title_confidence=round(float(title_decision.confidence), 4),
                     imported_at=now_iso,
                     status="active",
                     fingerprint=fingerprint,
                     ingest_metadata={
-                        "file_name": pdf_path.name,
+                        "file_name": document_path.name,
+                        "file_ext": parsed_doc.file_ext,
+                        "parser_mode": parsed_doc.parser_mode,
+                        "base_parser": parsed_doc.base_parser,
+                        "enhanced_parser": parsed_doc.enhanced_parser,
+                        "route_family": parsed_doc.route_family,
+                        "controlled_skip": parsed_doc.controlled_skip,
+                        "controlled_skip_reason": parsed_doc.controlled_skip_reason,
                         "legacy_paper_id": legacy_paper_id,
-                        "legacy_source_path": str(pdf_path.resolve()),
-                        "parser_fallback": parsed_pdf.parser_fallback,
-                        "parser_fallback_stage": parsed_pdf.parser_fallback_stage,
-                        "parser_fallback_reason": parsed_pdf.parser_fallback_reason,
-                        "marker_attempt_duration_sec": round(float(parsed_pdf.marker_attempt_duration_sec or 0.0), 3),
-                        "marker_stage_timings": parsed_pdf.marker_stage_timings or {},
+                        "legacy_source_path": str(document_path.resolve()),
+                        "parser_fallback": parsed_doc.parser_fallback,
+                        "parser_fallback_stage": parsed_doc.parser_fallback_stage,
+                        "parser_fallback_reason": parsed_doc.parser_fallback_reason,
+                        "marker_attempt_duration_sec": round(float(parsed_doc.marker_attempt_duration_sec or 0.0), 3),
+                        "marker_stage_timings": parsed_doc.marker_stage_timings or {},
                         "structure_parse_status": structure_entry.get("structure_parse_status", STRUCTURE_UNAVAILABLE),
                         "structure_parse_reason": structure_entry.get("structure_parse_reason", ""),
                         "section_count": int(structure_entry.get("section_count", 0) or 0),
                         "indexed_section_count": int(structure_entry.get("indexed_section_count", 0) or 0),
                         "title_layer": title_decision.adopted_layer,
                         "title_decision_trace": list(title_decision.decision_trace or []),
-                        "structured_title_candidates": parsed_pdf.structured_title_candidates,
+                        "structured_title_candidates": parsed_doc.structured_title_candidates,
                         "structured_title_candidate_counts": (
-                            parsed_pdf.diagnostics.get("structured_title_candidate_counts", {})
-                            if isinstance(parsed_pdf.diagnostics, dict)
+                            parsed_doc.diagnostics.get("structured_title_candidate_counts", {})
+                            if isinstance(parsed_doc.diagnostics, dict)
                             else {}
                         ),
                         "markdown_available": bool(markdown_diagnostics.get("available")),
@@ -974,17 +1136,17 @@ def run_ingest(args: argparse.Namespace) -> int:
                 structure_entry=structure_entry,
             )
         )
-        pdf_completed += 1
+        doc_completed += 1
         _emit_progress(
             {
-                "event": "pdf_finished",
-                "paper_name": pdf_path.name,
-                "paper_index": pdf_index,
-                "pdf_total": pdf_total,
-                "pdf_completed": pdf_completed,
+                "event": "document_finished",
+                "paper_name": document_path.name,
+                "paper_index": doc_index,
+                "pdf_total": doc_total,
+                "pdf_completed": doc_completed,
                 "pdf_failed": len(paper_failures),
                 "status": "parsed",
-                "reason": parsed_pdf.parser_engine,
+                "reason": parsed_doc.parser_mode,
             }
         )
 
@@ -1124,6 +1286,7 @@ def run_ingest(args: argparse.Namespace) -> int:
             print(f"[clean-error] {clean_error}", file=sys.stderr)
 
     outcomes = list(merge_summary.get("outcomes", []))
+    outcomes.extend(controlled_skip_outcomes)
     for failed in paper_failures:
         outcomes.append(
             {
@@ -1147,21 +1310,25 @@ def run_ingest(args: argparse.Namespace) -> int:
 
     import_summary = {
         "added": int(merge_summary.get("added", 0)),
-        "skipped": int(merge_summary.get("skipped", 0)),
+        "skipped": int(merge_summary.get("skipped", 0)) + len(controlled_skip_outcomes),
         "conflicts": int(merge_summary.get("conflicts", 0)),
         "failed": len(paper_failures) + len(url_failures),
-        "total_candidates": len(candidates),
-        "degraded": any(bool(row.get("parser_fallback")) for row in parser_observability),
+        "total_candidates": len(candidates) + len(controlled_skip_outcomes),
+        "degraded": any(str(row.get("parser_mode", "")).strip() == "degraded_from_marker" for row in parser_observability),
+        "base_only": any(str(row.get("parser_mode", "")).strip() == "base_only" for row in parser_observability),
+        "controlled_skip": any(bool(row.get("controlled_skip")) for row in parser_observability),
     }
     fallback_rows = [row for row in parser_observability if isinstance(row, dict) and bool(row.get("parser_fallback"))]
     fallback_reason = str(fallback_rows[0].get("parser_fallback_reason", "")).strip() if fallback_rows else None
     fallback_stage = str(fallback_rows[0].get("parser_fallback_stage", "")).strip() if fallback_rows else None
     fallback_path = f"marker -> legacy ({fallback_stage or 'unknown'})" if fallback_rows else None
-    confidence_note = (
-        "当前导入结果包含降级路径，结构化质量可能低于启用 Marker LLM/完整 Marker 解析时的结果。"
-        if fallback_rows
-        else "当前导入结果未检测到 Marker 降级路径。"
-    )
+    controlled_skip_rows = [row for row in parser_observability if isinstance(row, dict) and bool(row.get("controlled_skip"))]
+    if fallback_rows:
+        confidence_note = "当前导入结果包含增强解析失败后的受控降级，结构化质量可能低于启用 Marker 成功时的结果。"
+    elif controlled_skip_rows:
+        confidence_note = "当前导入结果包含按文件类型受控跳过的条目，请检查文件格式支持与抽取结果。"
+    else:
+        confidence_note = "当前导入结果以基础解析或增强解析正常完成，未检测到增强降级。"
 
     report = {
         "input_dir": str(args.input),
@@ -1172,8 +1339,8 @@ def run_ingest(args: argparse.Namespace) -> int:
         "paper_summary_rebuilt_paper_ids": rebuilt_summary_paper_ids[:50],
         "output_dir": str(output_dir),
         "run_dir": str(run_dir),
-        "pdf_total": len(pdf_paths),
-        "papers_processed": len(candidates),
+        "pdf_total": len(local_paths),
+        "papers_processed": len(candidates) + len(controlled_skip_outcomes),
         "papers_total_after_merge": len(merged_papers),
         "chunks_total_after_merge": len(merged_chunks),
         "page_parse_errors": parse_errors,
@@ -1183,6 +1350,7 @@ def run_ingest(args: argparse.Namespace) -> int:
             "chunk_size": config.chunk_size,
             "overlap": config.overlap,
             "marker_enabled": config.marker_enabled,
+            "marker_enabled_source": marker_enabled_effective.source,
             "marker_timeout_sec": config.marker_timeout_sec,
             "title_confidence_threshold": config.title_confidence_threshold,
             "top_k_retrieval": config.top_k_retrieval,
@@ -1198,6 +1366,7 @@ def run_ingest(args: argparse.Namespace) -> int:
             "effective_source": marker_tuning_source,
             "warnings": marker_tuning_effective.warnings,
         },
+        "marker_mode": "enhanced" if config.marker_enabled else "base_only",
         "marker_llm": marker_llm_summary,
         "chunk_validation_ok": ok_chunks,
         "chunk_validation_errors": chunk_errors,
@@ -1250,11 +1419,13 @@ def run_ingest(args: argparse.Namespace) -> int:
         },
         "fallback_reason": fallback_reason,
         "fallback_path": fallback_path,
+        "marker_enabled": config.marker_enabled,
+        "marker_enabled_source": marker_enabled_effective.source,
         **_aggregate_parser_observability(parser_observability),
-        "final_decision": "ingestion_completed" if merged_papers else "ingestion_failed",
+        "final_decision": "ingestion_completed" if (merged_papers or import_summary["skipped"] > 0) else "ingestion_failed",
         "final_answer": (
             f"total papers {len(merged_papers)}, added {import_summary['added']}, skipped {import_summary['skipped']}"
-            if merged_papers
+            if (merged_papers or import_summary["skipped"] > 0)
             else "no papers were successfully processed"
         ),
     }
@@ -1265,6 +1436,9 @@ def run_ingest(args: argparse.Namespace) -> int:
         run_dir / "run_trace_validation.json",
     )
 
+    if not merged_papers and import_summary["skipped"] > 0 and import_summary["failed"] == 0:
+        print("No documents were imported; all inputs were skipped with guidance.")
+        return 0
     if not merged_papers:
         print("No documents were processed successfully.", file=sys.stderr)
         return 1

@@ -22,14 +22,17 @@ type MarkerTuningPayload = {
 type PipelineConfigState = {
   configured: boolean;
   saved: {
+    marker_enabled: boolean;
     marker_tuning: MarkerTuningPayload;
     marker_llm: MarkerLlmConfigPayload;
   };
   effective: {
+    marker_enabled: boolean;
     marker_tuning: MarkerTuningPayload;
     marker_llm: MarkerLlmConfigPayload;
   };
   effective_source: {
+    marker_enabled: RuntimeSource;
     marker_tuning: Partial<Record<keyof MarkerTuningPayload, RuntimeSource>>;
     marker_llm: Record<string, RuntimeSource>;
   };
@@ -72,6 +75,7 @@ async function mockRuntimePanels(page: Page) {
       body: JSON.stringify({
         configured: true,
         saved: {
+          marker_enabled: true,
           marker_tuning: {
             recognition_batch_size: 2,
             detector_batch_size: 2,
@@ -82,6 +86,7 @@ async function mockRuntimePanels(page: Page) {
           }
         },
         effective: {
+          marker_enabled: true,
           marker_tuning: {
             recognition_batch_size: 2,
             detector_batch_size: 2,
@@ -482,7 +487,45 @@ test('llm settings panel shows stage-specific save error for rewrite and keeps o
       await route.fulfill({
         status: 200,
         contentType: 'application/json',
-        body: JSON.stringify({ configured: false })
+        body: JSON.stringify({
+          configured: true,
+          answer: {
+            provider: 'openai',
+            api_base: 'https://api.openai.com/v1',
+            api_key_masked: 'sk-***',
+            model: 'gpt-4o-mini'
+          },
+          embedding: {
+            provider: 'siliconflow',
+            api_base: 'https://api.siliconflow.cn/v1',
+            api_key_masked: 'sf-***',
+            model: 'bge-m3'
+          },
+          rerank: {
+            provider: 'siliconflow',
+            api_base: 'https://api.siliconflow.cn/v1',
+            api_key_masked: 'sf-***',
+            model: 'rerank'
+          },
+          rewrite: {
+            provider: 'ollama',
+            api_base: 'http://127.0.0.1:11434/v1',
+            api_key_masked: 'oll***',
+            model: 'rewrite'
+          },
+          graph_entity: {
+            provider: 'siliconflow',
+            api_base: 'https://api.siliconflow.cn/v1',
+            api_key_masked: 'sf-***',
+            model: 'graph'
+          },
+          sufficiency_judge: {
+            provider: 'siliconflow',
+            api_base: 'https://api.siliconflow.cn/v1',
+            api_key_masked: 'sf-***',
+            model: 'judge'
+          }
+        })
       });
       return;
     }
@@ -672,7 +715,7 @@ test('settings page supports marker tuning save and runtime overview panel', asy
   });
 
   await page.goto('http://127.0.0.1:3000/settings');
-  await expect(page.getByTestId('runtime-overview-panel')).toContainText('运行时模型位点');
+  await expect(page.getByTestId('runtime-overview-panel')).toContainText('当前实际使用的模型');
   await openAdvancedSettings(page);
   await page.getByTestId('pipeline-recognition_batch_size-input').fill('8');
   await page.getByTestId('pipeline-model-dtype-select').selectOption('float32');
@@ -958,6 +1001,7 @@ test('settings page saves marker llm service config and shows runtime summary', 
           }
         },
         effective_source: {
+          marker_enabled: 'runtime',
           marker_tuning: {},
           marker_llm: { openai_model: 'runtime', openai_base_url: 'runtime' }
         }
@@ -987,6 +1031,9 @@ test('settings page saves marker llm service config and shows runtime summary', 
           source: 'default'
         },
         pipeline: {
+          marker_enabled: true,
+          marker_mode: 'enhanced',
+          marker_mode_summary: 'degraded_available',
           marker_tuning: {
             recognition_batch_size: 2,
             detector_batch_size: 2,
@@ -1028,9 +1075,10 @@ test('settings page saves marker llm service config and shows runtime summary', 
 
   await page.goto('http://127.0.0.1:3000/settings');
   await expect(page.getByTestId('marker-llm-panel')).toContainText('导入增强服务');
+  await expect(page.getByText('模式：增强降级可用 · 增强解析：已开启')).toBeVisible();
   await expect(page.getByTestId('runtime-overview-panel')).toContainText('marker parse timeout');
   await expect(page.getByText('openai_model:')).toBeVisible();
-  await expect(page.getByText('最近导入：触发兜底')).toBeVisible();
+  await expect(page.getByText('最近导入：增强降级完成')).toBeVisible();
 });
 
 test('settings page posts marker llm config and refreshes runtime summary after save', async ({ page }) => {
@@ -1039,6 +1087,7 @@ test('settings page posts marker llm config and refreshes runtime summary after 
   let pipelineConfigState: PipelineConfigState = {
     configured: true,
     saved: {
+      marker_enabled: false,
       marker_tuning: {
         recognition_batch_size: 2,
         detector_batch_size: 2,
@@ -1053,6 +1102,7 @@ test('settings page posts marker llm config and refreshes runtime summary after 
       }
     },
     effective: {
+      marker_enabled: false,
       marker_tuning: {
         recognition_batch_size: 2,
         detector_batch_size: 2,
@@ -1067,6 +1117,7 @@ test('settings page posts marker llm config and refreshes runtime summary after 
       }
     },
     effective_source: {
+      marker_enabled: 'runtime',
       marker_tuning: {},
       marker_llm: {}
     }
@@ -1082,6 +1133,8 @@ test('settings page posts marker llm config and refreshes runtime summary after 
     },
     planner: buildPlannerRuntimeOverview(),
     pipeline: {
+      marker_enabled: false,
+      marker_mode: 'base_only',
       marker_tuning: {
         recognition_batch_size: 2,
         detector_batch_size: 2,
@@ -1124,6 +1177,7 @@ test('settings page posts marker llm config and refreshes runtime summary after 
         ...pipelineConfigState,
         saved: {
           ...pipelineConfigState.saved,
+          marker_enabled: true,
           marker_llm: {
             use_llm: true,
             llm_service: 'marker.services.openai.OpenAIService',
@@ -1134,6 +1188,7 @@ test('settings page posts marker llm config and refreshes runtime summary after 
         },
         effective: {
           ...pipelineConfigState.effective,
+          marker_enabled: true,
           marker_llm: {
             use_llm: true,
             llm_service: 'marker.services.openai.OpenAIService',
@@ -1150,6 +1205,8 @@ test('settings page posts marker llm config and refreshes runtime summary after 
         ...runtimeOverviewState,
         pipeline: {
           ...runtimeOverviewState.pipeline,
+          marker_enabled: true,
+          marker_mode: 'enhanced',
           marker_llm: {
             use_llm: true,
             llm_service: 'marker.services.openai.OpenAIService',
@@ -1168,6 +1225,7 @@ test('settings page posts marker llm config and refreshes runtime summary after 
         body: JSON.stringify({
           ok: true,
           config: {
+            marker_enabled: true,
             marker_tuning: pipelineConfigState.saved.marker_tuning,
             marker_llm: pipelineConfigState.saved.marker_llm
           }
@@ -1218,6 +1276,7 @@ test('settings page posts marker llm config and refreshes runtime summary after 
   await page.goto('http://127.0.0.1:3000/settings');
   await expect(page.getByTestId('llm-ready-text')).toBeVisible();
   await openAdvancedSettings(page);
+  await page.getByTestId('pipeline-marker-enabled-toggle').check();
   await page.getByTestId('marker-llm-use-toggle').check();
   await page.getByTestId('marker-llm-service-select').selectOption('marker.services.openai.OpenAIService');
   await expect(page.getByLabel('OpenAI API Key')).toBeVisible();
@@ -1233,7 +1292,7 @@ test('settings page posts marker llm config and refreshes runtime summary after 
   await page.getByTestId('pipeline-save-btn').click();
 
   await expect.poll(() => savedMarkerLlm).not.toBeNull();
-  await expect(page.getByText('Marker Runtime 与 LLM service 配置已保存并生效。')).toBeVisible();
+  await expect(page.getByText('Marker 开关、运行档位与增强服务配置已保存并生效。')).toBeVisible();
   await expect(page.getByText('状态: ready · 配置完整: yes')).toBeVisible();
   await expect(page.getByText('openai_model:')).toBeVisible();
   await expect(page.getByTestId('marker-llm-panel')).toContainText('gpt-4.1-mini');
@@ -1266,6 +1325,7 @@ test('settings page keeps marker llm inputs when backend returns field errors', 
       body: JSON.stringify({
         configured: true,
         saved: {
+          marker_enabled: false,
           marker_tuning: {
             recognition_batch_size: 2,
             detector_batch_size: 2,
@@ -1280,6 +1340,7 @@ test('settings page keeps marker llm inputs when backend returns field errors', 
           }
         },
         effective: {
+          marker_enabled: false,
           marker_tuning: {
             recognition_batch_size: 2,
             detector_batch_size: 2,
@@ -1294,6 +1355,7 @@ test('settings page keeps marker llm inputs when backend returns field errors', 
           }
         },
         effective_source: {
+          marker_enabled: 'runtime',
           marker_tuning: {},
           marker_llm: {}
         }
@@ -1323,6 +1385,8 @@ test('settings page keeps marker llm inputs when backend returns field errors', 
           source: 'default'
         },
         pipeline: {
+          marker_enabled: false,
+          marker_mode: 'base_only',
           marker_tuning: {
             recognition_batch_size: 2,
             detector_batch_size: 2,
@@ -1372,6 +1436,7 @@ test('settings page keeps marker llm inputs when backend returns field errors', 
   await expect(page.getByTestId('pipeline-detector_batch_size-input')).toHaveValue('2');
   await page.getByTestId('pipeline-detector_batch_size-input').fill('5');
   await expect(page.getByTestId('pipeline-detector_batch_size-input')).toHaveValue('5');
+  await page.getByTestId('pipeline-marker-enabled-toggle').check();
   await page.getByTestId('marker-llm-use-toggle').check();
   await page.getByTestId('marker-llm-service-select').selectOption('marker.services.vertex.GoogleVertexService');
   await page.getByTestId('pipeline-save-btn').click();
@@ -1387,6 +1452,15 @@ test('settings page keeps marker llm inputs when backend returns field errors', 
 test('settings page saves planner runtime config and refreshes runtime overview', async ({ page }) => {
   let savedPlannerPayload: Record<string, unknown> | null = null;
   await mockRuntimePanels(page);
+  await page.route('**/api/admin/detect-models', async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        models: [{ id: 'gpt-4.1-mini' }, { id: 'gpt-4.1' }]
+      })
+    });
+  });
   await page.route('**/api/admin/llm-config', async (route) => {
     await route.fulfill({
       status: 200,
@@ -1487,6 +1561,8 @@ test('settings page saves planner runtime config and refreshes runtime overview'
   await page.getByTestId('planner-provider-select').selectOption('openai');
   await page.getByTestId('planner-api-base-input').fill('https://planner.example.com/v1');
   await page.getByTestId('planner-api-key-input').fill('sk-planner');
+  await page.getByTestId('planner-detect-btn').click();
+  await expect(page.getByText('规划模型连接成功，已发现 2 个可选模型。')).toBeVisible();
   await page.getByTestId('planner-model-select').selectOption('gpt-4.1-mini');
   await page.getByTestId('planner-timeout-input').fill('9000');
   await page.getByTestId('planner-save-btn').click();
@@ -1497,4 +1573,235 @@ test('settings page saves planner runtime config and refreshes runtime overview'
   await expect(page.getByTestId('planner-runtime-overview')).toContainText('gpt-4.1-mini');
   await expect(page.getByTestId('planner-runtime-overview')).toContainText('正式模式');
   await expect(page.getByText('正式聊天可用: 是')).toBeVisible();
+});
+
+test('settings page becomes read-only when active jobs lock runtime settings', async ({ page }) => {
+  await page.route('**/api/admin/llm-config', async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ configured: false })
+    });
+  });
+  await page.route('**/api/admin/planner-config', async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ configured: false })
+    });
+  });
+  await page.route('**/api/admin/pipeline-config', async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        configured: false,
+        saved: {
+          marker_enabled: false,
+          marker_tuning: {
+            recognition_batch_size: 2,
+            detector_batch_size: 2,
+            layout_batch_size: 2,
+            ocr_error_batch_size: 1,
+            table_rec_batch_size: 1,
+            model_dtype: 'float16'
+          },
+          marker_llm: { use_llm: false, llm_service: 'gemini' }
+        },
+        effective: {
+          marker_enabled: false,
+          marker_tuning: {
+            recognition_batch_size: 2,
+            detector_batch_size: 2,
+            layout_batch_size: 2,
+            ocr_error_batch_size: 1,
+            table_rec_batch_size: 1,
+            model_dtype: 'float16'
+          },
+          marker_llm: { use_llm: false, llm_service: 'gemini' }
+        },
+        effective_source: { marker_tuning: {}, marker_llm: {} }
+      })
+    });
+  });
+  await page.route('**/api/admin/runtime-overview', async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        llm: {
+          answer: { provider: 'openai', model: 'gpt-4o-mini', configured: true },
+          embedding: { provider: 'siliconflow', model: 'bge-m3', configured: true },
+          rerank: { provider: 'siliconflow', model: 'rerank', configured: true },
+          rewrite: { provider: 'ollama', model: 'rewrite', configured: true },
+          graph_entity: { provider: 'siliconflow', model: 'graph', configured: true },
+          sufficiency_judge: { provider: 'siliconflow', model: 'judge', configured: true }
+        },
+        planner: buildPlannerRuntimeOverview(),
+        pipeline: {
+          marker_tuning: {
+            recognition_batch_size: 2,
+            detector_batch_size: 2,
+            layout_batch_size: 2,
+            ocr_error_batch_size: 1,
+            table_rec_batch_size: 1,
+            model_dtype: 'float16'
+          },
+          effective_source: { marker_tuning: {} }
+        },
+        jobs: {
+          active: [{ jobId: 'job_chat_1', kind: 'chat_answer', state: 'running', updatedAt: '2026-04-01T00:00:00Z', progressStage: 'answer' }],
+          settings_locked: true
+        },
+        status: { level: 'READY', reasons: [] }
+      })
+    });
+  });
+
+  await page.goto('http://127.0.0.1:3000/settings');
+
+  await expect(page.getByTestId('settings-lock-banner')).toBeVisible();
+  await expect(page.getByTestId('settings-lock-spotlight')).toBeVisible();
+  await expect(page.getByTestId('llm-save-btn')).toBeDisabled();
+  await expect(page.getByTestId('planner-save-btn')).toBeDisabled();
+  await expect(page.getByTestId('llm-answer-provider-select')).toBeDisabled();
+  await expect(page.getByTestId('planner-api-base-input')).toBeDisabled();
+});
+
+test('settings page surfaces lock rejection and becomes editable after active jobs finish', async ({ page }) => {
+  let runtimeOverviewState = {
+    llm: {
+      answer: { provider: 'openai', model: 'gpt-4o-mini', configured: true },
+      embedding: { provider: 'siliconflow', model: 'bge-m3', configured: true },
+      rerank: { provider: 'siliconflow', model: 'rerank', configured: true },
+      rewrite: { provider: 'ollama', model: 'rewrite', configured: true },
+      graph_entity: { provider: 'siliconflow', model: 'graph', configured: true },
+      sufficiency_judge: { provider: 'siliconflow', model: 'judge', configured: true }
+    },
+    planner: buildPlannerRuntimeOverview(),
+    pipeline: {
+      marker_tuning: {
+        recognition_batch_size: 2,
+        detector_batch_size: 2,
+        layout_batch_size: 2,
+        ocr_error_batch_size: 1,
+        table_rec_batch_size: 1,
+        model_dtype: 'float16'
+      },
+      effective_source: { marker_tuning: {} }
+    },
+    jobs: {
+      active: [] as Array<{ jobId: string; kind: string; state: string; updatedAt: string; progressStage: string }>,
+      settings_locked: false
+    },
+    status: { level: 'READY', reasons: [] as string[] }
+  };
+  let llmSaveAttempt = 0;
+
+  await page.route('**/api/admin/llm-config', async (route) => {
+    if (route.request().method() === 'GET') {
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({ configured: false })
+      });
+      return;
+    }
+    llmSaveAttempt += 1;
+    if (llmSaveAttempt === 1) {
+      runtimeOverviewState = {
+        ...runtimeOverviewState,
+        jobs: {
+          active: [{ jobId: 'job_chat_2', kind: 'chat_answer', state: 'running', updatedAt: '2026-04-03T00:00:00Z', progressStage: 'answer' }],
+          settings_locked: true
+        }
+      };
+      await route.fulfill({
+        status: 409,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          detail: {
+            code: 'SETTINGS_LOCKED_BY_ACTIVE_JOB',
+            message: '当前存在运行中的任务，设置已锁定为只读。'
+          }
+        })
+      });
+      return;
+    }
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ configured: true })
+    });
+  });
+
+  await page.route('**/api/admin/planner-config', async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ configured: false })
+    });
+  });
+
+  await page.route('**/api/admin/pipeline-config', async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({
+        configured: false,
+        saved: {
+          marker_enabled: false,
+          marker_tuning: {
+            recognition_batch_size: 2,
+            detector_batch_size: 2,
+            layout_batch_size: 2,
+            ocr_error_batch_size: 1,
+            table_rec_batch_size: 1,
+            model_dtype: 'float16'
+          },
+          marker_llm: { use_llm: false, llm_service: 'gemini' }
+        },
+        effective: {
+          marker_enabled: false,
+          marker_tuning: {
+            recognition_batch_size: 2,
+            detector_batch_size: 2,
+            layout_batch_size: 2,
+            ocr_error_batch_size: 1,
+            table_rec_batch_size: 1,
+            model_dtype: 'float16'
+          },
+          marker_llm: { use_llm: false, llm_service: 'gemini' }
+        },
+        effective_source: { marker_tuning: {}, marker_llm: {} }
+      })
+    });
+  });
+
+  await page.route('**/api/admin/runtime-overview', async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify(runtimeOverviewState)
+    });
+  });
+
+  await page.goto('http://127.0.0.1:3000/settings');
+
+  await expect(page.getByTestId('llm-save-btn')).toBeEnabled();
+  await page.getByTestId('llm-save-btn').click();
+  await expect(page.getByTestId('llm-global-error')).toBeVisible();
+
+  runtimeOverviewState = {
+    ...runtimeOverviewState,
+    jobs: {
+      active: [],
+      settings_locked: false
+    }
+  };
+
+  await page.reload();
+
+  await expect(page.getByTestId('settings-lock-banner')).toHaveCount(0);
+  await expect(page.getByTestId('llm-save-btn')).toBeEnabled();
 });

@@ -436,6 +436,7 @@ def _build_planner_llm_candidate(
         timeout_ms=timeout_ms,
         max_retries=max(0, int(getattr(cfg, "llm_max_retries", 0))),
         temperature=0.0,
+        debug_stage="planner",
     )
     diagnostics["elapsed_ms"] = int(getattr(result, "elapsed_ms", 0) or 0)
     diagnostics["provider"] = getattr(result, "provider_used", None) or diagnostics["provider"]
@@ -852,6 +853,66 @@ def _build_runtime_clarify_response(payload: Any, question: str) -> Any:
     return KernelChatResponse(traceId=trace_id, answer=answer, sources=[])
 
 
+def _build_controlled_termination_message(
+    *,
+    reason: str,
+    rejection_reason: str,
+    rejection_layer: str | None,
+    termination_type: str,
+) -> str:
+    primary_reason = str(rejection_reason or reason or "").strip()
+    lowered = primary_reason.lower()
+
+    if primary_reason.startswith("missing_dependencies:"):
+        missing = primary_reason.split(":", 1)[1].strip() or "必要前置结果"
+        return f"当前请求缺少必要的前置结果（{missing}），暂时无法继续。请先补充论文范围、先执行检索，或把目标缩小后重试。"
+    if primary_reason.startswith("unsupported_tool:"):
+        tool_name = primary_reason.split(":", 1)[1].strip() or "未知能力"
+        return f"当前请求生成了系统暂不支持的执行能力（{tool_name}），已停止执行。请直接描述你的目标，或换一种更具体的表述后重试。"
+    if primary_reason == "action_plan_step_limit_exceeded":
+        return "当前请求被拆解出的执行步骤过多，超出系统上限。请缩小范围，只保留一个明确目标后重试。"
+    if primary_reason.startswith("policy_blocked:"):
+        blocked_target = primary_reason.split(":", 1)[1].strip()
+        if blocked_target == "web_delegation":
+            return "当前配置禁止联网检索，暂时无法按该路径执行。请切换到本地问题，或在设置中启用 Web/Hybrid 能力后重试。"
+        if blocked_target == "research_assistant":
+            return "当前配置禁止研究助理能力，暂时无法按该路径执行。请改为更直接的问题，或调整配置后重试。"
+        if blocked_target == "force_local_first":
+            return "当前策略要求优先使用本地知识库，暂时不允许直接走联网路径。请先限定本地论文范围后重试。"
+        return "当前请求触发了执行策略限制，暂时无法继续。请调整问题范围或检查运行配置后重试。"
+    if (
+        primary_reason.startswith("missing_field:")
+        or primary_reason.startswith("invalid_type:")
+        or primary_reason.startswith("invalid_enum:")
+        or primary_reason.startswith("invalid_params:")
+        or primary_reason in {"planner_llm_invalid_json", "planner_llm_invalid_schema"}
+    ):
+        return "当前请求的执行计划格式无效，系统已停止执行。这更像是规划输出异常，不是你的提问本身有问题；请稍后重试。"
+    if primary_reason in {
+        "controlled_terminate_missing_reason",
+        "controlled_terminate_with_action_plan",
+        "clarify_question_missing",
+        "clarify_result_missing_flag",
+        "clarify_result_with_action_plan",
+        "local_execute_missing_action_plan",
+        "delegate_web_missing_selected_capability",
+        "delegate_research_assistant_missing_selected_capability",
+        "controlled_terminate_missing_clarify_question",
+    }:
+        return "当前请求的执行计划前后不一致，系统已停止执行。这更像是系统侧规划异常，请稍后重试。"
+    if primary_reason in {"planner_runtime_exception", "route_fallback", "planner_llm_unavailable"}:
+        return "当前系统暂时无法完成该请求，请稍后重试。"
+    if termination_type == "tool_or_constraint_failure":
+        return "当前无法继续执行所选能力，请补充更具体的范围或稍后重试。"
+    if termination_type == "runtime_exception":
+        return "当前系统暂时无法完成该请求，请稍后重试。"
+    if rejection_layer == "policy":
+        return "当前请求未通过执行策略校验，暂时无法继续。请调整问题范围或检查运行配置后重试。"
+    if rejection_layer in {"structure", "semantic", "execution"} or "reject" in lowered:
+        return "当前请求的执行计划未通过系统校验，已停止执行。这更像是系统侧规划异常，请稍后重试。"
+    return "当前请求未通过执行校验，系统已停止执行。请换一种更具体的表述后重试。"
+
+
 def _build_controlled_termination(state: PlannerRuntimeState) -> dict[str, Any]:
     planner = dict(state.get("planner") or {})
     runtime = dict(state.get("runtime") or {})
@@ -882,17 +943,19 @@ def _build_controlled_termination(state: PlannerRuntimeState) -> dict[str, Any]:
         termination_type = "runtime_exception"
     elif fallback.get("type") == "planner":
         termination_type = "planner_reject"
-    message = "当前请求未通过执行安全检查，请换一种更明确的表述后重试。"
+    rejection_reason = str(validation.get("reason_code") or reason)
+    message = _build_controlled_termination_message(
+        reason=reason,
+        rejection_reason=rejection_reason,
+        rejection_layer=rejection_layer,
+        termination_type=termination_type,
+    )
     if posture == "clarify" and clarify_question:
         message = "为继续处理该请求，请先澄清以下问题：\n1. " + clarify_question
-    elif termination_type == "tool_or_constraint_failure":
-        message = "当前无法继续执行所选能力，请补充更具体的范围或稍后重试。"
-    elif termination_type == "runtime_exception":
-        message = "当前系统暂时无法完成该请求，请稍后重试。"
     return {
         "type": termination_type,
         "reason": reason,
-        "rejection_reason": str(validation.get("reason_code") or reason),
+        "rejection_reason": rejection_reason,
         "rejection_layer": rejection_layer,
         "source": str(fallback.get("type") or planner.get("planner_source") or "planner"),
         "user_visible_posture": posture,

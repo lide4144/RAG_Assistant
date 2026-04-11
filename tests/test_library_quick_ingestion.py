@@ -30,18 +30,19 @@ class LibraryQuickIngestionTests(unittest.TestCase):
             self.assertIsInstance(result.get("next_steps"), list)
             self.assertGreaterEqual(len(result.get("next_steps", [])), 1)
 
-    def test_import_feedback_contains_structured_failure_reasons(self) -> None:
+    def test_import_feedback_accepts_text_like_local_documents(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             txt = Path(tmp) / "note.txt"
-            txt.write_text("not pdf", encoding="utf-8")
-            result = library.run_import_workflow(uploaded_files=[txt], topic="专题A")
-            self.assertFalse(result["ok"])
-            self.assertEqual(result["success_count"], 0)
-            self.assertEqual(result["failed_count"], 1)
-            reasons = result.get("failure_reasons", [])
-            self.assertTrue(reasons)
-            self.assertIn("仅支持 PDF", str(reasons[0]))
-            self.assertTrue(result.get("next_steps"))
+            txt.write_text("Plain text document", encoding="utf-8")
+
+            with patch.object(library, "run_ingest", return_value=0), patch.object(
+                library, "run_build_indexes", return_value=0
+            ):
+                result = library.run_import_workflow(uploaded_files=[txt], topic="专题A")
+
+            self.assertTrue(result["ok"])
+            self.assertEqual(result["success_count"], 1)
+            self.assertEqual(result["failed_count"], 0)
 
     def test_import_feedback_includes_classification_and_index_stage(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -126,6 +127,85 @@ class LibraryQuickIngestionTests(unittest.TestCase):
             self.assertEqual(final_event["batch_failed"], 0)
             self.assertEqual(final_event["stage"], "done")
             self.assertEqual(final_event["recent_items"][0]["state"], "succeeded")
+
+    def test_import_workflow_accepts_document_progress_events(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            txt = Path(tmp) / "note.txt"
+            txt.write_text("Plain text document", encoding="utf-8")
+            events: list[dict] = []
+
+            def _fake_ingest(args) -> int:
+                args.progress_callback(
+                    {
+                        "event": "document_started",
+                        "paper_name": txt.name,
+                        "pdf_completed": 0,
+                        "pdf_failed": 0,
+                    }
+                )
+                args.progress_callback(
+                    {
+                        "event": "document_finished",
+                        "paper_name": txt.name,
+                        "pdf_completed": 1,
+                        "pdf_failed": 0,
+                        "status": "parsed",
+                        "reason": "base_only",
+                    }
+                )
+                run_dir = Path(str(args.run_dir))
+                run_dir.mkdir(parents=True, exist_ok=True)
+                (run_dir / "ingest_report.json").write_text(
+                    json.dumps(
+                        {
+                            "import_summary": {"added": 1, "skipped": 0, "conflicts": 0, "failed": 0, "total_candidates": 1},
+                            "import_outcomes": [{"source_uri": str(txt), "status": "added"}],
+                        },
+                        ensure_ascii=False,
+                    ),
+                    encoding="utf-8",
+                )
+                return 0
+
+            with patch.object(library, "run_ingest", side_effect=_fake_ingest), patch.object(
+                library, "run_build_indexes", return_value=0
+            ):
+                result = library.run_import_workflow(uploaded_files=[txt], topic="", progress_callback=events.append)
+
+            self.assertTrue(result["ok"])
+            self.assertTrue(any(event.get("current_item_name") == txt.name for event in events))
+            self.assertTrue(any("正在解析" in str(event.get("message", "")) for event in events))
+
+    def test_import_workflow_returns_success_for_controlled_skip_only_batch(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            rtf = Path(tmp) / "empty.rtf"
+            rtf.write_text("", encoding="utf-8")
+
+            def _fake_ingest(args) -> int:
+                run_dir = Path(str(args.run_dir))
+                run_dir.mkdir(parents=True, exist_ok=True)
+                (run_dir / "ingest_report.json").write_text(
+                    json.dumps(
+                        {
+                            "import_summary": {"added": 0, "skipped": 1, "conflicts": 0, "failed": 0, "total_candidates": 1, "controlled_skip": True},
+                            "import_outcomes": [{"title": rtf.name, "status": "skipped", "reason": "no readable rtf text"}],
+                            "confidence_note": "当前导入结果包含按文件类型受控跳过的条目，请检查文件格式支持与抽取结果。",
+                        },
+                        ensure_ascii=False,
+                    ),
+                    encoding="utf-8",
+                )
+                return 0
+
+            with patch.object(library, "run_ingest", side_effect=_fake_ingest), patch.object(
+                library, "run_build_indexes", return_value=0
+            ) as build_indexes:
+                result = library.run_import_workflow(uploaded_files=[rtf], topic="")
+
+            self.assertTrue(result["ok"])
+            self.assertEqual(result.get("import_summary", {}).get("skipped"), 1)
+            self.assertIn("受控跳过", str(result.get("message", "")))
+            build_indexes.assert_not_called()
 
 
 if __name__ == "__main__":

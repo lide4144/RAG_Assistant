@@ -1,7 +1,7 @@
 import axios, { AxiosError } from 'axios';
 import { config } from '../config.js';
 import { KernelClientError, KernelErrorCode } from '../errors.js';
-import type { KernelChatRequest, KernelChatResponse } from '../types/kernel.js';
+import type { KernelChatRequest, KernelChatResponse, KernelJobCreateResponse, KernelJobEvent, KernelJobStatus } from '../types/kernel.js';
 import type { AgentEvent } from '../types/agent-events.js';
 
 const client = axios.create({
@@ -14,6 +14,8 @@ const client = axios.create({
 
 const PLANNER_QA_PATH = '/planner/qa';
 const PLANNER_QA_STREAM_PATH = '/planner/qa/stream';
+const PLANNER_JOB_PATH = '/api/jobs/planner';
+const CHAT_JOB_PATH = '/api/jobs/chat';
 const LEGACY_QA_PATH = '/qa';
 const LEGACY_QA_STREAM_PATH = '/qa/stream';
 
@@ -30,11 +32,13 @@ export type KernelStreamEvent =
       traceId: string;
       mode: 'local' | 'web' | 'hybrid';
       sources: KernelChatResponse['sources'];
+      runId?: string;
     }
   | {
       type: 'messageEnd';
       traceId: string;
       mode: 'local' | 'web' | 'hybrid';
+      runId?: string;
       usage?: { latencyMs: number };
     }
   | { type: 'error'; traceId: string; code: string; message: string };
@@ -70,6 +74,75 @@ export interface KernelTaskStatus {
   progress?: KernelTaskProgress;
   error?: KernelTaskError;
   result?: Record<string, unknown>;
+}
+
+export async function createKernelBackgroundJob(payload: KernelChatRequest): Promise<KernelJobStatus> {
+  const url = payload.mode === 'local' ? PLANNER_JOB_PATH : CHAT_JOB_PATH;
+  try {
+    const response = await client.post<KernelJobCreateResponse>(url, payload);
+    if (!response.data?.job?.job_id) {
+      throw new KernelClientError(KernelErrorCode.BAD_RESPONSE, 'Kernel job response missing required fields', response.status);
+    }
+    return response.data.job;
+  } catch (error) {
+    if (error instanceof KernelClientError) {
+      throw error;
+    }
+    if (error instanceof AxiosError) {
+      if (error.code === 'ECONNABORTED') {
+        throw new KernelClientError(KernelErrorCode.TIMEOUT, 'Kernel job creation timed out');
+      }
+      if (error.response) {
+        throw new KernelClientError(
+          KernelErrorCode.BAD_RESPONSE,
+          `Kernel job creation returned ${error.response.status}`,
+          error.response.status
+        );
+      }
+      throw new KernelClientError(KernelErrorCode.NETWORK, 'Kernel job creation failed due to network error');
+    }
+    throw new KernelClientError(KernelErrorCode.UNKNOWN, 'Kernel job creation failed with unknown error');
+  }
+}
+
+export async function getKernelJobStatus(jobId: string): Promise<KernelJobStatus> {
+  try {
+    const response = await client.get<KernelJobStatus>(`/api/jobs/${jobId}`);
+    return response.data;
+  } catch (error) {
+    if (error instanceof AxiosError) {
+      if (error.response) {
+        throw new KernelClientError(
+          KernelErrorCode.BAD_RESPONSE,
+          `Kernel job status returned ${error.response.status}`,
+          error.response.status
+        );
+      }
+      throw new KernelClientError(KernelErrorCode.NETWORK, 'Kernel job status failed due to network error');
+    }
+    throw new KernelClientError(KernelErrorCode.UNKNOWN, 'Kernel job status failed with unknown error');
+  }
+}
+
+export async function getKernelJobEvents(jobId: string, afterSeq = 0): Promise<KernelJobEvent[]> {
+  try {
+    const response = await client.get<KernelJobEvent[]>(`/api/jobs/${jobId}/events`, {
+      params: { after_seq: Math.max(0, Math.floor(afterSeq)), limit: 500 }
+    });
+    return Array.isArray(response.data) ? response.data : [];
+  } catch (error) {
+    if (error instanceof AxiosError) {
+      if (error.response) {
+        throw new KernelClientError(
+          KernelErrorCode.BAD_RESPONSE,
+          `Kernel job events returned ${error.response.status}`,
+          error.response.status
+        );
+      }
+      throw new KernelClientError(KernelErrorCode.NETWORK, 'Kernel job events failed due to network error');
+    }
+    throw new KernelClientError(KernelErrorCode.UNKNOWN, 'Kernel job events failed with unknown error');
+  }
 }
 
 export async function healthcheckKernel(): Promise<boolean> {
@@ -257,7 +330,8 @@ function normalizeKernelStreamEvent(eventType: string, payload: unknown): Kernel
       type: 'sources',
       traceId,
       mode,
-      sources: payload.sources as KernelChatResponse['sources']
+      sources: payload.sources as KernelChatResponse['sources'],
+      runId: typeof payload.runId === 'string' && payload.runId.trim().length > 0 ? payload.runId : undefined
     };
   }
 
@@ -269,6 +343,7 @@ function normalizeKernelStreamEvent(eventType: string, payload: unknown): Kernel
       type: 'messageEnd',
       traceId,
       mode,
+      runId: typeof payload.runId === 'string' && payload.runId.trim().length > 0 ? payload.runId : undefined,
       usage
     };
   }

@@ -1,0 +1,10 @@
+{
+  "service_mode": "production",
+  "legacy_use_llm": null,
+  "provider": "openai",
+  "api_base": "https://api.deepseek.com/v1",
+  "api_key": "sk-681ff60480c74638ac0bba02c9420a73",
+  "model": "deepseek-reasoner",
+  "timeout_ms": 60000,
+  "updated_at": "2026-03-30T20:18:58Z"
+}

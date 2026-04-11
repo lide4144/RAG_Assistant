@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 
 import { createChatService } from '../src/chatService.js';
 import { validateCitationMapping } from '../src/citation.js';
+import { KernelClientError, KernelErrorCode } from '../src/errors.js';
 import type { OutboundEvent } from '../src/types/events.js';
 
 function eventPayload(mode: 'local' | 'web' | 'hybrid', query = 'q'): string {
@@ -23,6 +24,26 @@ function collectText(events: OutboundEvent[]): string {
     .join('');
 }
 
+function jobSubscribePayload(jobId: string, afterSeq = 0): string {
+  return JSON.stringify({
+    type: 'job_subscribe',
+    payload: {
+      jobId,
+      afterSeq
+    }
+  });
+}
+
+function buildJobEvent(seq: number, payload: Record<string, unknown>) {
+  return {
+    job_id: 'job-1',
+    seq,
+    event_type: String(payload.type ?? 'unknown'),
+    created_at: `2026-04-03T00:00:0${seq}Z`,
+    payload
+  };
+}
+
 test('local mode emits sources -> message stream -> messageEnd closure', async () => {
   const emitted: OutboundEvent[] = [];
   const service = createChatService({
@@ -34,6 +55,9 @@ test('local mode emits sources -> message stream -> messageEnd closure', async (
       providerUsed: 'mock',
       isMockFallback: false
     }),
+    createKernelBackgroundJob: async () => {
+      throw new KernelClientError(KernelErrorCode.BAD_RESPONSE, 'missing job endpoint', 404);
+    },
     requestKernelAnswer: async () => {
       throw new Error('should not fallback when stream closes');
     },
@@ -80,6 +104,145 @@ test('local mode emits sources -> message stream -> messageEnd closure', async (
   assert.equal(emitted.at(-1)?.type, 'messageEnd');
 });
 
+test('local mode bridges kernel background jobs through job events', async () => {
+  const emitted: OutboundEvent[] = [];
+  let statusCalls = 0;
+  const service = createChatService({
+    now: () => 100,
+    randomUUID: () => 'trace-local-job',
+    sleep: async () => undefined,
+    searchWeb: async () => ({ sources: [], providerUsed: 'mock', isMockFallback: false }),
+    requestKernelAnswer: async () => {
+      throw new Error('should not fallback when job endpoint is available');
+    },
+    streamKernelAnswer: async () => {
+      throw new Error('should not use direct stream when job endpoint is available');
+    },
+    createKernelBackgroundJob: async () => ({
+      job_id: 'job-1',
+      kind: 'planner_chat',
+      state: 'queued',
+      created_at: '2026-04-03T00:00:00Z',
+      updated_at: '2026-04-03T00:00:00Z',
+      accepted: true,
+      trace_id: 'trace-local-job'
+    }),
+    getKernelJobEvents: async (_jobId, afterSeq = 0) =>
+      [
+        buildJobEvent(1, {
+          type: 'sources',
+          traceId: 'trace-local-job',
+          mode: 'local',
+          runId: 'run-job-1',
+          sources: [
+            {
+              source_type: 'local',
+              source_id: 's-local-1',
+              title: 'local source',
+              snippet: 'local evidence',
+              locator: 'kb://1',
+              score: 0.9
+            }
+          ]
+        }),
+        buildJobEvent(2, {
+          type: 'message',
+          traceId: 'trace-local-job',
+          mode: 'local',
+          content: 'Answer with citation [1].'
+        }),
+        buildJobEvent(3, {
+          type: 'messageEnd',
+          traceId: 'trace-local-job',
+          mode: 'local',
+          runId: 'run-job-1'
+        })
+      ].filter((item) => item.seq > afterSeq),
+    getKernelJobStatus: async () => {
+      statusCalls += 1;
+      return {
+        job_id: 'job-1',
+        kind: 'planner_chat',
+        state: 'succeeded',
+        created_at: '2026-04-03T00:00:00Z',
+        updated_at: '2026-04-03T00:00:01Z',
+        accepted: true,
+        trace_id: 'trace-local-job',
+        run_id: 'run-job-1'
+      };
+    }
+  });
+
+  await service(eventPayload('local'), (event) => emitted.push(event));
+
+  assert.deepEqual(emitted.map((event) => event.type), ['sources', 'message', 'messageEnd']);
+  assert.equal(emitted[0]?.jobId, 'job-1');
+  assert.equal(emitted[0]?.seq, 1);
+  assert.equal(statusCalls >= 1, true);
+  const sourcesEvent = emitted.find((event) => event.type === 'sources');
+  assert.ok(sourcesEvent && sourcesEvent.type === 'sources');
+  assert.equal(validateCitationMapping(collectText(emitted), sourcesEvent.sources).ok, true);
+});
+
+test('job_subscribe replays missing events after a cursor and keeps polling until terminal', async () => {
+  const emitted: OutboundEvent[] = [];
+  let poll = 0;
+  const service = createChatService({
+    now: () => 100,
+    randomUUID: () => 'trace-subscribe',
+    sleep: async () => undefined,
+    requestKernelAnswer: async () => {
+      throw new Error('not used');
+    },
+    streamKernelAnswer: async () => {
+      throw new Error('not used');
+    },
+    createKernelBackgroundJob: async () => {
+      throw new Error('not used');
+    },
+    startGraphBuildTask: async () => {
+      throw new Error('not used');
+    },
+    getKernelTaskStatus: async () => {
+      throw new Error('not used');
+    },
+    searchWeb: async () => ({ sources: [], providerUsed: 'mock', isMockFallback: false }),
+    getKernelJobEvents: async (_jobId, afterSeq = 0) => {
+      poll += 1;
+      const allEvents = [
+        buildJobEvent(1, { type: 'message', traceId: 'trace-subscribe', mode: 'local', content: 'first ' }),
+        buildJobEvent(2, { type: 'message', traceId: 'trace-subscribe', mode: 'local', content: 'second' }),
+        buildJobEvent(3, { type: 'messageEnd', traceId: 'trace-subscribe', mode: 'local', runId: 'run-subscribe' })
+      ];
+      if (poll === 1) {
+        return allEvents.filter((item) => item.seq > afterSeq && item.seq < 3);
+      }
+      return allEvents.filter((item) => item.seq > afterSeq);
+    },
+    getKernelJobStatus: async () => ({
+      job_id: 'job-1',
+      kind: 'planner_chat',
+      state: poll >= 2 ? 'succeeded' : 'running',
+      created_at: '2026-04-03T00:00:00Z',
+      updated_at: '2026-04-03T00:00:02Z',
+      accepted: true,
+      trace_id: 'trace-subscribe',
+      run_id: 'run-subscribe'
+    })
+  });
+
+  await service(jobSubscribePayload('job-1', 1), (event) => emitted.push(event));
+
+  assert.deepEqual(
+    emitted.map((event) => event.type),
+    ['message', 'messageEnd']
+  );
+  assert.equal(emitted[0]?.jobId, 'job-1');
+  assert.equal(emitted[0]?.seq, 2);
+  assert.equal(collectText(emitted), 'second');
+  assert.equal(poll >= 2, true);
+});
+
 test('local mode forwards agent execution events before standard chat closure', async () => {
   const emitted: OutboundEvent[] = [];
   const service = createChatService({
@@ -91,6 +254,9 @@ test('local mode forwards agent execution events before standard chat closure', 
       providerUsed: 'mock',
       isMockFallback: false
     }),
+    createKernelBackgroundJob: async () => {
+      throw new KernelClientError(KernelErrorCode.BAD_RESPONSE, 'missing job endpoint', 404);
+    },
     requestKernelAnswer: async () => {
       throw new Error('should not fallback when stream closes');
     },
@@ -194,6 +360,9 @@ test('local mode preserves fallback events and still closes with standard messag
       providerUsed: 'mock',
       isMockFallback: false
     }),
+    createKernelBackgroundJob: async () => {
+      throw new KernelClientError(KernelErrorCode.BAD_RESPONSE, 'missing job endpoint', 404);
+    },
     requestKernelAnswer: async () => {
       throw new Error('should not fallback when stream closes');
     },
@@ -354,6 +523,9 @@ test('task_start_graph_build emits task state/progress/result events', async () 
     },
     streamKernelAnswer: async () => {
       throw new Error('not used for task');
+    },
+    createKernelBackgroundJob: async () => {
+      throw new KernelClientError(KernelErrorCode.BAD_RESPONSE, 'missing job endpoint', 404);
     },
     searchWeb: async () => ({
       providerUsed: 'mock',
@@ -586,6 +758,9 @@ test('task events and agent events can coexist in parallel without cross-domain 
         mode: 'local',
         usage: { latencyMs: 1 }
       });
+    },
+    createKernelBackgroundJob: async () => {
+      throw new KernelClientError(KernelErrorCode.BAD_RESPONSE, 'missing job endpoint', 404);
     },
     searchWeb: async () => ({
       providerUsed: 'mock',

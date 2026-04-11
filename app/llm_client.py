@@ -3,11 +3,14 @@ from __future__ import annotations
 import json
 import socket
 import time
+from contextlib import contextmanager
+from contextvars import ContextVar
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Callable
 from urllib import error, request
 
+from app.llm_observability import format_llm_debug_text, log_llm_debug_event
 from app.llm_routing import (
     classify_error_category,
     is_in_cooldown,
@@ -23,6 +26,7 @@ except Exception:  # pragma: no cover
     litellm = None
 
 _EVENT_CALLBACKS: list[Callable[[dict[str, Any]], None]] = []
+_LLM_DEBUG_CONTEXT: ContextVar[dict[str, Any]] = ContextVar("_LLM_DEBUG_CONTEXT", default={})
 
 _LITELLM_PROVIDER_PREFIXES = {
     "openai",
@@ -42,17 +46,42 @@ def register_llm_event_callback(callback: Callable[[dict[str, Any]], None]) -> N
     _EVENT_CALLBACKS.append(callback)
 
 
+def unregister_llm_event_callback(callback: Callable[[dict[str, Any]], None]) -> None:
+    try:
+        _EVENT_CALLBACKS.remove(callback)
+    except ValueError:
+        pass
+
+
 def clear_llm_event_callbacks() -> None:
     _EVENT_CALLBACKS.clear()
 
 
+@contextmanager
+def llm_debug_scope(**context: Any):
+    current = dict(_LLM_DEBUG_CONTEXT.get({}) or {})
+    current.update({key: value for key, value in context.items() if value is not None})
+    token = _LLM_DEBUG_CONTEXT.set(current)
+    try:
+        yield
+    finally:
+        _LLM_DEBUG_CONTEXT.reset(token)
+
+
 def _emit_event(event: dict[str, Any]) -> None:
+    merged = dict(_LLM_DEBUG_CONTEXT.get({}) or {})
+    merged.update(event)
+    log_llm_debug_event(merged)
     for callback in list(_EVENT_CALLBACKS):
         try:
-            callback(event)
+            callback(merged)
         except Exception:
             # Observability callback failures must not impact LLM flow.
             pass
+
+
+def emit_llm_debug_event(event: dict[str, Any]) -> None:
+    _emit_event(event)
 
 
 @dataclass
@@ -69,6 +98,10 @@ class LLMCallResult:
     model_used: str | None = None
     fallback_reason: str | None = None
     error_category: str | None = None
+    endpoint_used: str | None = None
+    transport: str | None = None
+    request_payload: str | None = None
+    response_payload: str | None = None
 
 
 @dataclass
@@ -122,6 +155,10 @@ def _base_result(
     model_used: str | None = None,
     fallback_reason: str | None = None,
     error_category: str | None = None,
+    endpoint_used: str | None = None,
+    transport: str | None = None,
+    request_payload: str | None = None,
+    response_payload: str | None = None,
 ) -> LLMCallResult:
     return LLMCallResult(
         ok=ok,
@@ -136,6 +173,10 @@ def _base_result(
         model_used=model_used,
         fallback_reason=fallback_reason,
         error_category=error_category,
+        endpoint_used=endpoint_used,
+        transport=transport,
+        request_payload=request_payload,
+        response_payload=response_payload,
     )
 
 
@@ -155,6 +196,10 @@ def _base_stream_result(
     first_token_latency_ms: int | None = None,
     chunks_received: int = 0,
     stream_events: list[dict[str, Any]] | None = None,
+    endpoint_used: str | None = None,
+    transport: str | None = None,
+    request_payload: str | None = None,
+    response_payload: str | None = None,
 ) -> LLMStreamResult:
     return LLMStreamResult(
         ok=ok,
@@ -172,7 +217,60 @@ def _base_stream_result(
         first_token_latency_ms=(None if first_token_latency_ms is None else max(0, int(first_token_latency_ms))),
         chunks_received=max(0, int(chunks_received)),
         stream_events=stream_events,
+        endpoint_used=endpoint_used,
+        transport=transport,
+        request_payload=request_payload,
+        response_payload=response_payload,
     )
+
+
+def _chat_messages(system_prompt: str, user_prompt: str) -> list[dict[str, str]]:
+    return [
+        {"role": "system", "content": system_prompt},
+        {"role": "user", "content": user_prompt},
+    ]
+
+
+def _serialize_debug_payload(value: Any) -> str | None:
+    return format_llm_debug_text(value)
+
+
+def _http_error_body(exc: error.HTTPError) -> str | None:
+    try:
+        raw = exc.read()
+    except Exception:
+        return None
+    try:
+        return raw.decode("utf-8", errors="replace")
+    except Exception:
+        return str(raw)
+
+
+def _litellm_response_payload(resp: Any) -> str | None:
+    if resp is None:
+        return None
+    if isinstance(resp, dict):
+        return _serialize_debug_payload(resp)
+    for attr in ("model_dump", "dict"):
+        fn = getattr(resp, attr, None)
+        if callable(fn):
+            try:
+                return _serialize_debug_payload(fn())
+            except Exception:
+                pass
+    json_fn = getattr(resp, "json", None)
+    if callable(json_fn):
+        try:
+            raw = json_fn()
+            if isinstance(raw, str):
+                try:
+                    return _serialize_debug_payload(json.loads(raw))
+                except json.JSONDecodeError:
+                    return _serialize_debug_payload(raw)
+            return _serialize_debug_payload(raw)
+        except Exception:
+            pass
+    return _serialize_debug_payload(str(resp))
 
 
 def _legacy_call_chat_completion(
@@ -188,14 +286,13 @@ def _legacy_call_chat_completion(
     retries: int,
     provider: str,
 ) -> LLMCallResult:
+    messages = _chat_messages(system_prompt, user_prompt)
     payload = {
         "model": model,
         "temperature": float(temperature),
-        "messages": [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": user_prompt},
-        ],
+        "messages": messages,
     }
+    request_payload = _serialize_debug_payload(payload)
     body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
     timeout_s = max(0.1, float(timeout_ms) / 1000.0)
     req = request.Request(
@@ -220,6 +317,10 @@ def _legacy_call_chat_completion(
                 provider_used=provider,
                 model_used=model,
                 error_category=classify_error_category("http_error", status_code),
+                endpoint_used=endpoint,
+                transport="urllib",
+                request_payload=request_payload,
+                response_payload=_serialize_debug_payload(raw),
             )
         try:
             parsed = json.loads(raw)
@@ -235,6 +336,10 @@ def _legacy_call_chat_completion(
                 provider_used=provider,
                 model_used=model,
                 error_category="other",
+                endpoint_used=endpoint,
+                transport="urllib",
+                request_payload=request_payload,
+                response_payload=_serialize_debug_payload(raw),
             )
         choices = parsed.get("choices", [])
         if not isinstance(choices, list) or not choices:
@@ -249,6 +354,10 @@ def _legacy_call_chat_completion(
                 provider_used=provider,
                 model_used=model,
                 error_category="other",
+                endpoint_used=endpoint,
+                transport="urllib",
+                request_payload=request_payload,
+                response_payload=_serialize_debug_payload(parsed),
             )
         first = choices[0] if isinstance(choices[0], dict) else {}
         message = first.get("message", {}) if isinstance(first, dict) else {}
@@ -266,6 +375,10 @@ def _legacy_call_chat_completion(
                 provider_used=provider,
                 model_used=model,
                 error_category="other",
+                endpoint_used=endpoint,
+                transport="urllib",
+                request_payload=request_payload,
+                response_payload=_serialize_debug_payload(parsed),
             )
         return _base_result(
             ok=True,
@@ -277,6 +390,10 @@ def _legacy_call_chat_completion(
             retries=retries,
             provider_used=provider,
             model_used=model,
+            endpoint_used=endpoint,
+            transport="urllib",
+            request_payload=request_payload,
+            response_payload=_serialize_debug_payload(parsed),
         )
     except error.HTTPError as exc:
         code = int(exc.code or 0)
@@ -292,6 +409,10 @@ def _legacy_call_chat_completion(
             provider_used=provider,
             model_used=model,
             error_category=classify_error_category(reason, code),
+            endpoint_used=endpoint,
+            transport="urllib",
+            request_payload=request_payload,
+            response_payload=_serialize_debug_payload(_http_error_body(exc)),
         )
     except (TimeoutError, socket.timeout):
         return _base_result(
@@ -304,6 +425,9 @@ def _legacy_call_chat_completion(
             provider_used=provider,
             model_used=model,
             error_category="timeout",
+            endpoint_used=endpoint,
+            transport="urllib",
+            request_payload=request_payload,
         )
     except error.URLError as exc:
         if isinstance(exc.reason, TimeoutError):
@@ -317,6 +441,9 @@ def _legacy_call_chat_completion(
                 provider_used=provider,
                 model_used=model,
                 error_category="timeout",
+                endpoint_used=endpoint,
+                transport="urllib",
+                request_payload=request_payload,
             )
         return _base_result(
             ok=False,
@@ -328,6 +455,9 @@ def _legacy_call_chat_completion(
             provider_used=provider,
             model_used=model,
             error_category="network",
+            endpoint_used=endpoint,
+            transport="urllib",
+            request_payload=request_payload,
         )
     except Exception:
         return _base_result(
@@ -340,6 +470,9 @@ def _legacy_call_chat_completion(
             provider_used=provider,
             model_used=model,
             error_category="other",
+            endpoint_used=endpoint,
+            transport="urllib",
+            request_payload=request_payload,
         )
 
 
@@ -367,21 +500,30 @@ def _litellm_call_chat_completion(
             provider_used=provider,
             model_used=model,
             error_category="other",
+            transport="litellm",
         )
     litellm_model = _litellm_model_name(provider, model)
+    endpoint = _provider_endpoint(provider, api_base) or str(api_base or "").strip() or None
+    messages = _chat_messages(system_prompt, user_prompt)
+    request_payload = _serialize_debug_payload(
+        {
+            "model": litellm_model,
+            "api_base": api_base,
+            "temperature": float(temperature),
+            "messages": messages,
+        }
+    )
     try:
         resp = litellm.completion(
             model=litellm_model,
             api_key=api_key,
             api_base=api_base,
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_prompt},
-            ],
+            messages=messages,
             temperature=float(temperature),
             timeout=max(0.1, float(timeout_ms) / 1000.0),
         )
         status_code = getattr(resp, "status_code", None)
+        response_payload = _litellm_response_payload(resp)
         choices = getattr(resp, "choices", None)
         if not isinstance(choices, list) or not choices:
             return _base_result(
@@ -395,6 +537,10 @@ def _litellm_call_chat_completion(
                 provider_used=provider,
                 model_used=litellm_model,
                 error_category="other",
+                endpoint_used=endpoint,
+                transport="litellm",
+                request_payload=request_payload,
+                response_payload=response_payload,
             )
         first = choices[0]
         message = getattr(first, "message", None)
@@ -412,6 +558,10 @@ def _litellm_call_chat_completion(
                 provider_used=provider,
                 model_used=litellm_model,
                 error_category="other",
+                endpoint_used=endpoint,
+                transport="litellm",
+                request_payload=request_payload,
+                response_payload=response_payload,
             )
         return _base_result(
             ok=True,
@@ -423,6 +573,10 @@ def _litellm_call_chat_completion(
             retries=retries,
             provider_used=provider,
             model_used=litellm_model,
+            endpoint_used=endpoint,
+            transport="litellm",
+            request_payload=request_payload,
+            response_payload=response_payload,
         )
     except Exception as exc:  # pragma: no cover - covered via patched exceptions in tests
         err_name = exc.__class__.__name__.lower()
@@ -449,6 +603,10 @@ def _litellm_call_chat_completion(
             provider_used=provider,
             model_used=litellm_model,
             error_category=classify_error_category(reason, status_code),
+            endpoint_used=endpoint,
+            transport="litellm",
+            request_payload=request_payload,
+            response_payload=_serialize_debug_payload(str(exc)),
         )
 
 
@@ -529,6 +687,7 @@ def call_chat_completion(
     router_failure_threshold: int = 1,
     use_litellm_sdk: bool = True,
     use_legacy_client: bool = False,
+    debug_stage: str | None = None,
 ) -> LLMCallResult:
     t0 = time.perf_counter()
     retries = max(0, int(router_retry if router_retry is not None else max_retries))
@@ -619,9 +778,11 @@ def call_chat_completion(
                     {
                         "event": "fallback_attempt",
                         "stage": "completion",
+                        "debug_stage": debug_stage or "completion",
                         "route_id": route_id,
                         "provider": route_provider,
                         "model": route_model,
+                        "api_base": route_api_base,
                         "attempt_index": attempts_used,
                         "fallback_reason": prior_failure,
                     }
@@ -648,12 +809,21 @@ def call_chat_completion(
                     {
                         "event": "request_success",
                         "stage": "completion",
+                        "debug_stage": debug_stage or "completion",
                         "route_id": route_id,
                         "provider": result.provider_used,
                         "model": result.model_used,
+                        "api_base": route_api_base,
+                        "endpoint": result.endpoint_used,
+                        "transport": result.transport,
                         "attempts_used": result.attempts_used,
                         "elapsed_ms": result.elapsed_ms,
                         "fallback_reason": result.fallback_reason,
+                        "system_prompt": system_prompt,
+                        "user_prompt": user_prompt,
+                        "request_payload": result.request_payload,
+                        "response_payload": result.response_payload,
+                        "response_text": result.content,
                     }
                 )
                 return result
@@ -662,14 +832,23 @@ def call_chat_completion(
                 {
                     "event": "request_failure",
                     "stage": "completion",
+                    "debug_stage": debug_stage or "completion",
                     "route_id": route_id,
                     "provider": result.provider_used,
                     "model": result.model_used,
+                    "api_base": route_api_base,
+                    "endpoint": result.endpoint_used,
+                    "transport": result.transport,
                     "attempts_used": result.attempts_used,
                     "reason": result.reason,
                     "status_code": result.status_code,
                     "error_category": result.error_category,
                     "fallback_reason": result.fallback_reason,
+                    "system_prompt": system_prompt,
+                    "user_prompt": user_prompt,
+                    "request_payload": result.request_payload,
+                    "response_payload": result.response_payload,
+                    "response_text": result.content,
                 }
             )
             if is_recoverable(result.reason, result.status_code) and attempt < retries:
@@ -715,15 +894,14 @@ def _legacy_stream_once(
     provider: str,
     on_delta: Callable[[str], None] | None,
 ) -> LLMStreamResult:
+    messages = _chat_messages(system_prompt, user_prompt)
     payload = {
         "model": model,
         "temperature": float(temperature),
         "stream": True,
-        "messages": [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": user_prompt},
-        ],
+        "messages": messages,
     }
+    request_payload = _serialize_debug_payload(payload)
     body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
     timeout_s = max(0.1, float(timeout_ms) / 1000.0)
     req = request.Request(
@@ -734,6 +912,7 @@ def _legacy_stream_once(
     )
     chunks: list[str] = []
     stream_events: list[dict[str, Any]] = []
+    raw_events: list[str] = []
     cumulative_chars = 0
     first_token_latency_ms: int | None = None
     done = False
@@ -754,6 +933,9 @@ def _legacy_stream_once(
                     provider_used=provider,
                     model_used=model,
                     error_category=classify_error_category("http_error", status_code),
+                    endpoint_used=endpoint,
+                    transport="urllib_sse",
+                    request_payload=request_payload,
                 )
             while True:
                 raw_line = resp.readline()
@@ -763,6 +945,7 @@ def _legacy_stream_once(
                 if not line or not line.startswith("data:"):
                     continue
                 data = line[5:].strip()
+                raw_events.append(data)
                 if data == "[DONE]":
                     done = True
                     break
@@ -815,6 +998,10 @@ def _legacy_stream_once(
                 chunks_received=len(chunks),
                 stream_events=stream_events,
                 error_category="other",
+                endpoint_used=endpoint,
+                transport="urllib_sse",
+                request_payload=request_payload,
+                response_payload=_serialize_debug_payload("\n".join(raw_events)),
             )
         if not chunks:
             return _base_stream_result(
@@ -828,6 +1015,10 @@ def _legacy_stream_once(
                 provider_used=provider,
                 model_used=model,
                 error_category="other",
+                endpoint_used=endpoint,
+                transport="urllib_sse",
+                request_payload=request_payload,
+                response_payload=_serialize_debug_payload("\n".join(raw_events)),
             )
         if not done:
             return _base_stream_result(
@@ -844,6 +1035,10 @@ def _legacy_stream_once(
                 chunks_received=len(chunks),
                 stream_events=stream_events,
                 error_category="network",
+                endpoint_used=endpoint,
+                transport="urllib_sse",
+                request_payload=request_payload,
+                response_payload=_serialize_debug_payload("\n".join(raw_events)),
             )
         return _base_stream_result(
             ok=True,
@@ -858,6 +1053,10 @@ def _legacy_stream_once(
             first_token_latency_ms=first_token_latency_ms,
             chunks_received=len(chunks),
             stream_events=stream_events,
+            endpoint_used=endpoint,
+            transport="urllib_sse",
+            request_payload=request_payload,
+            response_payload=_serialize_debug_payload("\n".join(raw_events)),
         )
     except error.HTTPError as exc:
         code = int(exc.code or 0)
@@ -873,6 +1072,10 @@ def _legacy_stream_once(
             provider_used=provider,
             model_used=model,
             error_category=classify_error_category(reason, code),
+            endpoint_used=endpoint,
+            transport="urllib_sse",
+            request_payload=request_payload,
+            response_payload=_serialize_debug_payload(_http_error_body(exc)),
         )
     except (TimeoutError, socket.timeout):
         timeout_reason = "stream_first_token_timeout" if first_token_latency_ms is None else "stream_interrupted"
@@ -889,6 +1092,10 @@ def _legacy_stream_once(
             chunks_received=len(chunks),
             stream_events=stream_events,
             error_category=classify_error_category(timeout_reason),
+            endpoint_used=endpoint,
+            transport="urllib_sse",
+            request_payload=request_payload,
+            response_payload=_serialize_debug_payload("\n".join(raw_events)),
         )
     except error.URLError as exc:
         if isinstance(exc.reason, TimeoutError):
@@ -906,6 +1113,10 @@ def _legacy_stream_once(
                 chunks_received=len(chunks),
                 stream_events=stream_events,
                 error_category=classify_error_category(timeout_reason),
+                endpoint_used=endpoint,
+                transport="urllib_sse",
+                request_payload=request_payload,
+                response_payload=_serialize_debug_payload("\n".join(raw_events)),
             )
         return _base_stream_result(
             ok=False,
@@ -917,6 +1128,10 @@ def _legacy_stream_once(
             provider_used=provider,
             model_used=model,
             error_category="network",
+            endpoint_used=endpoint,
+            transport="urllib_sse",
+            request_payload=request_payload,
+            response_payload=_serialize_debug_payload("\n".join(raw_events)),
         )
     except Exception:
         reason = "stream_interrupted" if first_token_latency_ms is not None else "unknown_error"
@@ -933,6 +1148,10 @@ def _legacy_stream_once(
             chunks_received=len(chunks),
             stream_events=stream_events,
             error_category=classify_error_category(reason),
+            endpoint_used=endpoint,
+            transport="urllib_sse",
+            request_payload=request_payload,
+            response_payload=_serialize_debug_payload("\n".join(raw_events)),
         )
 
 
@@ -957,6 +1176,7 @@ def call_chat_completion_stream(
     router_failure_threshold: int = 1,
     use_litellm_sdk: bool = True,
     use_legacy_client: bool = False,
+    debug_stage: str | None = None,
 ) -> LLMStreamResult:
     # Keep streaming on openai-compatible SSE path to preserve event fields and callback behavior.
     _ = (use_litellm_sdk, use_legacy_client)
@@ -1066,9 +1286,11 @@ def call_chat_completion_stream(
                     {
                         "event": "fallback_attempt",
                         "stage": "stream",
+                        "debug_stage": debug_stage or "stream",
                         "route_id": route_id,
                         "provider": route_provider,
                         "model": route_model,
+                        "api_base": route_api_base,
                         "attempt_index": attempts_used,
                         "fallback_reason": prior_failure,
                     }
@@ -1094,14 +1316,23 @@ def call_chat_completion_stream(
                     {
                         "event": "request_success",
                         "stage": "stream",
+                        "debug_stage": debug_stage or "stream",
                         "route_id": route_id,
                         "provider": result.provider_used,
                         "model": result.model_used,
+                        "api_base": route_api_base,
+                        "endpoint": result.endpoint_used,
+                        "transport": result.transport,
                         "attempts_used": result.attempts_used,
                         "elapsed_ms": result.elapsed_ms,
                         "first_token_latency_ms": result.first_token_latency_ms,
                         "chunks_received": result.chunks_received,
                         "fallback_reason": result.fallback_reason,
+                        "system_prompt": system_prompt,
+                        "user_prompt": user_prompt,
+                        "request_payload": result.request_payload,
+                        "response_payload": result.response_payload,
+                        "response_text": result.content,
                     }
                 )
                 return result
@@ -1110,9 +1341,13 @@ def call_chat_completion_stream(
                 {
                     "event": "request_failure",
                     "stage": "stream",
+                    "debug_stage": debug_stage or "stream",
                     "route_id": route_id,
                     "provider": result.provider_used,
                     "model": result.model_used,
+                    "api_base": route_api_base,
+                    "endpoint": result.endpoint_used,
+                    "transport": result.transport,
                     "attempts_used": result.attempts_used,
                     "reason": result.reason,
                     "status_code": result.status_code,
@@ -1120,6 +1355,11 @@ def call_chat_completion_stream(
                     "fallback_reason": result.fallback_reason,
                     "first_token_latency_ms": result.first_token_latency_ms,
                     "chunks_received": result.chunks_received,
+                    "system_prompt": system_prompt,
+                    "user_prompt": user_prompt,
+                    "request_payload": result.request_payload,
+                    "response_payload": result.response_payload,
+                    "response_text": result.content,
                 }
             )
             if is_recoverable(result.reason, result.status_code) and attempt < retries:

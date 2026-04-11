@@ -29,6 +29,11 @@ _ENV_MAP = {
     for field, rule in PIPELINE_RUNTIME_FIELD_GOVERNANCE["marker_tuning"].items()
     if rule.env_var
 }
+_MARKER_ENV_MAP = {
+    field: rule.env_var
+    for field, rule in PIPELINE_RUNTIME_FIELD_GOVERNANCE["marker"].items()
+    if rule.env_var
+}
 _MARKER_LLM_ENV_MAP = {
     field: rule.env_var
     for field, rule in PIPELINE_RUNTIME_FIELD_GOVERNANCE["marker_llm"].items()
@@ -103,6 +108,7 @@ class MarkerLLMConfig:
 
 @dataclass(frozen=True)
 class PipelineRuntimeConfig:
+    marker_enabled: bool
     marker_tuning: MarkerTuning
     marker_llm: MarkerLLMConfig
     updated_at: str
@@ -122,6 +128,13 @@ class EffectiveMarkerLLM:
     warnings: list[str]
 
 
+@dataclass(frozen=True)
+class EffectiveMarkerEnabled:
+    value: bool
+    source: str
+    warnings: list[str]
+
+
 def _utc_now_iso() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
 
@@ -132,6 +145,10 @@ def default_marker_tuning() -> MarkerTuning:
 
 def default_marker_llm() -> MarkerLLMConfig:
     return MarkerLLMConfig()
+
+
+def default_marker_enabled() -> bool:
+    return False
 
 
 def _coerce_int(value: Any) -> int:
@@ -198,6 +215,15 @@ def validate_marker_tuning_payload(payload: Any) -> tuple[MarkerTuning, dict[str
     return MarkerTuning(**parsed), errors
 
 
+def validate_marker_enabled_payload(payload: Any) -> tuple[bool, dict[str, str]]:
+    errors: dict[str, str] = {}
+    try:
+        return _coerce_bool(payload), errors
+    except ValueError:
+        errors["marker_enabled"] = "must be a boolean"
+        return default_marker_enabled(), errors
+
+
 def validate_marker_llm_payload(payload: Any) -> tuple[MarkerLLMConfig, dict[str, str]]:
     if not isinstance(payload, dict):
         raise ValueError("marker_llm must be an object")
@@ -246,10 +272,15 @@ def mask_marker_llm_secrets(values: MarkerLLMConfig | dict[str, Any]) -> dict[st
 
 def save_pipeline_runtime_config(
     *,
+    marker_enabled: Any = False,
     marker_tuning: dict[str, Any],
     marker_llm: dict[str, Any] | None = None,
     path: Path | None = None,
 ) -> PipelineRuntimeConfig:
+    enabled, enabled_errors = validate_marker_enabled_payload(marker_enabled)
+    if enabled_errors:
+        message = "; ".join(f"{field}: {reason}" for field, reason in enabled_errors.items())
+        raise ValueError(message)
     tuning, errors = validate_marker_tuning_payload(marker_tuning)
     if errors:
         message = "; ".join(f"{field}: {reason}" for field, reason in errors.items())
@@ -266,7 +297,7 @@ def save_pipeline_runtime_config(
     if llm_errors:
         message = "; ".join(f"{field}: {reason}" for field, reason in llm_errors.items())
         raise ValueError(message)
-    config = PipelineRuntimeConfig(marker_tuning=tuning, marker_llm=llm_config, updated_at=_utc_now_iso())
+    config = PipelineRuntimeConfig(marker_enabled=enabled, marker_tuning=tuning, marker_llm=llm_config, updated_at=_utc_now_iso())
     target = path or PIPELINE_RUNTIME_CONFIG_PATH
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text(json.dumps(asdict(config), ensure_ascii=False, indent=2), encoding="utf-8")
@@ -283,6 +314,10 @@ def load_pipeline_runtime_config(path: Path | None = None) -> tuple[PipelineRunt
         return None, f"failed to parse pipeline runtime config: {exc}"
     if not isinstance(payload, dict):
         return None, "invalid pipeline runtime config: payload must be a JSON object"
+    enabled, enabled_errors = validate_marker_enabled_payload(payload.get("marker_enabled", default_marker_enabled()))
+    if enabled_errors:
+        message = "; ".join(f"{field}: {reason}" for field, reason in enabled_errors.items())
+        return None, f"invalid pipeline runtime config: {message}"
     marker_payload = payload.get("marker_tuning")
     tuning, errors = validate_marker_tuning_payload(marker_payload if marker_payload is not None else {})
     if errors:
@@ -294,7 +329,7 @@ def load_pipeline_runtime_config(path: Path | None = None) -> tuple[PipelineRunt
         message = "; ".join(f"{field}: {reason}" for field, reason in llm_errors.items())
         return None, f"invalid pipeline runtime config: {message}"
     updated_at = str(payload.get("updated_at", "")).strip() or _utc_now_iso()
-    return PipelineRuntimeConfig(marker_tuning=tuning, marker_llm=llm_config, updated_at=updated_at), None
+    return PipelineRuntimeConfig(marker_enabled=enabled, marker_tuning=tuning, marker_llm=llm_config, updated_at=updated_at), None
 
 
 def _sanitize_runtime_value(field: str, value: Any) -> tuple[Any, bool]:
@@ -361,6 +396,23 @@ def resolve_effective_marker_tuning(*, path: Path | None = None) -> EffectiveMar
         source[field] = "default"
 
     return EffectiveMarkerTuning(values=MarkerTuning(**effective), source=source, warnings=warnings)
+
+
+def resolve_effective_marker_enabled(*, path: Path | None = None) -> EffectiveMarkerEnabled:
+    warnings: list[str] = []
+    config, load_err = load_pipeline_runtime_config(path=path)
+    if load_err:
+        warnings.append(load_err)
+    env_name = _MARKER_ENV_MAP["enabled"]
+    env_raw = os.getenv(env_name)
+    if env_raw is not None and str(env_raw).strip():
+        env_value, errors = validate_marker_enabled_payload(env_raw)
+        if not errors:
+            return EffectiveMarkerEnabled(value=env_value, source="env", warnings=warnings)
+        warnings.append(f"{env_name} is invalid, fallback to runtime/default")
+    if config is not None:
+        return EffectiveMarkerEnabled(value=bool(config.marker_enabled), source="runtime", warnings=warnings)
+    return EffectiveMarkerEnabled(value=default_marker_enabled(), source="default", warnings=warnings)
 
 
 def resolve_effective_marker_llm(*, path: Path | None = None) -> EffectiveMarkerLLM:

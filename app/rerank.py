@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+from time import perf_counter
 import urllib.error
 import urllib.request
 from dataclasses import dataclass
@@ -9,6 +10,8 @@ from statistics import mean
 from typing import Any
 
 from app.config import PipelineConfig
+from app.llm_client import emit_llm_debug_event
+from app.llm_observability import format_llm_debug_text
 from app.llm_routing import (
     build_stage_fallback_signal,
     build_stage_policy,
@@ -90,17 +93,63 @@ def _fallback_lexical_score(query: str, text: str) -> float:
     return overlap / max(1, len(q_tokens))
 
 
+def _read_trace_id(headers: Any) -> str | None:
+    if headers is None:
+        return None
+    for key in ("x-siliconcloud-trace-id", "x-trace-id", "trace-id"):
+        value = headers.get(key)
+        if value:
+            return str(value)
+    return None
+
+
+def _rerank_response_summary(scores: list[float]) -> dict[str, float | int]:
+    if not scores:
+        return {"score_count": 0, "max_score": 0.0, "min_score": 0.0}
+    return {
+        "score_count": len(scores),
+        "max_score": max(float(score) for score in scores),
+        "min_score": min(float(score) for score in scores),
+    }
+
+
 def _siliconflow_rerank(
     *,
     query: str,
     documents: list[str],
+    provider: str,
     api_base: str,
     model: str,
     api_key_env: str,
     timeout_ms: int,
 ) -> list[float]:
+    endpoint = api_base.rstrip("/") + "/rerank"
+    request_payload = format_llm_debug_text(
+        {
+            "model": model,
+            "query": query,
+            "documents": documents,
+        }
+    )
+    started_at = perf_counter()
     api_key = os.environ.get(api_key_env, "").strip()
     if not api_key:
+        emit_llm_debug_event(
+            {
+                "event": "request_failure",
+                "stage": "rerank",
+                "debug_stage": "rerank",
+                "provider": provider,
+                "model": model,
+                "api_base": api_base,
+                "endpoint": endpoint,
+                "transport": "urllib",
+                "reason": "missing_api_key",
+                "error_category": "missing_api_key",
+                "elapsed_ms": int((perf_counter() - started_at) * 1000),
+                "request_payload": request_payload,
+            }
+        )
         raise RuntimeError(f"missing_api_key_env:{api_key_env}")
 
     payload = {
@@ -109,9 +158,8 @@ def _siliconflow_rerank(
         "documents": documents,
     }
     body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
-    url = api_base.rstrip("/") + "/rerank"
     req = urllib.request.Request(
-        url=url,
+        url=endpoint,
         data=body,
         method="POST",
         headers={
@@ -120,14 +168,103 @@ def _siliconflow_rerank(
         },
     )
     timeout_sec = max(1.0, float(timeout_ms) / 1000.0)
-    with urllib.request.urlopen(req, timeout=timeout_sec) as resp:
-        raw = resp.read().decode("utf-8")
-    data = json.loads(raw)
+    try:
+        with urllib.request.urlopen(req, timeout=timeout_sec) as resp:
+            raw = resp.read().decode("utf-8")
+            trace_id = _read_trace_id(getattr(resp, "headers", None))
+    except urllib.error.HTTPError as exc:
+        try:
+            detail = exc.read().decode("utf-8")
+        except Exception:
+            detail = str(exc)
+        trace_id = _read_trace_id(getattr(exc, "headers", None))
+        emit_llm_debug_event(
+            {
+                "event": "request_failure",
+                "stage": "rerank",
+                "debug_stage": "rerank",
+                "provider": provider,
+                "model": model,
+                "api_base": api_base,
+                "endpoint": endpoint,
+                "transport": "urllib",
+                "status_code": int(exc.code),
+                "reason": "http_error",
+                "error_category": "http_error",
+                "elapsed_ms": int((perf_counter() - started_at) * 1000),
+                "trace_id": trace_id,
+                "request_payload": request_payload,
+                "response_payload": format_llm_debug_text(detail),
+            }
+        )
+        raise
+    except (urllib.error.URLError, TimeoutError) as exc:
+        emit_llm_debug_event(
+            {
+                "event": "request_failure",
+                "stage": "rerank",
+                "debug_stage": "rerank",
+                "provider": provider,
+                "model": model,
+                "api_base": api_base,
+                "endpoint": endpoint,
+                "transport": "urllib",
+                "reason": "network_error",
+                "error_category": "network_error",
+                "elapsed_ms": int((perf_counter() - started_at) * 1000),
+                "request_payload": request_payload,
+                "response_payload": format_llm_debug_text(str(exc)),
+            }
+        )
+        raise
+
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError:
+        emit_llm_debug_event(
+            {
+                "event": "request_failure",
+                "stage": "rerank",
+                "debug_stage": "rerank",
+                "provider": provider,
+                "model": model,
+                "api_base": api_base,
+                "endpoint": endpoint,
+                "transport": "urllib",
+                "status_code": 200,
+                "reason": "invalid_response",
+                "error_category": "invalid_response",
+                "elapsed_ms": int((perf_counter() - started_at) * 1000),
+                "trace_id": trace_id,
+                "request_payload": request_payload,
+                "response_payload": format_llm_debug_text(raw),
+            }
+        )
+        raise
 
     rows = data.get("results")
     if not isinstance(rows, list):
         rows = data.get("data")
     if not isinstance(rows, list):
+        emit_llm_debug_event(
+            {
+                "event": "request_failure",
+                "stage": "rerank",
+                "debug_stage": "rerank",
+                "provider": provider,
+                "model": model,
+                "api_base": api_base,
+                "endpoint": endpoint,
+                "transport": "urllib",
+                "status_code": 200,
+                "reason": "invalid_response",
+                "error_category": "invalid_response",
+                "elapsed_ms": int((perf_counter() - started_at) * 1000),
+                "trace_id": trace_id,
+                "request_payload": request_payload,
+                "response_payload": format_llm_debug_text(data),
+            }
+        )
         raise RuntimeError("invalid_rerank_response")
 
     scores: list[float] = [0.0 for _ in documents]
@@ -150,7 +287,44 @@ def _siliconflow_rerank(
         scores[idx_int] = score
         seen.add(idx_int)
     if not seen:
+        emit_llm_debug_event(
+            {
+                "event": "request_failure",
+                "stage": "rerank",
+                "debug_stage": "rerank",
+                "provider": provider,
+                "model": model,
+                "api_base": api_base,
+                "endpoint": endpoint,
+                "transport": "urllib",
+                "status_code": 200,
+                "reason": "empty_scores",
+                "error_category": "invalid_response",
+                "elapsed_ms": int((perf_counter() - started_at) * 1000),
+                "trace_id": trace_id,
+                "request_payload": request_payload,
+                "response_payload": format_llm_debug_text(data),
+            }
+        )
         raise RuntimeError("empty_rerank_scores")
+    emit_llm_debug_event(
+        {
+            "event": "request_success",
+            "stage": "rerank",
+            "debug_stage": "rerank",
+            "provider": provider,
+            "model": model,
+            "api_base": api_base,
+            "endpoint": endpoint,
+            "transport": "urllib",
+            "status_code": 200,
+            "elapsed_ms": int((perf_counter() - started_at) * 1000),
+            "trace_id": trace_id,
+            "request_payload": request_payload,
+            "response_payload": format_llm_debug_text(data),
+            "response_text": format_llm_debug_text(_rerank_response_summary(scores)),
+        }
+    )
     return scores
 
 
@@ -176,6 +350,7 @@ def _compute_scores(
                 return _siliconflow_rerank(
                     query=query,
                     documents=docs,
+                    provider=target.provider,
                     api_base=target.api_base,
                     model=target.model,
                     api_key_env=target.api_key_env,

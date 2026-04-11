@@ -90,6 +90,9 @@ LLM_STAGE_FIELD_GOVERNANCE: dict[str, dict[str, ConfigFieldGovernance]] = {
 }
 
 PIPELINE_RUNTIME_FIELD_GOVERNANCE: dict[str, dict[str, ConfigFieldGovernance]] = {
+    "marker": {
+        "enabled": ConfigFieldGovernance("runtime", True, "MARKER_ENABLED"),
+    },
     "marker_tuning": {
         "recognition_batch_size": ConfigFieldGovernance("runtime", True, "RECOGNITION_BATCH_SIZE"),
         "detector_batch_size": ConfigFieldGovernance("runtime", True, "DETECTOR_BATCH_SIZE"),

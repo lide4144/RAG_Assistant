@@ -42,7 +42,8 @@ scripts/dev-up.sh
 - `frontend pid=... url=http://127.0.0.1:3000`
 
 说明：`scripts/dev-up.sh` 会自动为前端注入
-`NEXT_PUBLIC_KERNEL_BASE_URL=http://127.0.0.1:8000`（或你覆盖后的 `KERNEL_HOST/KERNEL_PORT`）。
+`NEXT_PUBLIC_KERNEL_BASE_URL=http://127.0.0.1:8000`（或你覆盖后的 `KERNEL_HOST/KERNEL_PORT`），并注入
+`NEXT_PUBLIC_GATEWAY_WS_URL=ws://127.0.0.1:8080/ws`（或你覆盖后的 `GATEWAY_HOST/GATEWAY_PORT`）。
 前端管理接口（`/api/admin/*`）路由优先级为：
 
 1. 显式 `NEXT_PUBLIC_KERNEL_BASE_URL`
@@ -70,6 +71,8 @@ scripts/dev-up.sh
    - 当你不使用同域反向代理时，显式设置：
      - `NEXT_PUBLIC_KERNEL_BASE_URL=http(s)://<你的服务地址>:<端口>`
      - `NEXT_PUBLIC_GATEWAY_WS_URL=ws(s)://<你的服务地址>:<端口>/ws`
+
+本地开发如果直接运行 `scripts/dev-up.sh`，现在会自动注入上述 WebSocket 地址；若你手动分别启动三服务，也需要自己设置 `NEXT_PUBLIC_GATEWAY_WS_URL`，否则前端会默认尝试连接当前页面同域的 `/ws`。
 
 错误示例：
 
@@ -165,6 +168,27 @@ curl -N -X POST http://127.0.0.1:8000/qa/stream \
 
 在运行 `scripts/dev-up.sh` 的终端按 `Ctrl+C`。
 
+## 8.1 后台任务存储与清理
+
+聊天后台任务、图构建任务和事件回放会持久化到：
+
+- `data/processed/job_store.sqlite3`
+
+这个文件会随着 `job` / `job_event` 持续增长，尤其是在频繁做流式聊天调试时更明显。
+
+本地开发建议：
+
+- 需要保留最近恢复能力时，直接保留该文件
+- 只想清空后台任务历史时，停止三服务后删除它：
+
+```bash
+rm -f /home/programer/RAG_GPTV1.0/data/processed/job_store.sqlite3
+```
+
+- 删除后下次启动会自动重建；这不会删除已导入文档和索引，但会清空任务历史、事件游标和配置冻结快照
+
+如果你在排查“恢复到了旧任务”“设置仍显示被占用”这类问题，先确认是否还保留了历史 `job_store.sqlite3`。
+
 ## 9. 常见问题
 
 ### 9.1 浏览器提示“无法访问此网页”
@@ -190,10 +214,10 @@ cd ../frontend && PORT=3000 npx next dev -H 0.0.0.0 -p 3000
 
 若页面状态显示 `Connected`，且可正常问答，可先忽略该 warning；通常是连接初始化阶段的瞬时日志。
 
-### 9.3 PDF 入库日志出现 marker fallback
+### 9.3 本地文档入库日志出现 marker fallback
 
-- 若日志/报告出现 `marker unavailable`，说明当前环境未安装 Marker，可执行 `venv/bin/python -m pip install marker-pdf`。
-- 若出现 `marker parse timeout`，提高 `marker_timeout_sec` 或先设置 `marker_enabled=false` 回滚到 legacy 解析。
+- 若日志/报告出现 `marker unavailable`，说明当前环境未安装 Marker；这不会阻止基础解析导入。如需启用增强解析，可执行 `venv/bin/python -m pip install marker-pdf`。
+- 若出现 `marker parse timeout`，提高 `marker_timeout_sec`，或先在设置页关闭 Marker 总开关回到基础解析模式。
 
 ## 10. 本地模型主路径（Ollama）
 

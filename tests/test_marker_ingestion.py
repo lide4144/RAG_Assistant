@@ -13,6 +13,9 @@ from app.parser import choose_best_title
 
 
 class MarkerIngestionTests(unittest.TestCase):
+    def _marker_enabled_state(self):
+        return type("MarkerEnabled", (), {"value": True, "source": "runtime", "warnings": []})()
+
     def _args(self, input_dir: Path, out_dir: Path, run_dir: Path) -> Namespace:
         return Namespace(
             input=str(input_dir),
@@ -87,6 +90,7 @@ class MarkerIngestionTests(unittest.TestCase):
             pdf.write_bytes(b"%PDF-1.4 test")
 
             with (
+                patch("app.ingest.resolve_effective_marker_enabled", return_value=self._marker_enabled_state()),
                 patch("app.ingest.list_pdf_files", return_value=[pdf]),
                 patch("app.ingest._marker_preflight_check", return_value=(True, "", "")),
                 patch("app.ingest.parse_pdf_with_marker", side_effect=MarkerParseError("marker unavailable")),
@@ -116,6 +120,7 @@ class MarkerIngestionTests(unittest.TestCase):
             pdf.write_bytes(b"%PDF-1.4 test")
 
             with (
+                patch("app.ingest.resolve_effective_marker_enabled", return_value=self._marker_enabled_state()),
                 patch("app.ingest.list_pdf_files", return_value=[pdf]),
                 patch("app.ingest._marker_preflight_check", return_value=(False, "model_cache_access", "marker preflight failed: cache dir not writable")),
                 patch("app.ingest.parse_pdf_pages", return_value=([PageText(page_num=1, text="Good Title\ncontent")], [], None)),
@@ -135,6 +140,38 @@ class MarkerIngestionTests(unittest.TestCase):
             self.assertIn("model_cache_access", trace.get("parser_fallback_stages", []))
             counts = trace.get("parser_fallback_stage_counts", {})
             self.assertEqual(counts.get("model_cache_access"), 1)
+
+    def test_controlled_skip_is_reported_as_skipped_not_failed(self) -> None:
+        from app.ingest import run_ingest
+
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            in_dir = base / "in"
+            out_dir = base / "out"
+            run_dir = base / "run"
+            in_dir.mkdir(parents=True, exist_ok=True)
+            run_dir.mkdir(parents=True, exist_ok=True)
+            doc = in_dir / "empty.rtf"
+            doc.write_text("", encoding="utf-8")
+
+            code = run_ingest(self._args(in_dir, out_dir, run_dir))
+
+            self.assertEqual(code, 0)
+            report = json.loads((run_dir / "ingest_report.json").read_text(encoding="utf-8"))
+            summary = report.get("import_summary", {})
+            self.assertEqual(summary.get("added"), 0)
+            self.assertEqual(summary.get("skipped"), 1)
+            self.assertEqual(summary.get("failed"), 0)
+            self.assertTrue(summary.get("controlled_skip"))
+            outcomes = report.get("import_outcomes", [])
+            self.assertEqual(len(outcomes), 1)
+            self.assertEqual(outcomes[0].get("status"), "skipped")
+            self.assertIn("no readable rtf text", str(outcomes[0].get("reason", "")))
+            rows = report.get("parser_observability", [])
+            self.assertEqual(len(rows), 1)
+            self.assertTrue(rows[0].get("controlled_skip"))
+            self.assertEqual(rows[0].get("parser_mode"), "controlled_skip")
+            self.assertIn("受控跳过", str(report.get("confidence_note", "")))
 
     def test_papers_and_report_include_parser_observability_fields(self) -> None:
         from app.ingest import run_ingest
@@ -158,6 +195,7 @@ class MarkerIngestionTests(unittest.TestCase):
             )
 
             with (
+                patch("app.ingest.resolve_effective_marker_enabled", return_value=self._marker_enabled_state()),
                 patch("app.ingest.list_pdf_files", return_value=[pdf]),
                 patch("app.ingest._marker_preflight_check", return_value=(True, "", "")),
                 patch("app.ingest.parse_pdf_with_marker", return_value=marker_result),
@@ -210,6 +248,7 @@ class MarkerIngestionTests(unittest.TestCase):
             )
 
             with (
+                patch("app.ingest.resolve_effective_marker_enabled", return_value=self._marker_enabled_state()),
                 patch("app.ingest.list_pdf_files", return_value=[pdf]),
                 patch("app.ingest._marker_preflight_check", return_value=(True, "", "")),
                 patch("app.ingest.parse_pdf_with_marker", return_value=marker_result),
@@ -251,6 +290,7 @@ class MarkerIngestionTests(unittest.TestCase):
             )
 
             with (
+                patch("app.ingest.resolve_effective_marker_enabled", return_value=self._marker_enabled_state()),
                 patch("app.ingest.list_pdf_files", return_value=[pdf]),
                 patch("app.ingest._marker_preflight_check", return_value=(True, "", "")),
                 patch("app.ingest.parse_pdf_with_marker", return_value=marker_result),
@@ -296,6 +336,7 @@ class MarkerIngestionTests(unittest.TestCase):
             )
 
             with (
+                patch("app.ingest.resolve_effective_marker_enabled", return_value=self._marker_enabled_state()),
                 patch("app.ingest.list_pdf_files", return_value=[pdf]),
                 patch("app.ingest._marker_preflight_check", return_value=(True, "", "")),
                 patch("app.ingest.parse_pdf_with_marker", return_value=marker_result),

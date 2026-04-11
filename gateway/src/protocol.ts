@@ -1,5 +1,5 @@
 import type { KernelSource } from './types/kernel.js';
-import type { ClientInboundEvent, ClientChatRequestEvent, ClientTaskStartGraphBuildEvent } from './types/events.js';
+import type { ClientInboundEvent, ClientChatRequestEvent, ClientJobSubscribeEvent, ClientTaskStartGraphBuildEvent } from './types/events.js';
 
 const allowedModes = new Set(['local', 'web', 'hybrid']);
 
@@ -41,6 +41,26 @@ function parseTaskStartEvent(maybeEvent: Partial<ClientTaskStartGraphBuildEvent>
   };
 }
 
+function parseJobSubscribeEvent(maybeEvent: Partial<ClientJobSubscribeEvent>): ClientJobSubscribeEvent {
+  if (maybeEvent.type !== 'job_subscribe' || !maybeEvent.payload) {
+    throw new Error('Client event must use type=job_subscribe and include payload');
+  }
+  const { jobId, afterSeq } = maybeEvent.payload;
+  if (!jobId || typeof jobId !== 'string') {
+    throw new Error('payload.jobId is required');
+  }
+  if (afterSeq !== undefined && (!Number.isInteger(afterSeq) || afterSeq < 0)) {
+    throw new Error('payload.afterSeq must be a non-negative integer');
+  }
+  return {
+    type: 'job_subscribe',
+    payload: {
+      jobId,
+      afterSeq
+    }
+  };
+}
+
 export function parseClientEvent(raw: string): ClientInboundEvent {
   let parsed: unknown;
   try {
@@ -60,7 +80,10 @@ export function parseClientEvent(raw: string): ClientInboundEvent {
   if (maybeEvent.type === 'task_start_graph_build') {
     return parseTaskStartEvent(maybeEvent as Partial<ClientTaskStartGraphBuildEvent>);
   }
-  throw new Error('Client event type must be chat or task_start_graph_build');
+  if (maybeEvent.type === 'job_subscribe') {
+    return parseJobSubscribeEvent(maybeEvent as Partial<ClientJobSubscribeEvent>);
+  }
+  throw new Error('Client event type must be chat, task_start_graph_build, or job_subscribe');
 }
 
 export function normalizeSources(sources: KernelSource[]): KernelSource[] {
