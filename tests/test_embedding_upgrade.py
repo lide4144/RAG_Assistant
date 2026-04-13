@@ -6,7 +6,7 @@ import tempfile
 import time
 import unittest
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 from app.config import PipelineConfig
 from app.embedding_api import EmbeddingAPIError, fetch_embeddings
@@ -419,11 +419,12 @@ class EmbeddingUpgradeTests(unittest.TestCase):
                 encoding="utf-8",
             )
 
-            with patch("app.qa.build_embedding_vec_index") as mocked_build:
-                mocked_build.return_value = (
-                    VecIndex(docs=[], idf={}, doc_vectors=[], doc_norms=[], index_type="embedding", embedding_dim=1024, embeddings=[]),
-                    EmbeddingBuildStats(),
-                )
+            backend = Mock()
+            backend.rebuild.return_value = (
+                VecIndex(docs=[], idf={}, doc_vectors=[], doc_norms=[], index_type="embedding", embedding_dim=1024, embeddings=[]),
+                EmbeddingBuildStats(),
+            )
+            with patch("app.qa.resolve_vector_backend", return_value=backend):
                 ensure_indexes(
                     chunks_path=str(chunks),
                     bm25_index_path=str(bm25_idx),
@@ -432,7 +433,66 @@ class EmbeddingUpgradeTests(unittest.TestCase):
                     config_path=str(cfg_path),
                     mode="dense",
                 )
-                self.assertTrue(mocked_build.called)
+                self.assertTrue(backend.rebuild.called)
+
+    def test_retrieve_candidates_uses_vector_backend_search_for_embedding_dense_path(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            chunks = base / "chunks_clean.jsonl"
+            bm25_idx = base / "bm25.json"
+            tfidf_idx = base / "vec_tfidf.json"
+            embed_idx = base / "vec_embed.json"
+            cfg_path = base / "cfg.yaml"
+            cache_path = base / "embedding_cache.jsonl"
+            self._write_chunks(chunks)
+            build_bm25_index(chunks, bm25_idx)
+            build_vec_index(chunks, tfidf_idx)
+
+            cfg = PipelineConfig().embedding
+            cfg.cache_path = str(cache_path)
+            cfg.model = "fake-model"
+            with patch("app.index_vec.fetch_embeddings", side_effect=_fake_fetch_embeddings):
+                build_embedding_vec_index(chunks, embed_idx, embedding_cfg=cfg)
+
+            cfg_path.write_text(
+                "dense_backend: embedding\n"
+                "embedding:\n"
+                "  enabled: true\n"
+                "  provider: siliconflow\n"
+                "  model: fake-model\n"
+                f"  cache_path: {cache_path}\n",
+                encoding="utf-8",
+            )
+
+            bm25, vec, embed, config, _ = load_indexes_and_config(
+                bm25_index_path=str(bm25_idx),
+                vec_index_path=str(tfidf_idx),
+                embed_index_path=str(embed_idx),
+                config_path=str(cfg_path),
+                include_embed_index=True,
+            )
+            backend = Mock()
+            backend.search.return_value = [(embed.docs[0], 0.9)]
+
+            with (
+                patch("app.retrieve.fetch_embeddings", side_effect=_fake_fetch_embeddings),
+                patch("app.retrieve.resolve_vector_backend", return_value=backend),
+            ):
+                out = retrieve_candidates(
+                    "semantic meaning for gameplay",
+                    mode="dense",
+                    top_k=5,
+                    bm25_index=bm25,
+                    vec_index=vec,
+                    embed_index=embed,
+                    embed_index_path=str(embed_idx),
+                    config=config,
+                    runtime_metrics={},
+                )
+
+            self.assertTrue(out)
+            backend.search.assert_called_once()
+            self.assertEqual(backend.search.call_args.kwargs["index_path"], str(embed_idx))
 
 
 if __name__ == "__main__":

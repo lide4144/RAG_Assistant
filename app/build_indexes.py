@@ -5,7 +5,8 @@ import sys
 
 from app.config import load_and_validate_config
 from app.index_bm25 import build_bm25_index
-from app.index_vec import build_embedding_vec_index, build_vec_index
+from app.index_vec import build_vec_index
+from app.vector_backend import resolve_vector_backend
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -43,6 +44,7 @@ def main(argv: list[str] | None = None) -> int:
     print(f"BM25 docs: {len(bm25.docs)} -> {args.bm25_out}")
     print(f"Vector docs: {len(vec.docs)} -> {args.vec_out}")
     if config.embedding.enabled:
+        backend = resolve_vector_backend("file")
         last_reported = {"step": -1}
 
         def _progress(step: int, total: int) -> None:
@@ -61,7 +63,7 @@ def main(argv: list[str] | None = None) -> int:
         def _status(msg: str) -> None:
             print(f"\n[embedding] {msg}", file=sys.stderr, flush=True)
 
-        embed, stats = build_embedding_vec_index(
+        embed, stats = backend.rebuild(
             chunks_path=args.input,
             output_path=args.embed_out,
             embedding_cfg=config.embedding,

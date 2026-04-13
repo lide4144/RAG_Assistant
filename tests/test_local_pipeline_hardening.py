@@ -11,6 +11,7 @@ from unittest.mock import patch
 
 from app.fs_utils import FileLockTimeoutError
 from app.models import ChunkRecord, PageText, PaperRecord
+from app.paper_store import list_papers
 from app.paths import CONFIGS_DIR, DATA_DIR, RUNS_DIR
 from app.writer import validate_chunks_jsonl, write_chunks_jsonl, write_papers_json
 
@@ -94,7 +95,7 @@ class IngestLockTests(unittest.TestCase):
 
             err = io.StringIO()
             with (
-                patch("app.ingest.list_pdf_files", return_value=[fake_pdf]),
+                patch("app.ingest.list_local_document_files", return_value=[fake_pdf]),
                 patch("app.ingest.make_paper_id", return_value="paper-a"),
                 patch("app.ingest.parse_pdf_pages", return_value=([PageText(page_num=1, text="hello")], [], None)),
                 patch("app.ingest.extract_title", return_value="Demo"),
@@ -116,6 +117,48 @@ class IngestLockTests(unittest.TestCase):
 
             self.assertEqual(code, 3)
             self.assertIn("Another import/index process is active", err.getvalue())
+
+    def test_ingest_prefers_stable_source_override_for_store_and_compat_exports(self) -> None:
+        from app.ingest import run_ingest
+
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            input_dir = base / "in"
+            output_dir = base / "out"
+            run_dir = base / "run"
+            raw_dir = base / "raw" / "imported"
+            input_dir.mkdir(parents=True, exist_ok=True)
+            run_dir.mkdir(parents=True, exist_ok=True)
+            raw_dir.mkdir(parents=True, exist_ok=True)
+
+            temp_doc = input_dir / "note.txt"
+            stable_doc = raw_dir / "note.txt"
+            temp_doc.write_text("Transformer retrieval pipeline details", encoding="utf-8")
+            stable_doc.write_text("Transformer retrieval pipeline details", encoding="utf-8")
+
+            args = Namespace(
+                input=str(input_dir),
+                out=str(output_dir),
+                config=str(CONFIGS_DIR / "default.yaml"),
+                question=None,
+                clean=False,
+                run_id="",
+                run_dir=str(run_dir),
+                lock_timeout_sec=0.01,
+                source_path_overrides={
+                    str(temp_doc): str(stable_doc),
+                    str(temp_doc.resolve()): str(stable_doc.resolve()),
+                },
+            )
+
+            code = run_ingest(args)
+
+            self.assertEqual(code, 0)
+            rows = list_papers(db_path=output_dir / "paper_store.sqlite3", limit=10)
+            self.assertEqual(len(rows), 1)
+            self.assertEqual(rows[0]["storage_path"], str(stable_doc.resolve()))
+            exported = json.loads((output_dir / "papers.json").read_text(encoding="utf-8"))
+            self.assertEqual(exported[0]["storage_path"], str(stable_doc.resolve()))
 
 
 class PathAnchoringTests(unittest.TestCase):

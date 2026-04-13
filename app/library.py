@@ -14,6 +14,18 @@ from app.build_indexes import main as run_build_indexes
 from app.fs_utils import atomic_text_writer
 from app.fs_utils import FileLockTimeoutError, file_lock
 from app.ingest import run_ingest
+from app.paper_store import (
+    assign_topic as assign_topic_record,
+    ensure_store_current,
+    export_store_to_compat,
+    list_papers as list_paper_records,
+    load_topics as load_topics_from_store,
+    paper_store_path,
+    update_paper,
+    upsert_artifact,
+    upsert_stage_status,
+    replace_topics,
+)
 from app.parser import SUPPORTED_LOCAL_DOC_EXTENSIONS
 from app.paths import CONFIGS_DIR, DATA_DIR, RUNS_DIR
 
@@ -21,13 +33,71 @@ DEFAULT_PAPERS_PATH = DATA_DIR / "processed" / "papers.json"
 DEFAULT_TOPICS_PATH = DATA_DIR / "library_topics.json"
 DEFAULT_RAW_IMPORT_DIR = DATA_DIR / "raw" / "imported"
 DEFAULT_PROCESSED_DIR = DATA_DIR / "processed"
-
-
 def _normalize_item_name(value: str) -> str:
     text = str(value or "").strip()
     if not text:
         return "unknown-item"
     return Path(text).name or text
+
+
+def _store_lookup_maps(
+    *,
+    store_rows: list[dict[str, Any]],
+) -> tuple[dict[str, dict[str, Any]], dict[str, dict[str, Any]]]:
+    by_id: dict[str, dict[str, Any]] = {}
+    by_name: dict[str, dict[str, Any]] = {}
+    for row in store_rows:
+        if not isinstance(row, dict):
+            continue
+        paper_id = str(row.get("paper_id", "")).strip()
+        if paper_id:
+            by_id[paper_id] = row
+        for raw in (
+            row.get("storage_path"),
+            row.get("path"),
+            row.get("source_uri"),
+            row.get("title"),
+        ):
+            name = _normalize_item_name(str(raw or ""))
+            if name and name not in by_name:
+                by_name[name] = row
+    return by_id, by_name
+
+
+def _attach_store_paper_metadata(
+    rows: list[dict[str, Any]],
+    *,
+    store_rows: list[dict[str, Any]] | None = None,
+    paper_ids_by_name: dict[str, str] | None = None,
+    paper_status_by_id: dict[str, str] | None = None,
+) -> list[dict[str, Any]]:
+    source_rows = list(store_rows or [])
+    by_id, by_name = _store_lookup_maps(store_rows=source_rows)
+    out: list[dict[str, Any]] = []
+    for row in rows:
+        item = dict(row)
+        name = _normalize_item_name(str(item.get("name", "")))
+        paper_id = str(item.get("paper_id", "")).strip()
+        if not paper_id and paper_ids_by_name:
+            paper_id = str(paper_ids_by_name.get(name, "")).strip()
+        store_row = by_id.get(paper_id) if paper_id else None
+        if store_row is None and name:
+            store_row = by_name.get(name)
+            if store_row is not None and not paper_id:
+                paper_id = str(store_row.get("paper_id", "")).strip()
+        if paper_id:
+            item["paper_id"] = paper_id
+        paper_status = str(item.get("paper_status", "")).strip()
+        if not paper_status and paper_id and paper_status_by_id:
+            paper_status = str(paper_status_by_id.get(paper_id, "")).strip()
+        if not paper_status and store_row is not None:
+            paper_status = str(store_row.get("status", "")).strip()
+        if paper_status:
+            item["paper_status"] = paper_status
+        if store_row is not None and str(store_row.get("title", "")).strip():
+            item["name"] = str(store_row.get("title")).strip()
+        out.append(item)
+    return out
 
 
 def _recent_items_from_files(
@@ -108,39 +178,31 @@ def _recent_items_from_outcomes(outcomes: Any, *, stage: str) -> list[dict[str, 
 
 
 def load_papers(path: Path = DEFAULT_PAPERS_PATH) -> list[dict[str, Any]]:
-    if not path.exists():
+    target = Path(path)
+    if target == DEFAULT_PAPERS_PATH:
+        store_path = ensure_store_current(processed_dir=target.parent, topics_path=DEFAULT_TOPICS_PATH)
+        rows = list_paper_records(db_path=store_path, limit=10_000)
+        return [row for row in rows if str(row.get("paper_id", "")).strip()]
+    if not target.exists():
         return []
     try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
+        payload = json.loads(target.read_text(encoding="utf-8"))
     except Exception:
         return []
     if not isinstance(payload, list):
         return []
-    rows: list[dict[str, Any]] = []
-    for row in payload:
-        if not isinstance(row, dict):
-            continue
-        rows.append(
-            {
-                "paper_id": str(row.get("paper_id", "")).strip(),
-                "title": str(row.get("title", "")).strip(),
-                "path": str(row.get("path", "")).strip(),
-                "source_type": str(row.get("source_type", "pdf")).strip() or "pdf",
-                "source_uri": str(row.get("source_uri", row.get("path", ""))).strip(),
-                "imported_at": str(row.get("imported_at", "")).strip(),
-                "status": str(row.get("status", "active")).strip() or "active",
-                "fingerprint": str(row.get("fingerprint", "")).strip(),
-                "ingest_metadata": row.get("ingest_metadata"),
-            }
-        )
-    return [r for r in rows if r["paper_id"]]
+    return [row for row in payload if isinstance(row, dict) and str(row.get("paper_id", "")).strip()]
 
 
 def load_topics(path: Path = DEFAULT_TOPICS_PATH) -> dict[str, list[str]]:
-    if not path.exists():
+    target = Path(path)
+    if target == DEFAULT_TOPICS_PATH:
+        store_path = ensure_store_current(processed_dir=DEFAULT_PROCESSED_DIR, topics_path=target)
+        return load_topics_from_store(db_path=store_path)
+    if not target.exists():
         return {}
     try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
+        payload = json.loads(target.read_text(encoding="utf-8"))
     except Exception:
         return {}
     if not isinstance(payload, dict):
@@ -167,6 +229,10 @@ def save_topics(topics: dict[str, list[str]], path: Path = DEFAULT_TOPICS_PATH) 
     path.parent.mkdir(parents=True, exist_ok=True)
     with atomic_text_writer(path) as f:
         f.write(json.dumps(normalized, ensure_ascii=False, indent=2))
+    if Path(path) == DEFAULT_TOPICS_PATH:
+        store_path = ensure_store_current(processed_dir=DEFAULT_PROCESSED_DIR, topics_path=path)
+        replace_topics(normalized, db_path=store_path)
+        export_store_to_compat(processed_dir=DEFAULT_PROCESSED_DIR, topics_path=path, db_path=store_path)
 
 
 def assign_topic(topics: dict[str, list[str]], topic: str, paper_id: str) -> dict[str, list[str]]:
@@ -275,6 +341,8 @@ def run_import_workflow(
     copied_names = {path.name for path in copied}
     active_name = copied[0].name if copied else None
     stage_completed_names: set[str] = set()
+    paper_ids_by_name: dict[str, str] = {}
+    paper_status_by_id: dict[str, str] = {}
     _emit_progress(
         stage="import_prepare",
         stage_processed=len(copied),
@@ -284,12 +352,16 @@ def run_import_workflow(
         batch_running=min(1, len(copied)),
         batch_failed=failed_count,
         current_item_name=active_name,
-        recent_items=_recent_items_from_files(
-            uploaded_files,
-            stage="import_prepare",
-            copied_names=copied_names,
-            failed_reasons=failed_reason_map,
-            active_name=active_name,
+        recent_items=_attach_store_paper_metadata(
+            _recent_items_from_files(
+                uploaded_files,
+                stage="import_prepare",
+                copied_names=copied_names,
+                failed_reasons=failed_reason_map,
+                active_name=active_name,
+            ),
+            paper_ids_by_name=paper_ids_by_name,
+            paper_status_by_id=paper_status_by_id,
         ),
     )
 
@@ -306,8 +378,12 @@ def run_import_workflow(
     with tempfile.TemporaryDirectory() as tmp:
         input_dir = Path(tmp) / "input"
         input_dir.mkdir(parents=True, exist_ok=True)
+        source_path_overrides: dict[str, str] = {}
         for path in copied:
-            shutil.copyfile(path, input_dir / path.name)
+            dst = input_dir / path.name
+            shutil.copyfile(path, dst)
+            source_path_overrides[str(dst)] = str(path)
+            source_path_overrides[str(dst.resolve())] = str(path.resolve())
 
         ingest_run_dir = RUNS_DIR / f"import_{uuid.uuid4().hex[:10]}"
         ingest_args = argparse.Namespace(
@@ -320,10 +396,16 @@ def run_import_workflow(
             run_dir=str(ingest_run_dir),
             lock_timeout_sec=10.0,
         )
+        ingest_args.source_path_overrides = source_path_overrides
 
         def _on_ingest_progress(event: dict[str, Any]) -> None:
             event_name = str(event.get("event", "")).strip().lower()
             paper_name = _normalize_item_name(str(event.get("paper_name", "")).strip())
+            paper_id = str(event.get("paper_id", "")).strip()
+            if paper_name and paper_id:
+                paper_ids_by_name[paper_name] = paper_id
+            if paper_id and event_name in {"document_finished", "pdf_finished"}:
+                paper_status_by_id[paper_id] = "failed" if str(event.get("status", "")).strip().lower() == "failed" else "parsed"
             if event_name in {"document_started", "pdf_started"}:
                 _emit_progress(
                     stage="import_clean",
@@ -334,12 +416,16 @@ def run_import_workflow(
                     batch_running=1,
                     batch_failed=max(failed_count, int(event.get("pdf_failed", 0) or 0)),
                     current_item_name=paper_name,
-                    recent_items=_recent_items_from_progress(
-                        copied,
-                        stage="import_clean",
-                        active_name=paper_name,
-                        completed_names=stage_completed_names,
-                        failed_reasons=failed_reason_map,
+                    recent_items=_attach_store_paper_metadata(
+                        _recent_items_from_progress(
+                            copied,
+                            stage="import_clean",
+                            active_name=paper_name,
+                            completed_names=stage_completed_names,
+                            failed_reasons=failed_reason_map,
+                        ),
+                        paper_ids_by_name=paper_ids_by_name,
+                        paper_status_by_id=paper_status_by_id,
                     ),
                 )
                 return
@@ -359,12 +445,16 @@ def run_import_workflow(
                     batch_running=0,
                     batch_failed=max(failed_count, int(event.get("pdf_failed", 0) or 0)),
                     current_item_name=None,
-                    recent_items=_recent_items_from_progress(
-                        copied,
-                        stage="import_clean",
-                        active_name=None,
-                        completed_names=stage_completed_names,
-                        failed_reasons=failed_reason_map,
+                    recent_items=_attach_store_paper_metadata(
+                        _recent_items_from_progress(
+                            copied,
+                            stage="import_clean",
+                            active_name=None,
+                            completed_names=stage_completed_names,
+                            failed_reasons=failed_reason_map,
+                        ),
+                        paper_ids_by_name=paper_ids_by_name,
+                        paper_status_by_id=paper_status_by_id,
                     ),
                 )
 
@@ -378,12 +468,16 @@ def run_import_workflow(
             batch_running=min(1, len(copied)),
             batch_failed=failed_count,
             current_item_name=active_name,
-            recent_items=_recent_items_from_files(
-                uploaded_files,
-                stage="import_clean",
-                copied_names=copied_names,
-                failed_reasons=failed_reason_map,
-                active_name=active_name,
+            recent_items=_attach_store_paper_metadata(
+                _recent_items_from_files(
+                    uploaded_files,
+                    stage="import_clean",
+                    copied_names=copied_names,
+                    failed_reasons=failed_reason_map,
+                    active_name=active_name,
+                ),
+                paper_ids_by_name=paper_ids_by_name,
+                paper_status_by_id=paper_status_by_id,
             ),
         )
         ingest_rc = run_ingest(ingest_args)
@@ -427,7 +521,11 @@ def run_import_workflow(
         terminal_completed = int(import_summary.get("added", 0) or 0) + int(import_summary.get("skipped", 0) or 0)
         terminal_failed = int(import_summary.get("failed", 0) or 0)
         if int(import_summary.get("added", 0) or 0) == 0 and terminal_failed == 0 and terminal_completed > 0:
-            recent_items = _recent_items_from_outcomes(import_outcomes, stage="done")
+            recent_items = _attach_store_paper_metadata(
+                _recent_items_from_outcomes(import_outcomes, stage="done"),
+                paper_ids_by_name=paper_ids_by_name,
+                paper_status_by_id=paper_status_by_id,
+            )
             no_op_updated_at = datetime.fromtimestamp(ingest_finished_at, timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
             _emit_progress(
                 stage="done",
@@ -479,7 +577,11 @@ def run_import_workflow(
             batch_running=0,
             batch_failed=terminal_failed,
             current_item_name=None,
-            recent_items=_recent_items_from_outcomes(import_outcomes, stage="index_build"),
+            recent_items=_attach_store_paper_metadata(
+                _recent_items_from_outcomes(import_outcomes, stage="index_build"),
+                paper_ids_by_name=paper_ids_by_name,
+                paper_status_by_id=paper_status_by_id,
+            ),
         )
         index_started = time.perf_counter()
         index_status = "success"
@@ -548,6 +650,46 @@ def run_import_workflow(
         index_duration = round(time.perf_counter() - index_started, 3)
         index_finished_at = time.time()
 
+    store_path = ensure_store_current(
+        processed_dir=DEFAULT_PROCESSED_DIR,
+        topics_path=DEFAULT_TOPICS_PATH,
+        db_path=paper_store_path(DEFAULT_PROCESSED_DIR),
+    )
+    store_rows = list_paper_records(db_path=store_path, limit=10_000)
+    store_by_id = {str(row.get("paper_id", "")).strip(): row for row in store_rows if str(row.get("paper_id", "")).strip()}
+    for outcome in import_outcomes:
+        if not isinstance(outcome, dict):
+            continue
+        paper_id = str(outcome.get("paper_id", "")).strip()
+        status = str(outcome.get("status", "")).strip().lower()
+        if not paper_id:
+            continue
+        if status in {"added", "succeeded", "success", "completed", "imported"}:
+            paper_status_by_id[paper_id] = "ready"
+            update_paper(paper_id, status="ready", error_message="", db_path=store_path)
+            upsert_stage_status(paper_id=paper_id, stage="index", state="succeeded", db_path=store_path)
+            upsert_stage_status(paper_id=paper_id, stage="graph_build", state="queued", db_path=store_path)
+            upsert_artifact(
+                paper_id=paper_id,
+                artifact_key="vector_index",
+                artifact_type="vector_index",
+                status="ready",
+                path=str(DATA_DIR / "indexes" / "vec_index_embed.json"),
+                metadata={"backend_name": "file"},
+                db_path=store_path,
+            )
+        elif status in {"failed", "error"}:
+            paper_status_by_id[paper_id] = "failed"
+            update_paper(paper_id, status="failed", error_message=str(outcome.get("reason", "")).strip(), db_path=store_path)
+            upsert_stage_status(
+                paper_id=paper_id,
+                stage="index",
+                state="failed",
+                error_message=str(outcome.get("reason", "")).strip(),
+                db_path=store_path,
+            )
+    store_rows = list_paper_records(db_path=store_path, limit=10_000)
+
     if topic_name:
         _emit_progress(
             stage="topic_assign",
@@ -558,18 +700,31 @@ def run_import_workflow(
             batch_running=0,
             batch_failed=terminal_failed,
             current_item_name=None,
-            recent_items=_recent_items_from_outcomes(import_outcomes, stage="topic_assign"),
+            recent_items=_attach_store_paper_metadata(
+                _recent_items_from_outcomes(import_outcomes, stage="topic_assign"),
+                store_rows=store_rows,
+                paper_ids_by_name=paper_ids_by_name,
+                paper_status_by_id=paper_status_by_id,
+            ),
         )
         papers = load_papers()
-        paper_paths = {Path(row.get("path", "")).name: str(row.get("paper_id", "")) for row in papers}
+        paper_paths = {Path(str(row.get("storage_path") or row.get("path", ""))).name: str(row.get("paper_id", "")) for row in papers}
         topics = load_topics()
         for src in copied:
             pid = paper_paths.get(src.name)
             if pid:
                 topics = assign_topic(topics, topic_name, pid)
+                assign_topic_record(topic_name, pid, db_path=store_path)
         save_topics(topics)
+        store_rows = list_paper_records(db_path=store_path, limit=10_000)
 
-    recent_items = _recent_items_from_outcomes(import_outcomes, stage="done")
+    export_store_to_compat(processed_dir=DEFAULT_PROCESSED_DIR, topics_path=DEFAULT_TOPICS_PATH, db_path=store_path)
+    recent_items = _attach_store_paper_metadata(
+        _recent_items_from_outcomes(import_outcomes, stage="done"),
+        store_rows=store_rows,
+        paper_ids_by_name=paper_ids_by_name,
+        paper_status_by_id=paper_status_by_id,
+    )
     _emit_progress(
         stage="done",
         stage_processed=max(1, len(copied)),
