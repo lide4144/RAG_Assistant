@@ -33,6 +33,18 @@ from app.pipeline_runtime_config import (
 )
 from app.paths import CONFIGS_DIR, RUNS_DIR
 from app.paper_summary import build_paper_summaries
+from app.paper_store import (
+    ensure_store_current,
+    export_store_to_compat,
+    list_papers as list_store_papers,
+    mark_paper_failed,
+    paper_store_path,
+    replace_chunks,
+    update_paper,
+    upsert_artifact,
+    upsert_paper,
+    upsert_stage_status,
+)
 from app.parser import (
     choose_best_title,
     # Kept for backward-compatible test patch targets.
@@ -52,7 +64,6 @@ from app.writer import (
     validate_chunks_jsonl,
     write_chunks_jsonl,
     write_paper_summaries_json,
-    write_papers_json,
 )
 
 _MARKER_ENV_MAP = {
@@ -236,6 +247,64 @@ def _load_existing_papers(path: Path) -> list[PaperRecord]:
         if paper.paper_id:
             out.append(paper)
     return out
+
+
+def _load_existing_store_papers(processed_dir: Path) -> tuple[Path, list[PaperRecord]]:
+    store_path = ensure_store_current(
+        processed_dir=processed_dir,
+        topics_path=processed_dir.parent / "library_topics.json",
+        db_path=paper_store_path(processed_dir),
+    )
+    rows = list_store_papers(db_path=store_path, limit=10_000)
+    return store_path, [_paper_from_row(row) for row in rows if isinstance(row, dict)]
+
+
+def _resolve_stable_source_path(document_path: Path, args: argparse.Namespace) -> str:
+    overrides = getattr(args, "source_path_overrides", None)
+    if isinstance(overrides, dict):
+        keys = [str(document_path), str(document_path.resolve())]
+        for key in keys:
+            value = str(overrides.get(key, "")).strip()
+            if value:
+                return value
+    try:
+        return str(document_path.resolve())
+    except Exception:
+        return str(document_path)
+
+
+def _seed_paper_record(
+    *,
+    paper_id: str,
+    title: str,
+    storage_path: str,
+    source_type: str,
+    source_uri: str,
+    parser_engine: str,
+    imported_at: str,
+    fingerprint: str,
+    ingest_metadata: dict[str, Any] | None,
+    db_path: Path,
+) -> None:
+    upsert_paper(
+        {
+            "paper_id": paper_id,
+            "title": title,
+            "path": storage_path,
+            "storage_path": storage_path,
+            "source_type": source_type,
+            "source_uri": source_uri,
+            "parser_engine": parser_engine,
+            "imported_at": imported_at,
+            "status": "imported",
+            "fingerprint": fingerprint,
+            "ingest_metadata": ingest_metadata or {},
+        },
+        db_path=db_path,
+    )
+    upsert_stage_status(paper_id=paper_id, stage="dedup", state="running", db_path=db_path)
+    upsert_stage_status(paper_id=paper_id, stage="import", state="running", db_path=db_path)
+    upsert_stage_status(paper_id=paper_id, stage="parse", state="running", db_path=db_path)
 
 
 def _load_existing_chunks(path: Path) -> list[ChunkRecord]:
@@ -805,6 +874,7 @@ def run_ingest(args: argparse.Namespace) -> int:
     run_dir.mkdir(parents=True, exist_ok=True)
     output_dir = ensure_dir(args.out)
     ensure_dir(Path(output_dir).parent / "reports")
+    store_path, existing_papers_from_store = _load_existing_store_papers(output_dir)
 
     for warning in config_warnings:
         print(f"[config-warning] {warning}", file=sys.stderr)
@@ -826,6 +896,7 @@ def run_ingest(args: argparse.Namespace) -> int:
     candidates: list[ImportCandidate] = []
     parse_errors: list[str] = []
     paper_failures: list[str] = []
+    paper_failure_records: list[dict[str, str]] = []
     controlled_skip_outcomes: list[dict[str, Any]] = []
     url_failures: list[dict[str, str]] = list(invalid_urls)
     parser_observability: list[dict[str, Any]] = []
@@ -853,6 +924,26 @@ def run_ingest(args: argparse.Namespace) -> int:
         route = resolve_document_route(document_path)
         stable_paper_id, fingerprint = stable_pdf_paper_id(document_path)
         legacy_paper_id = make_paper_id(document_path)
+        stable_source_path = _resolve_stable_source_path(document_path, args)
+        source_uri = f"{route.source_type}://sha1/{fingerprint}"
+        initial_metadata = {
+            "file_name": document_path.name,
+            "legacy_paper_id": legacy_paper_id,
+            "legacy_source_path": str(document_path),
+            "stable_source_path": stable_source_path,
+        }
+        _seed_paper_record(
+            paper_id=stable_paper_id,
+            title=document_path.stem or document_path.name,
+            storage_path=stable_source_path,
+            source_type=route.source_type,
+            source_uri=source_uri,
+            parser_engine=route.base_parser,
+            imported_at=now_iso,
+            fingerprint=fingerprint,
+            ingest_metadata=initial_metadata,
+            db_path=store_path,
+        )
         try:
             parsed_doc = _parse_local_document(
                 document_path,
@@ -862,12 +953,24 @@ def run_ingest(args: argparse.Namespace) -> int:
                 marker_preflight_reason=marker_preflight_reason,
             )
         except Exception as exc:
-            paper_failures.append(f"{document_path.name}: {exc}")
+            failure_reason = f"{document_path.name}: {exc}"
+            paper_failures.append(failure_reason)
+            paper_failure_records.append(
+                {
+                    "paper_id": stable_paper_id,
+                    "title": document_path.name,
+                    "source_uri": source_uri,
+                    "status": "failed",
+                    "reason": str(exc),
+                }
+            )
+            mark_paper_failed(stable_paper_id, stage="parse", reason=str(exc), db_path=store_path)
             doc_completed += 1
             _emit_progress(
                 {
                     "event": "document_finished",
                     "paper_name": document_path.name,
+                    "paper_id": stable_paper_id,
                     "paper_index": doc_index,
                     "pdf_total": doc_total,
                     "pdf_completed": doc_completed,
@@ -882,6 +985,20 @@ def run_ingest(args: argparse.Namespace) -> int:
         if parsed_doc.controlled_skip or not parsed_doc.pages:
             reason = parsed_doc.controlled_skip_reason or "no readable pages"
             source_uri = f"{parsed_doc.source_type or route.source_type}://sha1/{fingerprint}"
+            update_paper(
+                stable_paper_id,
+                status="skipped" if parsed_doc.controlled_skip else "failed",
+                error_message=reason if not parsed_doc.controlled_skip else "",
+                db_path=store_path,
+            )
+            upsert_stage_status(
+                paper_id=stable_paper_id,
+                stage="parse",
+                state="skipped" if parsed_doc.controlled_skip else "failed",
+                error_message="" if parsed_doc.controlled_skip else reason,
+                metadata={"controlled_skip": bool(parsed_doc.controlled_skip)},
+                db_path=store_path,
+            )
             parser_observability.append(
                 {
                     "paper_id": stable_paper_id,
@@ -945,11 +1062,21 @@ def run_ingest(args: argparse.Namespace) -> int:
                 )
             else:
                 paper_failures.append(f"{document_path.name}: {reason}")
+                paper_failure_records.append(
+                    {
+                        "paper_id": stable_paper_id,
+                        "title": document_path.name,
+                        "source_uri": source_uri,
+                        "status": "failed",
+                        "reason": reason,
+                    }
+                )
             doc_completed += 1
             _emit_progress(
                 {
                     "event": "document_finished",
                     "paper_name": document_path.name,
+                    "paper_id": stable_paper_id,
                     "paper_index": doc_index,
                     "pdf_total": doc_total,
                     "pdf_completed": doc_completed,
@@ -980,11 +1107,22 @@ def run_ingest(args: argparse.Namespace) -> int:
         chunks = build_chunks(**chunk_kwargs)
         if not chunks:
             paper_failures.append(f"{document_path.name}: no chunks generated")
+            paper_failure_records.append(
+                {
+                    "paper_id": stable_paper_id,
+                    "title": document_path.name,
+                    "source_uri": source_uri,
+                    "status": "failed",
+                    "reason": "no chunks generated",
+                }
+            )
+            mark_paper_failed(stable_paper_id, stage="parse", reason="no chunks generated", db_path=store_path)
             doc_completed += 1
             _emit_progress(
                 {
                     "event": "document_finished",
                     "paper_name": document_path.name,
+                    "paper_id": stable_paper_id,
                     "paper_index": doc_index,
                     "pdf_total": doc_total,
                     "pdf_completed": doc_completed,
@@ -1088,7 +1226,7 @@ def run_ingest(args: argparse.Namespace) -> int:
                 paper=PaperRecord(
                     paper_id=stable_paper_id,
                     title=title_decision.title,
-                    path=str(document_path),
+                    path=stable_source_path,
                     source_type=parsed_doc.source_type,
                     source_uri=source_uri,
                     parser_engine=parsed_doc.parser_engine,
@@ -1100,6 +1238,7 @@ def run_ingest(args: argparse.Namespace) -> int:
                     ingest_metadata={
                         "file_name": document_path.name,
                         "file_ext": parsed_doc.file_ext,
+                        "stable_source_path": stable_source_path,
                         "parser_mode": parsed_doc.parser_mode,
                         "base_parser": parsed_doc.base_parser,
                         "enhanced_parser": parsed_doc.enhanced_parser,
@@ -1136,11 +1275,47 @@ def run_ingest(args: argparse.Namespace) -> int:
                 structure_entry=structure_entry,
             )
         )
+        upsert_paper(
+            {
+                "paper_id": stable_paper_id,
+                "title": title_decision.title,
+                "path": stable_source_path,
+                "storage_path": stable_source_path,
+                "source_type": parsed_doc.source_type,
+                "source_uri": source_uri,
+                "parser_engine": parsed_doc.parser_engine,
+                "title_source": title_decision.source,
+                "title_confidence": round(float(title_decision.confidence), 4),
+                "imported_at": now_iso,
+                "status": "parsed",
+                "fingerprint": fingerprint,
+                "ingest_metadata": {
+                    **initial_metadata,
+                    "file_ext": parsed_doc.file_ext,
+                    "stable_source_path": stable_source_path,
+                    "parser_mode": parsed_doc.parser_mode,
+                    "base_parser": parsed_doc.base_parser,
+                    "enhanced_parser": parsed_doc.enhanced_parser,
+                    "route_family": parsed_doc.route_family,
+                },
+            },
+            db_path=store_path,
+        )
+        upsert_stage_status(paper_id=stable_paper_id, stage="dedup", state="succeeded", db_path=store_path)
+        upsert_stage_status(paper_id=stable_paper_id, stage="import", state="succeeded", db_path=store_path)
+        upsert_stage_status(
+            paper_id=stable_paper_id,
+            stage="parse",
+            state="succeeded",
+            metadata={"parser_mode": parsed_doc.parser_mode, "source_uri": source_uri},
+            db_path=store_path,
+        )
         doc_completed += 1
         _emit_progress(
             {
                 "event": "document_finished",
                 "paper_name": document_path.name,
+                "paper_id": stable_paper_id,
                 "paper_index": doc_index,
                 "pdf_total": doc_total,
                 "pdf_completed": doc_completed,
@@ -1159,6 +1334,18 @@ def run_ingest(args: argparse.Namespace) -> int:
         normalized_url = str(url).strip()
         content_fingerprint = hashlib.sha1(fetched.text.encode("utf-8", errors="ignore")).hexdigest()
         paper_id = f"url_{hashlib.sha1(normalized_url.encode('utf-8')).hexdigest()[:12]}"
+        _seed_paper_record(
+            paper_id=paper_id,
+            title=fetched.title or normalized_url,
+            storage_path=normalized_url,
+            source_type="url",
+            source_uri=normalized_url,
+            parser_engine="url",
+            imported_at=now_iso,
+            fingerprint=content_fingerprint,
+            ingest_metadata=url_meta_json(fetched_at=fetched.fetched_at, http_status=fetched.http_status),
+            db_path=store_path,
+        )
         pages = [PageText(page_num=1, text=fetched.text)]
         chunks = build_chunks(
             paper_id=paper_id,
@@ -1167,6 +1354,7 @@ def run_ingest(args: argparse.Namespace) -> int:
             overlap=config.overlap,
         )
         if not chunks:
+            mark_paper_failed(paper_id, stage="parse", reason="chunk_generation_failed", db_path=store_path)
             url_failures.append(
                 {
                     "source_type": "url",
@@ -1209,6 +1397,9 @@ def run_ingest(args: argparse.Namespace) -> int:
                 },
             )
         )
+        upsert_stage_status(paper_id=paper_id, stage="dedup", state="succeeded", db_path=store_path)
+        upsert_stage_status(paper_id=paper_id, stage="import", state="succeeded", db_path=store_path)
+        upsert_stage_status(paper_id=paper_id, stage="parse", state="succeeded", db_path=store_path)
 
     chunks_file = output_dir / "chunks.jsonl"
     papers_file = output_dir / "papers.json"
@@ -1219,15 +1410,34 @@ def run_ingest(args: argparse.Namespace) -> int:
 
     try:
         with file_lock(lock_path, timeout_sec=lock_timeout):
-            existing_papers = _load_existing_papers(papers_file)
+            existing_papers = existing_papers_from_store or _load_existing_papers(papers_file)
             existing_chunks = _load_existing_chunks(chunks_file)
             merged_papers, merged_chunks, merge_summary = _merge_candidates(
                 existing_papers,
                 existing_chunks,
                 candidates,
             )
+            replace_chunks([chunk.to_dict() for chunk in merged_chunks], db_path=store_path)
+            for paper in merged_papers:
+                upsert_paper(
+                    {
+                        "paper_id": paper.paper_id,
+                        "title": paper.title,
+                        "path": paper.path,
+                        "storage_path": paper.path,
+                        "source_type": paper.source_type,
+                        "source_uri": paper.source_uri,
+                        "parser_engine": paper.parser_engine,
+                        "title_source": paper.title_source,
+                        "title_confidence": paper.title_confidence,
+                        "imported_at": paper.imported_at,
+                        "status": paper.status,
+                        "fingerprint": paper.fingerprint,
+                        "ingest_metadata": paper.ingest_metadata or {},
+                    },
+                    db_path=store_path,
+                )
             write_chunks_jsonl(merged_chunks, chunks_file)
-            write_papers_json(merged_papers, papers_file)
             structure_index = merge_structure_entries(
                 load_structure_index(chunks_file),
                 [row.structure_entry for row in candidates if isinstance(row.structure_entry, dict)],
@@ -1287,16 +1497,7 @@ def run_ingest(args: argparse.Namespace) -> int:
 
     outcomes = list(merge_summary.get("outcomes", []))
     outcomes.extend(controlled_skip_outcomes)
-    for failed in paper_failures:
-        outcomes.append(
-            {
-                "paper_id": "",
-                "title": "",
-                "source_uri": "",
-                "status": "failed",
-                "reason": failed,
-            }
-        )
+    outcomes.extend(paper_failure_records)
     for failed in url_failures:
         outcomes.append(
             {
@@ -1389,6 +1590,97 @@ def run_ingest(args: argparse.Namespace) -> int:
     }
     save_json(report, run_dir / "ingest_report.json")
 
+    candidate_ids = {item.paper.paper_id for item in candidates if item.paper.paper_id}
+    merged_chunk_ids = {chunk.paper_id for chunk in merged_chunks if chunk.paper_id}
+    clean_ids = {chunk.paper_id for chunk in _load_existing_chunks(output_dir / "chunks_clean.jsonl") if chunk.paper_id} if clean_success else set()
+    summary_map = {str(row.paper_id).strip(): row for row in paper_summaries}
+    structure_map = {str(row.get("paper_id", "")).strip(): row for row in structure_entries if isinstance(row, dict)}
+    for outcome in outcomes:
+        if not isinstance(outcome, dict):
+            continue
+        outcome_pid = str(outcome.get("paper_id", "")).strip()
+        outcome_status = str(outcome.get("status", "")).strip().lower()
+        if outcome_status == "skipped" and outcome_pid:
+            upsert_stage_status(
+                paper_id=outcome_pid,
+                stage="dedup",
+                state="succeeded",
+                metadata={"result": "already_exists"},
+                db_path=store_path,
+            )
+            continue
+        if outcome_status == "conflict" and outcome_pid:
+            mark_paper_failed(outcome_pid, stage="dedup", reason=str(outcome.get("reason", "conflict")).strip(), db_path=store_path)
+
+    for paper_id in sorted(candidate_ids):
+        if not paper_id:
+            continue
+        upsert_artifact(
+            paper_id=paper_id,
+            artifact_key="chunks",
+            artifact_type="chunks",
+            status="ready" if paper_id in merged_chunk_ids else "missing",
+            path=str(chunks_file),
+            db_path=store_path,
+        )
+        upsert_artifact(
+            paper_id=paper_id,
+            artifact_key="paper_summary",
+            artifact_type="paper_summary",
+            status="ready" if paper_id in summary_map else "missing",
+            path=str(paper_summary_file),
+            version=str(getattr(summary_map.get(paper_id), "summary_version", "")).strip(),
+            metadata={"rebuilt": paper_id in rebuilt_summary_paper_ids},
+            db_path=store_path,
+        )
+        structure_row = structure_map.get(paper_id, {})
+        upsert_artifact(
+            paper_id=paper_id,
+            artifact_key="structure_index",
+            artifact_type="structure_index",
+            status=str(structure_row.get("structure_parse_status", "missing")).strip() or "missing",
+            path=str(structure_index_file),
+            metadata={"structure_parse_reason": structure_row.get("structure_parse_reason")},
+            db_path=store_path,
+        )
+        if clean_enabled:
+            clean_state = "succeeded" if clean_success and paper_id in clean_ids else ("failed" if not clean_success else "queued")
+            upsert_stage_status(
+                paper_id=paper_id,
+                stage="clean",
+                state=clean_state,
+                error_message=str(clean_error or "").strip() if clean_state == "failed" else "",
+                db_path=store_path,
+            )
+            upsert_artifact(
+                paper_id=paper_id,
+                artifact_key="chunks_clean",
+                artifact_type="chunks_clean",
+                status="ready" if clean_success and paper_id in clean_ids else ("failed" if not clean_success else "missing"),
+                path=str(output_dir / "chunks_clean.jsonl"),
+                metadata={"clean_error": clean_error} if clean_error else None,
+                db_path=store_path,
+            )
+            if clean_success and paper_id in clean_ids:
+                update_paper(paper_id, status="cleaned", error_message="", db_path=store_path)
+                upsert_stage_status(
+                    paper_id=paper_id,
+                    stage="index",
+                    state="queued",
+                    metadata={"reason": "awaiting_vector_backend"},
+                    db_path=store_path,
+                )
+        else:
+            upsert_stage_status(paper_id=paper_id, stage="clean", state="not_started", db_path=store_path)
+        if paper_id not in clean_ids and paper_id in candidate_ids:
+            update_paper(paper_id, status="parsed", db_path=store_path)
+
+    export_store_to_compat(
+        processed_dir=output_dir,
+        topics_path=output_dir.parent / "library_topics.json",
+        db_path=store_path,
+    )
+
     trace = {
         "input_question": args.question,
         "rewrite_query": None,
@@ -1435,7 +1727,6 @@ def run_ingest(args: argparse.Namespace) -> int:
         {"trace_validation_ok": trace_ok, "trace_validation_errors": trace_errors},
         run_dir / "run_trace_validation.json",
     )
-
     if not merged_papers and import_summary["skipped"] > 0 and import_summary["failed"] == 0:
         print("No documents were imported; all inputs were skipped with guidance.")
         return 0

@@ -18,6 +18,7 @@ from app.llm_routing import (
     register_stage_failure,
     register_stage_success,
 )
+from app.vector_backend import resolve_vector_backend
 
 
 AUTHOR_INTENT_KEYWORDS = (
@@ -331,6 +332,7 @@ def retrieve_candidates(
     vec_index: VecIndex,
     config: PipelineConfig,
     embed_index: VecIndex | None = None,
+    embed_index_path: str | None = None,
     runtime_metrics: dict[str, Any] | None = None,
     allow_embedding_fallback: bool = True,
 ) -> list[RetrievalCandidate]:
@@ -390,15 +392,22 @@ def retrieve_candidates(
                         f"embedding dimension mismatch: query={len(query_vec)} index={embed_index.embedding_dim}",
                         category="dimension_mismatch",
                     )
-                dense_candidates = [
-                    _from_vec(doc, score)
-                    for doc, score in search_vec_with_query_embedding(
+                if embed_index_path:
+                    backend_client = resolve_vector_backend("file")
+                    dense_hits = backend_client.search(
+                        index_path=embed_index_path,
+                        query_vector=query_vec,
+                        top_k=top_k,
+                        normalize_query=config.embedding.normalize,
+                    )
+                else:
+                    dense_hits = search_vec_with_query_embedding(
                         embed_index,
                         query_vec,
                         top_k=top_k,
                         normalize_query=config.embedding.normalize,
                     )
-                ]
+                dense_candidates = [_from_vec(doc, score) for doc, score in dense_hits]
                 register_stage_success("embedding")
             except Exception as exc:
                 reason = _embedding_reason_from_error(exc)

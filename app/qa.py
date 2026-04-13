@@ -34,7 +34,7 @@ from app.llm_diagnostics import build_llm_diagnostics
 from app.llm_client import call_chat_completion, call_chat_completion_stream
 from app.llm_routing import build_stage_policy, classify_error_category
 from app.index_bm25 import build_bm25_index
-from app.index_vec import build_embedding_vec_index, build_vec_index, load_vec_index
+from app.index_vec import build_vec_index, load_vec_index
 from app.rewrite import RewriteGuardResult, RewriteResult, apply_state_aware_rewrite_guard, rewrite_query
 from app.rerank import rerank_candidates
 from app.retrieve import (
@@ -72,6 +72,7 @@ from app.session_state import (
     rewrite_with_history_context,
 )
 from app.sufficiency import run_sufficiency_gate as run_sufficiency_gate_impl
+from app.vector_backend import resolve_vector_backend
 
 AMBIGUOUS_SCOPE_TERMS = (
     "this work",
@@ -405,6 +406,7 @@ def ensure_indexes(
                 f"[info] rebuilding embedding index ({rebuild_reason}): {embed_index_path}",
                 file=sys.stderr,
             )
+            backend = resolve_vector_backend("file")
             t0 = perf_counter()
             last_reported = {"step": -1}
 
@@ -429,7 +431,7 @@ def ensure_indexes(
             def _status(msg: str) -> None:
                 print(f"\n[info] {msg}", file=sys.stderr, flush=True)
 
-            embed_idx, embed_stats = build_embedding_vec_index(
+            embed_idx, embed_stats = backend.rebuild(
                 chunks_path=chunks_path,
                 output_path=embed_index_path,
                 embedding_cfg=config.embedding,
@@ -940,6 +942,7 @@ def _rewrite_candidate_metrics(
     bm25_index: dict[str, Any],
     vec_index: Any,
     embed_index: Any,
+    embed_index_path: str | None,
     config: Any,
 ) -> dict[str, Any]:
     runtime_metrics: dict[str, Any] = {}
@@ -950,6 +953,7 @@ def _rewrite_candidate_metrics(
         bm25_index=bm25_index,
         vec_index=vec_index,
         embed_index=embed_index,
+        embed_index_path=embed_index_path,
         config=config,
         runtime_metrics=runtime_metrics,
     )
@@ -2621,6 +2625,7 @@ def run_qa(args: argparse.Namespace) -> int:
                     bm25_index=bm25_index,
                     vec_index=vec_index,
                     embed_index=embed_index,
+                    embed_index_path=args.embed_index,
                     config=config,
                 )
                 llm_metrics = _rewrite_candidate_metrics(
@@ -2630,6 +2635,7 @@ def run_qa(args: argparse.Namespace) -> int:
                     bm25_index=bm25_index,
                     vec_index=vec_index,
                     embed_index=embed_index,
+                    embed_index_path=args.embed_index,
                     config=config,
                 )
                 margin_delta = float(getattr(config, "rewrite_arbitration_min_delta", 0.03))
@@ -2799,6 +2805,7 @@ def run_qa(args: argparse.Namespace) -> int:
                 bm25_index=bm25_index,
                 vec_index=vec_index,
                 embed_index=embed_index,
+                embed_index_path=args.embed_index,
                 config=config,
                 runtime_metrics=retrieval_metrics,
             )
@@ -2822,6 +2829,7 @@ def run_qa(args: argparse.Namespace) -> int:
                 bm25_index=bm25_index,
                 vec_index=vec_index,
                 embed_index=embed_index,
+                embed_index_path=args.embed_index,
                 config=config,
                 runtime_metrics=retrieval_metrics,
             )
@@ -2840,6 +2848,7 @@ def run_qa(args: argparse.Namespace) -> int:
                     bm25_index=bm25_index,
                     vec_index=vec_index,
                     embed_index=embed_index,
+                    embed_index_path=args.embed_index,
                     config=config,
                     runtime_metrics=retrieval_metrics,
                 )

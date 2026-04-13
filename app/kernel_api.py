@@ -46,6 +46,16 @@ from app.pipeline_runtime_config import (
     resolve_effective_marker_tuning,
 )
 from app.paths import CONFIGS_DIR, DATA_DIR, RUNS_DIR
+from app.paper_store import (
+    ensure_store_current,
+    get_paper as get_store_paper,
+    get_vector_backend_state,
+    list_papers as list_store_papers,
+    mark_paper_deleted,
+    mark_paper_rebuild_pending,
+    update_paper,
+    upsert_stage_status,
+)
 from app.planner_runtime_config import (
     evaluate_planner_service_state,
     load_planner_runtime_config,
@@ -68,6 +78,7 @@ from app.job_store import (
     upsert_job,
 )
 from app.qa import parse_args, run_qa
+from app.vector_backend import resolve_vector_backend
 
 app = FastAPI(title="RAG GPT Kernel API", version="0.1.0")
 
@@ -383,6 +394,8 @@ class TaskProgressItem(BaseModel):
     state: str
     stage: str
     message: str = ""
+    paper_id: str | None = None
+    paper_status: str | None = None
 
 
 class TaskProgressInfo(BaseModel):
@@ -514,6 +527,45 @@ class ImportLatestResultResponse(BaseModel):
     stage_processed: int | None = None
     stage_total: int | None = None
     recent_items: list[TaskProgressItem] = Field(default_factory=list)
+    papers: list[dict[str, Any]] = Field(default_factory=list)
+    vector_backend: dict[str, Any] | None = None
+
+
+class PaperStageStatusResponse(BaseModel):
+    stage: str
+    state: str
+    updated_at: str | None = None
+    error_message: str | None = None
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class LibraryPaperResponse(BaseModel):
+    paper_id: str
+    title: str
+    path: str
+    storage_path: str
+    source_type: str
+    source_uri: str
+    parser_engine: str
+    title_source: str
+    title_confidence: float
+    imported_at: str
+    status: str
+    fingerprint: str
+    ingest_metadata: dict[str, Any] = Field(default_factory=dict)
+    created_at: str | None = None
+    updated_at: str | None = None
+    deleted_at: str | None = None
+    error_message: str | None = None
+    topics: list[str] = Field(default_factory=list)
+    stage_statuses: list[PaperStageStatusResponse] = Field(default_factory=list)
+
+
+class VectorBackendStateResponse(BaseModel):
+    backend_name: str
+    status: str
+    updated_at: str | None = None
+    metadata: dict[str, Any] = Field(default_factory=dict)
 
 
 class LibraryImportResponse(BaseModel):
@@ -580,6 +632,14 @@ class MarkerArtifactEntryResponse(BaseModel):
 
 class MarkerArtifactDeleteRequest(BaseModel):
     key: str = Field(min_length=1)
+
+
+class LibraryPaperActionResponse(BaseModel):
+    ok: bool
+    paper_id: str
+    status: str
+    message: str = ""
+    vector_backend: dict[str, Any] | None = None
 
 
 class _TaskCancelledError(RuntimeError):
@@ -2491,6 +2551,8 @@ def _normalize_task_progress_items(rows: Any) -> list[TaskProgressItem]:
                 state=str(row.get("state", "queued")).strip() or "queued",
                 stage=str(row.get("stage", "queued")).strip() or "queued",
                 message=str(row.get("message", "")).strip(),
+                paper_id=str(row.get("paper_id", "")).strip() or None,
+                paper_status=str(row.get("paper_status", "")).strip() or None,
             )
         )
     return items
@@ -2663,7 +2725,9 @@ def _start_library_import_task(*, task_id: str, upload_paths: list[Path], topic:
                 latest_stage = str(event.get("stage", "running")).strip() or "running"
                 elapsed_ms = int((time.perf_counter() - started) * 1000)
                 with _TASKS_LOCK:
-                    local = _TASKS[task_id]
+                    local = _TASKS.get(task_id)
+                    if local is None:
+                        return
                     if local.state == "cancelled":
                         raise _TaskCancelledError("task cancelled by user")
                     local.progress = _task_progress_from_event(event, elapsed_ms=elapsed_ms)
@@ -2674,7 +2738,9 @@ def _start_library_import_task(*, task_id: str, upload_paths: list[Path], topic:
             finished_at = _iso_now()
             _write_latest_pipeline_status(result=result, updated_at=finished_at)
             with _TASKS_LOCK:
-                local = _TASKS[task_id]
+                local = _TASKS.get(task_id)
+                if local is None:
+                    return
                 is_cancelled = cancel_event.is_set() or local.state == "cancelled"
                 local.state = "cancelled" if is_cancelled else ("succeeded" if result.get("ok") else "failed")
                 local.updated_at = finished_at
@@ -2752,7 +2818,9 @@ def _start_library_import_task(*, task_id: str, upload_paths: list[Path], topic:
                 _save_task(local)
         except _TaskCancelledError:
             with _TASKS_LOCK:
-                local = _TASKS[task_id]
+                local = _TASKS.get(task_id)
+                if local is None:
+                    return
                 local.state = "cancelled"
                 local.updated_at = _iso_now()
                 local.progress = _build_task_progress(
@@ -2774,7 +2842,9 @@ def _start_library_import_task(*, task_id: str, upload_paths: list[Path], topic:
                 _save_task(local)
         except Exception as exc:  # pragma: no cover - defensive
             with _TASKS_LOCK:
-                local = _TASKS[task_id]
+                local = _TASKS.get(task_id)
+                if local is None:
+                    return
                 local.state = "failed"
                 local.updated_at = _iso_now()
                 local.error = TaskErrorInfo(
@@ -2878,26 +2948,41 @@ def _recent_item_state_from_outcome(status: str) -> str:
     return "running"
 
 
-def _build_recent_items_from_outcomes(outcomes: Any, *, stage: str) -> list[TaskProgressItem]:
+def _build_recent_items_from_outcomes(
+    outcomes: Any,
+    *,
+    stage: str,
+    papers_by_id: dict[str, dict[str, Any]] | None = None,
+) -> list[TaskProgressItem]:
     if not isinstance(outcomes, list):
         return []
     items: list[TaskProgressItem] = []
+    paper_lookup = papers_by_id or {}
     for row in outcomes:
         if not isinstance(row, dict):
             continue
         status = str(row.get("status", "")).strip() or "running"
+        paper_id = str(row.get("paper_id", "")).strip()
+        paper_row = paper_lookup.get(paper_id) if paper_id else None
         items.append(
             TaskProgressItem(
-                name=_recent_item_name_from_outcome(row),
+                name=str((paper_row or {}).get("title") or _recent_item_name_from_outcome(row)).strip(),
                 state=_recent_item_state_from_outcome(status),
                 stage=stage,
                 message=str(row.get("reason", status)).strip(),
+                paper_id=paper_id or None,
+                paper_status=str((paper_row or {}).get("status", "")).strip() or None,
             )
         )
     return items[:6]
 
 
-def _build_import_result_progress(report: dict[str, Any], total_papers: int) -> dict[str, Any]:
+def _build_import_result_progress(
+    report: dict[str, Any],
+    total_papers: int,
+    *,
+    papers_by_id: dict[str, dict[str, Any]] | None = None,
+) -> dict[str, Any]:
     import_summary = report.get("import_summary")
     if not isinstance(import_summary, dict):
         import_summary = {}
@@ -2917,7 +3002,7 @@ def _build_import_result_progress(report: dict[str, Any], total_papers: int) -> 
         if index_status in {"running", "queued", "conflict", "failed"}:
             current_stage = "index_build"
     outcomes = report.get("import_outcomes")
-    recent_items = _build_recent_items_from_outcomes(outcomes, stage=current_stage)
+    recent_items = _build_recent_items_from_outcomes(outcomes, stage=current_stage, papers_by_id=papers_by_id)
     current_item_name = next((item.name for item in recent_items if item.state == "running"), None)
     return {
         "batch_total": total_candidates if total_candidates > 0 else None,
@@ -3004,8 +3089,141 @@ def _safe_upload_name(raw: str, idx: int) -> str:
     return cleaned
 
 
+def _load_store_papers(*, limit: int = 200, include_stage_statuses: bool = False) -> list[dict[str, Any]]:
+    store_path = ensure_store_current(processed_dir=DATA_DIR / "processed", topics_path=DATA_DIR / "library_topics.json")
+    return list_store_papers(db_path=store_path, limit=limit, include_stage_statuses=include_stage_statuses)
+
+
+def _load_vector_backend_summary() -> dict[str, Any] | None:
+    store_path = ensure_store_current(processed_dir=DATA_DIR / "processed", topics_path=DATA_DIR / "library_topics.json")
+    return get_vector_backend_state(db_path=store_path)
+
+
+def _prune_paper_from_json_array(path: Path, *, paper_id: str) -> None:
+    if not path.exists():
+        return
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return
+    if not isinstance(payload, list):
+        return
+    filtered = [row for row in payload if not (isinstance(row, dict) and str(row.get("paper_id", "")).strip() == paper_id)]
+    path.write_text(json.dumps(filtered, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def _prune_paper_from_jsonl(path: Path, *, paper_id: str) -> None:
+    if not path.exists():
+        return
+    lines: list[str] = []
+    with path.open("r", encoding="utf-8") as handle:
+        for raw in handle:
+            stripped = raw.strip()
+            if not stripped:
+                continue
+            try:
+                payload = json.loads(stripped)
+            except Exception:
+                lines.append(raw)
+                continue
+            if isinstance(payload, dict) and str(payload.get("paper_id", "")).strip() == paper_id:
+                continue
+            lines.append(raw if raw.endswith("\n") else f"{raw}\n")
+    path.write_text("".join(lines), encoding="utf-8")
+
+
+def _prune_paper_from_structure_index(path: Path, *, paper_id: str) -> None:
+    if not path.exists():
+        return
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return
+    if not isinstance(payload, dict):
+        return
+    papers = payload.get("papers")
+    if not isinstance(papers, list):
+        return
+    payload["papers"] = [
+        row for row in papers if not (isinstance(row, dict) and str(row.get("paper_id", "")).strip() == paper_id)
+    ]
+    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def _prune_paper_from_topics(path: Path, *, paper_id: str) -> None:
+    if not path.exists():
+        return
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return
+    if not isinstance(payload, dict):
+        return
+    normalized: dict[str, list[str]] = {}
+    for topic, values in payload.items():
+        if not isinstance(values, list):
+            continue
+        remaining = [str(value).strip() for value in values if str(value).strip() and str(value).strip() != paper_id]
+        if remaining:
+            normalized[str(topic)] = remaining
+    path.write_text(json.dumps(normalized, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def _orchestrate_paper_delete(*, paper_id: str) -> dict[str, Any]:
+    processed_dir = DATA_DIR / "processed"
+    store_path = ensure_store_current(processed_dir=processed_dir, topics_path=DATA_DIR / "library_topics.json")
+    row = get_store_paper(paper_id, db_path=store_path)
+    if row is None:
+        raise HTTPException(status_code=404, detail={"code": "PAPER_NOT_FOUND", "message": f"paper_id not found: {paper_id}"})
+    _prune_paper_from_json_array(processed_dir / "papers.json", paper_id=paper_id)
+    _prune_paper_from_jsonl(processed_dir / "chunks.jsonl", paper_id=paper_id)
+    _prune_paper_from_jsonl(processed_dir / "chunks_clean.jsonl", paper_id=paper_id)
+    _prune_paper_from_json_array(processed_dir / "paper_summary.json", paper_id=paper_id)
+    _prune_paper_from_structure_index(processed_dir / "structure_index.json", paper_id=paper_id)
+    _prune_paper_from_topics(DATA_DIR / "library_topics.json", paper_id=paper_id)
+    mark_paper_deleted(paper_id, reason="deleted_by_user", db_path=store_path)
+    backend = resolve_vector_backend("file", db_path=store_path)
+    vector_state = backend.delete_papers(paper_ids=[paper_id], index_path=DATA_DIR / "indexes" / "vec_index_embed.json")
+    return {
+        "paper": get_store_paper(paper_id, db_path=store_path),
+        "vector_backend": {
+            "backend_name": vector_state.backend_name,
+            "deleted_count": vector_state.deleted_count,
+            "requires_rebuild": vector_state.requires_rebuild,
+            "metadata": vector_state.metadata,
+        },
+    }
+
+
+def _orchestrate_paper_rebuild(*, paper_id: str, reason: str) -> dict[str, Any]:
+    processed_dir = DATA_DIR / "processed"
+    store_path = ensure_store_current(processed_dir=processed_dir, topics_path=DATA_DIR / "library_topics.json")
+    row = get_store_paper(paper_id, db_path=store_path)
+    if row is None:
+        raise HTTPException(status_code=404, detail={"code": "PAPER_NOT_FOUND", "message": f"paper_id not found: {paper_id}"})
+    mark_paper_rebuild_pending(paper_id, reason=reason, db_path=store_path)
+    backend = resolve_vector_backend("file", db_path=store_path)
+    vector_state = backend.delete_papers(paper_ids=[paper_id], index_path=DATA_DIR / "indexes" / "vec_index_embed.json")
+    return {
+        "paper": get_store_paper(paper_id, db_path=store_path),
+        "vector_backend": {
+            "backend_name": vector_state.backend_name,
+            "deleted_count": vector_state.deleted_count,
+            "requires_rebuild": vector_state.requires_rebuild,
+            "metadata": vector_state.metadata,
+        },
+    }
+
+
 def _load_latest_import_result() -> ImportLatestResultResponse:
     total_papers = len(load_papers())
+    vector_backend = _load_vector_backend_summary()
+    store_rows = _load_store_papers(limit=50)
+    papers_by_id = {
+        str(row.get("paper_id", "")).strip(): row
+        for row in store_rows
+        if isinstance(row, dict) and str(row.get("paper_id", "")).strip()
+    }
     if total_papers == 0:
         return ImportLatestResultResponse(
             total_papers=0,
@@ -3019,6 +3237,8 @@ def _load_latest_import_result() -> ImportLatestResultResponse:
             artifact_summary=_summarize_marker_artifacts(_build_marker_artifacts()),
             parser_diagnostics=[],
             recent_items=[],
+            papers=store_rows,
+            vector_backend=vector_backend,
         )
     report_paths = sorted(
         RUNS_DIR.glob("import_*/ingest_report.json"),
@@ -3032,6 +3252,8 @@ def _load_latest_import_result() -> ImportLatestResultResponse:
             artifact_summary=_summarize_marker_artifacts(_build_marker_artifacts()),
             parser_diagnostics=[],
             recent_items=[],
+            papers=store_rows,
+            vector_backend=vector_backend,
         )
 
     latest = report_paths[0]
@@ -3045,6 +3267,8 @@ def _load_latest_import_result() -> ImportLatestResultResponse:
             artifact_summary=_summarize_marker_artifacts(_build_marker_artifacts()),
             parser_diagnostics=[],
             recent_items=[],
+            papers=store_rows,
+            vector_backend=vector_backend,
         )
 
     import_summary = payload.get("import_summary")
@@ -3089,7 +3313,7 @@ def _load_latest_import_result() -> ImportLatestResultResponse:
     degradation = _extract_ingest_degradation(payload)
     diagnostics = _extract_parser_diagnostics(payload)
     artifacts = _build_marker_artifacts(latest_updated_at=updated_at, stage_updated_at=stage_updated_at)
-    progress = _build_import_result_progress(payload, total_papers)
+    progress = _build_import_result_progress(payload, total_papers, papers_by_id=papers_by_id)
 
     return ImportLatestResultResponse(
         added=max(0, int(import_summary.get("added", 0) or 0)),
@@ -3116,6 +3340,8 @@ def _load_latest_import_result() -> ImportLatestResultResponse:
         stage_processed=progress["stage_processed"],
         stage_total=progress["stage_total"],
         recent_items=progress["recent_items"],
+        papers=store_rows,
+        vector_backend=vector_backend,
     )
 
 
@@ -4078,6 +4304,112 @@ def get_latest_import_result() -> ImportLatestResultResponse:
 @app.get("/api/library/import-history", response_model=list[ImportHistoryEntryResponse])
 def get_import_history(limit: int = 20) -> list[ImportHistoryEntryResponse]:
     return _load_import_history(limit=limit)
+
+
+@app.get("/api/library/papers", response_model=list[LibraryPaperResponse])
+def list_library_papers(
+    limit: int = 100,
+    status: str | None = Query(default=None),
+    topic: str | None = Query(default=None),
+    q: str | None = Query(default=None),
+) -> list[LibraryPaperResponse]:
+    normalized_status = str(status or "").strip()
+    normalized_topic = str(topic or "").strip()
+    normalized_query = str(q or "").strip().lower()
+    store_path = ensure_store_current(processed_dir=DATA_DIR / "processed", topics_path=DATA_DIR / "library_topics.json")
+    rows = list_store_papers(
+        db_path=store_path,
+        limit=max(1, min(500, int(limit))),
+        include_stage_statuses=False,
+        include_deleted=(normalized_status == "deleted"),
+    )
+    out: list[LibraryPaperResponse] = []
+    for row in rows:
+        if normalized_status and str(row.get("status", "")).strip() != normalized_status:
+            continue
+        if normalized_topic and normalized_topic not in list(row.get("topics") or []):
+            continue
+        if normalized_query:
+            haystack = " ".join(
+                [
+                    str(row.get("title", "")).lower(),
+                    str(row.get("source_uri", "")).lower(),
+                    str(row.get("storage_path", "")).lower(),
+                ]
+            )
+            if normalized_query not in haystack:
+                continue
+        out.append(LibraryPaperResponse.model_validate(row))
+    return out
+
+
+@app.get("/api/library/papers/{paper_id}", response_model=LibraryPaperResponse)
+def get_library_paper(paper_id: str) -> LibraryPaperResponse:
+    store_path = ensure_store_current(processed_dir=DATA_DIR / "processed", topics_path=DATA_DIR / "library_topics.json")
+    row = get_store_paper(paper_id, db_path=store_path)
+    if row is None:
+        raise HTTPException(status_code=404, detail={"code": "PAPER_NOT_FOUND", "message": f"paper_id not found: {paper_id}"})
+    return LibraryPaperResponse.model_validate(row)
+
+
+@app.post("/api/library/papers/{paper_id}/delete", response_model=LibraryPaperActionResponse)
+def delete_library_paper(paper_id: str) -> LibraryPaperActionResponse:
+    payload = _orchestrate_paper_delete(paper_id=paper_id)
+    paper = payload["paper"] or {"paper_id": paper_id, "status": "deleted"}
+    return LibraryPaperActionResponse(
+        ok=True,
+        paper_id=str(paper.get("paper_id", paper_id)),
+        status=str(paper.get("status", "deleted")),
+        message="论文已标记删除，关联检索索引需要重建。",
+        vector_backend=payload.get("vector_backend"),
+    )
+
+
+@app.post("/api/library/papers/{paper_id}/rebuild", response_model=LibraryPaperActionResponse)
+def rebuild_library_paper(paper_id: str) -> LibraryPaperActionResponse:
+    payload = _orchestrate_paper_rebuild(paper_id=paper_id, reason="rebuild_requested_by_user")
+    paper = payload["paper"] or {"paper_id": paper_id, "status": "rebuild_pending"}
+    return LibraryPaperActionResponse(
+        ok=True,
+        paper_id=str(paper.get("paper_id", paper_id)),
+        status=str(paper.get("status", "rebuild_pending")),
+        message="论文已标记为待重建，当前文件向量后端需要重建索引。",
+        vector_backend=payload.get("vector_backend"),
+    )
+
+
+@app.post("/api/library/papers/{paper_id}/retry", response_model=LibraryPaperActionResponse)
+def retry_library_paper(paper_id: str) -> LibraryPaperActionResponse:
+    store_path = ensure_store_current(processed_dir=DATA_DIR / "processed", topics_path=DATA_DIR / "library_topics.json")
+    row = get_store_paper(paper_id, db_path=store_path)
+    if row is None:
+        raise HTTPException(status_code=404, detail={"code": "PAPER_NOT_FOUND", "message": f"paper_id not found: {paper_id}"})
+    update_paper(paper_id, status="rebuild_pending", error_message="", db_path=store_path)
+    upsert_stage_status(
+        paper_id=paper_id,
+        stage="import",
+        state="queued",
+        error_message="",
+        metadata={"reason": "retry_requested_by_user"},
+        db_path=store_path,
+    )
+    payload = _orchestrate_paper_rebuild(paper_id=paper_id, reason="retry_requested_by_user")
+    paper = payload["paper"] or {"paper_id": paper_id, "status": "rebuild_pending"}
+    return LibraryPaperActionResponse(
+        ok=True,
+        paper_id=str(paper.get("paper_id", paper_id)),
+        status=str(paper.get("status", "rebuild_pending")),
+        message="论文已进入重试准备状态，等待重新构建相关产物。",
+        vector_backend=payload.get("vector_backend"),
+    )
+
+
+@app.get("/api/library/vector-backend", response_model=VectorBackendStateResponse)
+def get_library_vector_backend() -> VectorBackendStateResponse:
+    payload = _load_vector_backend_summary()
+    if payload is None:
+        return VectorBackendStateResponse(backend_name="file", status="missing", metadata={})
+    return VectorBackendStateResponse.model_validate(payload)
 
 
 @app.get("/api/library/marker-artifacts")
