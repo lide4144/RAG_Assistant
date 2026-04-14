@@ -473,3 +473,51 @@ class QdrantVectorStore(BaseVectorStore):
 
         self.add_documents(documents)
         return len(documents)
+
+    def get_collection_info(self) -> Dict[str, Any]:
+        """Get information about the collection.
+
+        Returns:
+            Dictionary with collection info including:
+            - vector_size: Vector dimension
+            - distance: Distance metric
+            - document_count: Number of documents
+        """
+        try:
+            collection = self._client.get_collection(self.collection_name)
+            return {
+                "vector_size": collection.config.params.vectors.size,
+                "distance": str(collection.config.params.vectors.distance),
+                "document_count": collection.points_count,
+            }
+        except Exception as e:
+            return {
+                "vector_size": self.vector_size,
+                "distance": self.distance,
+                "document_count": 0,
+                "error": str(e),
+            }
+
+    def get_collection_info(self) -> Dict[str, Any]:
+        """Get information about the collection.
+
+        Returns:
+            Dictionary with collection info including:
+            - vector_size: Vector dimension
+            - distance: Distance metric
+            - document_count: Number of documents
+        """
+        try:
+            collection = self._client.get_collection(self.collection_name)
+            return {
+                "vector_size": collection.config.params.vectors.size,
+                "distance": str(collection.config.params.vectors.distance),
+                "document_count": collection.points_count,
+            }
+        except Exception as e:
+            return {
+                "vector_size": self.vector_size,
+                "distance": self.distance,
+                "document_count": 0,
+                "error": str(e),
+            }
