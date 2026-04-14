@@ -4222,6 +4222,46 @@ def health_deps() -> dict[str, Any]:
     response["rerank"]["used_fallback"] = bool(rerank_passthrough_mode)
     response["embedding"]["fallback_mode"] = embedding_fallback_mode
     response["embedding"]["degraded_to"] = embedding_fallback_mode
+
+    # Check vector store backend health
+    vector_store_backend = (
+        cfg.vector_store.backend if hasattr(cfg, "vector_store") else "memory"
+    )
+    vector_store_status = "ok"
+    vector_store_reason = None
+
+    if vector_store_backend == "qdrant":
+        try:
+            from app.vector_store import VectorStoreFactory
+
+            store = VectorStoreFactory.create(
+                {
+                    "backend": "qdrant",
+                    "host": cfg.vector_store.host,
+                    "port": cfg.vector_store.port,
+                    "url": cfg.vector_store.url,
+                    "api_key": cfg.vector_store.api_key,
+                    "collection_name": cfg.vector_store.collection_name,
+                }
+            )
+            if not store.health_check():
+                vector_store_status = "error"
+                vector_store_reason = "connection_failed"
+        except Exception as e:
+            vector_store_status = "error"
+            vector_store_reason = str(e)
+
+    response["vector_store"] = {
+        "status": vector_store_status,
+        "backend": vector_store_backend,
+        "reason": vector_store_reason,
+        "host": getattr(cfg.vector_store, "host", None)
+        if hasattr(cfg, "vector_store")
+        else None,
+        "collection": getattr(cfg.vector_store, "collection_name", None)
+        if hasattr(cfg, "vector_store")
+        else None,
+    }
     return response
 
 

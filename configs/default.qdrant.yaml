@@ -1,0 +1,38 @@
+# Qdrant backend configuration example
+# Copy this to configs/default.yaml or set vector_store.backend: qdrant
+
+chunk_size: 400
+overlap: 50
+marker_enabled: false
+marker_timeout_sec: 1200
+title_confidence_threshold: 0.6
+title_blacklist_patterns:
+  - "^\\s*preprint\.?\\s+under\\s+review\.?\\s*$"
+  - "all rights reserved"
+  - "copyright"
+  - "arxiv preprint"
+  - "provided proper attribution is provided"
+  - "hereby grants permission to"
+top_k_retrieval: 20
+alpha_expansion: 0.3
+top_n_evidence: 8
+fusion_weight: 0.6
+RRF_k: 60
+sufficiency_threshold: 0.7
+dense_backend: embedding
+
+# Vector store backend configuration - QDRANT MODE
+vector_store:
+  backend: qdrant
+  host: localhost
+  port: 6333
+  # For Qdrant Cloud, use url and api_key instead:
+  # url: https://your-cluster.cloud.qdrant.io
+  # api_key: ${QDRANT_API_KEY}
+  collection_name: paper_chunks
+  vector_size: 1024
+  distance: COSINE
+  batch_size: 100
+  timeout: 60
+
+# ... rest of configuration same as default.yaml ...

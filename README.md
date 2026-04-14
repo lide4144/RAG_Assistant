@@ -12,10 +12,12 @@
 - 历史完整版 README（已归档）：[docs/legacy-readme-full.md](docs/legacy-readme-full.md)
 - Pipeline 工作台与任务进度说明：[docs/pipeline-workbench.md](docs/pipeline-workbench.md)
 - PDF Marker 解析与灰度/回滚说明：[docs/marker-ingest-ops.md](docs/marker-ingest-ops.md)
+- Qdrant 向量存储部署指南：[docs/qdrant-deployment.md](docs/qdrant-deployment.md)
 
 ## 项目结构
 
 - `app/`: Python 核心能力（ingest / retrieve / rewrite / qa / kernel_api）
+  - `app/vector_store/`: 向量存储抽象层（内存/Qdrant 后端）
 - `frontend/`: Next.js 聊天前端
 - `gateway/`: Node 网关（WebSocket 协议编排）
 - `configs/`: 配置文件（默认 `default.yaml`）
@@ -33,6 +35,7 @@
 - 统一引用结构与编号映射
 - GraphRAG 子图可视化与引用联动
 - 多轮会话与开发者审查视图
+- **向量存储后端**：支持内存存储（默认）和 Qdrant 向量数据库
 
 ## Web 联网模式说明
 

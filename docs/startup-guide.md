@@ -226,3 +226,85 @@ cd ../frontend && PORT=3000 npx next dev -H 0.0.0.0 -p 3000
 - `docs/local-llm-bootstrap.md`
 
 包含一键安装脚本、健康检查、vLLM 可选路径和外部 API 回滚步骤。
+
+## 11. Qdrant 向量存储后端（可选）
+
+系统默认使用内存存储向量索引。对于大规模数据，可启用 Qdrant 向量数据库后端。
+
+### 11.1 本地启动 Qdrant
+
+```bash
+# 使用 Docker Compose 启动 Qdrant
+docker-compose -f docker-compose.qdrant.yml up -d
+
+# 检查状态
+curl http://localhost:6333/healthz
+```
+
+### 11.2 启用 Qdrant 后端
+
+编辑 `configs/default.yaml`：
+
+```yaml
+vector_store:
+  backend: qdrant  # 改为 "qdrant"
+  host: localhost
+  port: 6333
+  collection_name: paper_chunks
+  vector_size: 1024
+  distance: COSINE
+```
+
+或使用环境变量覆盖：
+
+```bash
+export VECTOR_STORE_BACKEND=qdrant
+export QDRANT_HOST=localhost
+export QDRANT_PORT=6333
+```
+
+### 11.3 数据迁移
+
+将现有索引迁移到 Qdrant：
+
+```bash
+# 预览迁移（不实际上传）
+python scripts/migrate_to_qdrant.py --dry-run
+
+# 执行迁移并验证
+python scripts/migrate_to_qdrant.py --verify
+
+# 迁移特定索引文件
+python scripts/migrate_to_qdrant.py --input data/indexes/vec_index_embed.json
+```
+
+### 11.4 Qdrant Cloud（云托管）
+
+使用 Qdrant Cloud 时：
+
+```yaml
+vector_store:
+  backend: qdrant
+  url: https://your-cluster.cloud.qdrant.io
+  api_key: ${QDRANT_API_KEY}  # 从环境变量读取
+  collection_name: paper_chunks
+```
+
+### 11.5 健康检查
+
+访问 `/health/deps` 查看 Qdrant 连接状态：
+
+```bash
+curl http://localhost:8000/health/deps | jq '.vector_store'
+```
+
+预期响应：
+
+```json
+{
+  "status": "ok",
+  "backend": "qdrant",
+  "host": "localhost",
+  "collection": "paper_chunks"
+}
+```
