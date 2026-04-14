@@ -186,14 +186,16 @@ rewrite_meta_noise_terms:
 # Vector store backend configuration
 # Options: memory (default), qdrant
 vector_store:
-  backend: memory  # Use "qdrant" for Qdrant backend
+  backend: qdrant  # Use "qdrant" for Qdrant backend
   # Memory backend options
   index_dir: data/indexes
   # Qdrant backend options (when backend: qdrant)
+  # For local Qdrant (Docker) - NO VPN NEEDED
   host: localhost
   port: 6333
-  # url: https://your-cluster.qdrant.io  # For Qdrant Cloud
-  # api_key: ${QDRANT_API_KEY}  # For Qdrant Cloud
+  # For Qdrant Cloud (needs VPN in China):
+  # url: https://your-cluster.cloud.qdrant.io
+  # api_key: ${QDRANT_API_KEY}
   collection_name: paper_chunks
   vector_size: 1024
   distance: COSINE  # COSINE, EUCLID, DOT
