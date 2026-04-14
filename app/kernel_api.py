@@ -700,6 +700,24 @@ class LibraryPaperActionResponse(BaseModel):
     vector_backend: dict[str, Any] | None = None
 
 
+class BulkDeleteRequest(BaseModel):
+    paper_ids: list[str] = Field(min_length=1, max_length=50)
+
+
+class BulkDeleteResult(BaseModel):
+    paper_id: str
+    ok: bool
+    error: str | None = None
+
+
+class BulkDeleteResponse(BaseModel):
+    ok: bool
+    total: int
+    succeeded: int
+    failed: int
+    results: list[BulkDeleteResult]
+
+
 class _TaskCancelledError(RuntimeError):
     pass
 
@@ -5353,6 +5371,41 @@ def retry_library_paper(paper_id: str) -> LibraryPaperActionResponse:
         status=str(paper.get("status", "rebuild_pending")),
         message="论文已进入重试准备状态，等待重新构建相关产物。",
         vector_backend=payload.get("vector_backend"),
+    )
+
+
+@app.post("/api/library/papers/bulk-delete", response_model=BulkDeleteResponse)
+def bulk_delete_papers(payload: BulkDeleteRequest) -> BulkDeleteResponse:
+    """批量删除论文。"""
+    results: list[BulkDeleteResult] = []
+
+    for paper_id in payload.paper_ids:
+        try:
+            _orchestrate_paper_delete(paper_id=paper_id)
+            results.append(BulkDeleteResult(paper_id=paper_id, ok=True, error=None))
+        except HTTPException as exc:
+            error_msg = (
+                exc.detail.get("message", str(exc))
+                if isinstance(exc.detail, dict)
+                else str(exc)
+            )
+            results.append(
+                BulkDeleteResult(paper_id=paper_id, ok=False, error=error_msg)
+            )
+        except Exception as exc:
+            results.append(
+                BulkDeleteResult(paper_id=paper_id, ok=False, error=str(exc))
+            )
+
+    succeeded = sum(1 for r in results if r.ok)
+    failed = len(results) - succeeded
+
+    return BulkDeleteResponse(
+        ok=failed == 0,
+        total=len(results),
+        succeeded=succeeded,
+        failed=failed,
+        results=results,
     )
 
 

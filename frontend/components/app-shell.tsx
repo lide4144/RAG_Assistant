@@ -2,7 +2,7 @@
 
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-import { BotMessageSquare, ChevronDown, DatabaseZap, Settings2, Sparkles, Waves } from 'lucide-react';
+import { BotMessageSquare, ChevronDown, DatabaseZap, Settings2, Sparkles, Waves, Library } from 'lucide-react';
 import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import type { RuntimeLevel, RuntimeOverview } from '../lib/types';
 import { fetchAdminJson } from '../lib/admin-http';
@@ -19,6 +19,7 @@ type NavItem = {
 const navItems: NavItem[] = [
   { href: '/chat', label: '对话问答', icon: BotMessageSquare },
   { href: '/pipeline', label: '知识处理', icon: DatabaseZap },
+  { href: '/library', label: '知识库', icon: Library },
   { href: '/settings', label: '模型设置', icon: Settings2 }
 ];
 
