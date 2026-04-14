@@ -14,11 +14,6 @@ import {
   Trash2
 } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState } from 'react';
-import ReactMarkdown from 'react-markdown';
-import remarkGfm from 'remark-gfm';
-import remarkMath from 'remark-math';
-import rehypeKatex from 'rehype-katex';
-import rehypeHighlight from 'rehype-highlight';
 import type { AgentEvent, ChatMessage, ChatMode, JobCreateResponse, JobEvent, JobStatus, LlmDebugTrace, RuntimeOverview, SourceItem, ViewMode } from '../lib/types';
 import { fetchAdminJson } from '../lib/admin-http';
 import { resolveAdminUrl, resolveKernelApiUrl } from '../lib/deployment-endpoints';
@@ -26,6 +21,7 @@ import { buildGraphSubgraph } from '../lib/graph';
 import { mapConnectionStatus, mapRuntimeLevel } from '../lib/status-mapper';
 import { GraphSubgraphPanel } from './graph-subgraph';
 import { useTaskCenter } from './task-center';
+import { StructuredAnswer } from './structured-answer';
 
 type SendErrorState = {
   message: string;
@@ -739,9 +735,7 @@ export function ChatShell() {
                           {message.status === 'streaming' && !message.content.trim() ? (
                             <StreamingPlaceholder stage={waitingStage} moment={waitingMoment} timeline={executionTimeline.steps} />
                           ) : (
-                            <ReactMarkdown remarkPlugins={[remarkGfm, remarkMath]} rehypePlugins={[rehypeKatex, rehypeHighlight]}>
-                              {message.content}
-                            </ReactMarkdown>
+                            <StructuredAnswer content={message.content} />
                           )}
                         </div>
 

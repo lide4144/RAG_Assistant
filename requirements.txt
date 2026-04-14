@@ -9,3 +9,4 @@ pymupdf>=1.24,<2
 # Optional for PDF structured parsing. If unavailable, ingest will fallback to legacy parser.
 marker-pdf>=1.0.0
 langgraph>=0.2,<1
+qdrant-client>=1.7.0

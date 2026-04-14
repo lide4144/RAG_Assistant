@@ -131,7 +131,8 @@ assistant_mode_enabled: true
 assistant_mode_force_legacy_gate: false
 assistant_mode_clarify_limit: 2
 assistant_mode_force_partial_answer_on_limit: true
-session_store_backend: redis
+session_store_backend: sqlite
+session_sqlite_path: data/session_store.db
 session_redis_url: redis://localhost:6379/0
 session_redis_ttl_sec: 86400
 session_redis_key_prefix: rag
@@ -181,3 +182,20 @@ rewrite_meta_noise_terms:
   - "没回答全"
   - "答全"
   - "再找找"
+
+# Vector store backend configuration
+# Options: memory (default), qdrant
+vector_store:
+  backend: memory  # Use "qdrant" for Qdrant backend
+  # Memory backend options
+  index_dir: data/indexes
+  # Qdrant backend options (when backend: qdrant)
+  host: localhost
+  port: 6333
+  # url: https://your-cluster.qdrant.io  # For Qdrant Cloud
+  # api_key: ${QDRANT_API_KEY}  # For Qdrant Cloud
+  collection_name: paper_chunks
+  vector_size: 1024
+  distance: COSINE  # COSINE, EUCLID, DOT
+  batch_size: 100
+  timeout: 60

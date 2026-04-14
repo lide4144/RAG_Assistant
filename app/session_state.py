@@ -78,16 +78,80 @@ def _resolve_store_backend(backend: str | None) -> str:
 
     Supports: 'file' (default), 'redis', 'sqlite'
 
+    Priority:
+    1. Explicit backend parameter
+    2. SESSION_BACKEND environment variable
+    3. session_store_backend from YAML config
+    4. Default 'file'
+
     Args:
-        backend: Explicit backend choice, or None to read from env.
+        backend: Explicit backend choice, or None to read from config/env.
 
     Returns:
         str: Resolved backend name.
     """
-    selected = (backend or os.environ.get("SESSION_BACKEND", "")).strip().lower()
-    if selected in _ALLOWED_BACKENDS:
-        return selected
+    # Priority 1: Explicit parameter
+    if backend:
+        selected = backend.strip().lower()
+        if selected in _ALLOWED_BACKENDS:
+            return selected
+
+    # Priority 2: Environment variable
+    env_backend = os.environ.get("SESSION_BACKEND", "").strip().lower()
+    if env_backend in _ALLOWED_BACKENDS:
+        return env_backend
+
+    # Priority 3: YAML config
+    try:
+        from app.config import load_config
+
+        config = load_config()
+        config_backend = getattr(config, "session_store_backend", "")
+        if config_backend:
+            selected = config_backend.strip().lower()
+            if selected in _ALLOWED_BACKENDS:
+                return selected
+    except Exception:
+        pass
+
+    # Priority 4: Default
     return "file"
+
+
+def _get_session_config_value(
+    field_name: str, env_var: str | None, default: str, param_value: str | None = None
+) -> str:
+    """Get session configuration value with proper priority.
+
+    Priority:
+    1. Explicit parameter value
+    2. Environment variable
+    3. YAML config (session_* field)
+    4. Default value
+    """
+    # Priority 1: Explicit parameter
+    if param_value:
+        return param_value
+
+    # Priority 2: Environment variable
+    if env_var:
+        env_val = os.environ.get(env_var, "").strip()
+        if env_val:
+            return env_val
+
+    # Priority 3: YAML config
+    try:
+        from app.config import load_config
+
+        config = load_config()
+        config_val = getattr(config, f"session_{field_name}", "")
+        if config_val:
+            return str(config_val)
+    except Exception:
+        pass
+
+    # Priority 4: Default
+    return default
 
 
 def _create_store(
@@ -102,9 +166,15 @@ def _create_store(
     This factory function creates the appropriate store backend
     (FileStore, RedisStore, or SQLiteStore) based on configuration.
 
+    Configuration priority:
+    1. Explicit function parameters
+    2. Environment variables (SESSION_BACKEND, SESSION_SQLITE_PATH, etc.)
+    3. YAML config (session_store_backend, session_sqlite_path, etc.)
+    4. Default values
+
     Args:
         backend: Backend type ('file', 'redis', 'sqlite').
-                If None, reads from SESSION_BACKEND env var.
+                If None, reads from config/env.
         store_path: Path for file-based backends.
         redis_url: Redis connection URL.
         redis_key_prefix: Prefix for Redis keys.
@@ -114,7 +184,24 @@ def _create_store(
         SessionStore: Configured store instance.
     """
     selected = _resolve_store_backend(backend)
-    cache_key = f"{selected}:{store_path}:{redis_url}:{redis_key_prefix}"
+
+    # Resolve effective paths/values with config fallback
+    effective_store_path = _get_session_config_value(
+        "store_path", None, str(store_path), str(store_path)
+    )
+    effective_redis_url = _get_session_config_value(
+        "redis_url", "RAG_SESSION_REDIS_URL", "", redis_url
+    )
+    effective_redis_prefix = _get_session_config_value(
+        "redis_key_prefix", None, redis_key_prefix, redis_key_prefix
+    )
+    effective_redis_ttl = int(
+        _get_session_config_value(
+            "redis_ttl_sec", None, str(redis_ttl_sec), str(redis_ttl_sec)
+        )
+    )
+
+    cache_key = f"{selected}:{effective_store_path}:{effective_redis_url}:{effective_redis_prefix}"
 
     if cache_key in _STORE_CACHE:
         return _STORE_CACHE[cache_key]
@@ -124,29 +211,32 @@ def _create_store(
         try:
             from app.db import SQLiteStore
 
-            db_path = os.environ.get("SESSION_SQLITE_PATH", "data/session_store.db")
+            db_path = _get_session_config_value(
+                "sqlite_path", "SESSION_SQLITE_PATH", "data/session_store.db"
+            )
             store = SQLiteStore(db_path)
         except ImportError:
             # Fallback to file if sqlite3 not available (shouldn't happen)
             from app.db import FileStore
 
-            store = FileStore(store_path)
+            store = FileStore(effective_store_path)
     elif selected == "redis":
         try:
             from app.db import RedisStore
 
-            url = redis_url or os.environ.get("RAG_SESSION_REDIS_URL", "")
-            store = RedisStore(url, redis_key_prefix, redis_ttl_sec)
+            store = RedisStore(
+                effective_redis_url, effective_redis_prefix, effective_redis_ttl
+            )
         except (ImportError, Exception):
             # Fallback to file if Redis unavailable
             from app.db import FileStore
 
-            store = FileStore(store_path)
+            store = FileStore(effective_store_path)
     else:
         # Default: file backend
         from app.db import FileStore
 
-        store = FileStore(store_path)
+        store = FileStore(effective_store_path)
 
     _STORE_CACHE[cache_key] = store
     return store

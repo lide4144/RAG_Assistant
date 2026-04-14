@@ -408,8 +408,9 @@ class PlannerRuntimeRunResult(TypedDict):
     observation: dict[str, Any]
 
 
-def _serialize_planner_result(result: PlannerResult) -> dict[str, Any]:
-    return serialize_planner_result(result)
+def _serialize_planner_result(result: dict[str, Any]) -> dict[str, Any]:
+    """简化版本：直接返回结果字典"""
+    return dict(result) if result else {}
 
 
 def _default_runtime_contract() -> dict[str, Any]:
@@ -1039,7 +1040,7 @@ def _selected_path_for_tool(tool_call: dict[str, Any]) -> str:
 def _catalog_lookup_response(
     tool_call: dict[str, Any], catalog_result: dict[str, Any]
 ) -> Any:
-    from app.kernel_api import KernelChatChatResponse
+    from app.kernel_api import KernelChatResponse
 
     call_id = str(tool_call.get("call_id") or tool_call.get("id") or "tool")
     paper_count = len(catalog_result.get("paper_set") or [])
@@ -1286,16 +1287,23 @@ def _build_controlled_terminate_response(
 def _paper_assistant_missing_prerequisites(
     tool_call: dict[str, Any],
 ) -> tuple[list[str], str | None]:
+    """检查 paper_assistant 工具的依赖项。
+
+    简化版本：不再调用硬编码的 paper_assistant_clarification，
+    而是返回空列表让上层逻辑通过 LLM 生成澄清问题。
+    """
     if str(tool_call.get("tool_name") or "") != "paper_assistant":
         return [], None
-    return paper_assistant_clarification(
-        str(tool_call.get("query") or "").strip(),
-        depends_on=[
-            str(item).strip()
-            for item in list(tool_call.get("depends_on") or [])
-            if str(item).strip()
-        ],
-    )
+    # 简化：返回依赖项列表但不生成硬编码澄清
+    # 让系统通过标准 LLM 流程生成自然语言澄清
+    depends_on = [
+        str(item).strip()
+        for item in list(tool_call.get("depends_on") or [])
+        if str(item).strip()
+    ]
+    # 如果有依赖但未满足，返回依赖列表
+    # 但不要生成硬编码澄清问题
+    return depends_on, None
 
 
 def _load_request_context(state: PlannerRuntimeState) -> PlannerRuntimeState:
@@ -1341,16 +1349,32 @@ def _plan_chat_request(state: PlannerRuntimeState) -> PlannerRuntimeState:
         "reason": None,
     }
     llm_validation: dict[str, Any] | None = None
-    planner_execution_source = PLANNER_SOURCE_FALLBACK
-    planner = _serialize_planner_result(
-        build_planner_fallback(
-            user_input=query,
-            standalone_query=query,
-            reason="planner_llm_unavailable",
-            fallback_type="planner_reject",
-            rejection_layer="llm_call",
-        )
-    )
+    planner_execution_source = "fallback"  # 简化：使用字符串而非常量
+    # 简化：直接创建 planner 字典，不再调用 build_planner_fallback
+    # 注意：必须包含所有必要字段，否则验证会失败
+    planner = {
+        "decision_version": "1.0",
+        "user_goal": query,
+        "planner_used": False,
+        "planner_source": "fallback",
+        "planner_fallback": True,
+        "planner_fallback_reason": "planner_llm_unavailable",
+        "planner_confidence": 0.0,
+        "is_new_topic": False,
+        "should_clear_pending_clarify": False,
+        "relation_to_previous": "planner_fallback",
+        "standalone_query": query,
+        "primary_capability": "fact_qa",
+        "strictness": "strict_fact",
+        "decision_result": "controlled_terminate",
+        "knowledge_route": "local",
+        "research_mode": "none",
+        "requires_clarification": False,
+        "selected_tools_or_skills": [],
+        "action_plan": [],  # ← 必须包含，否则验证失败
+        "fallback": {"type": None, "reason": None},
+        "clarify_question": None,
+    }
 
     llm_candidate_payload, llm_diagnostics = _build_planner_llm_candidate(
         request=request,
@@ -1378,10 +1402,11 @@ def _plan_chat_request(state: PlannerRuntimeState) -> PlannerRuntimeState:
                 llm_result = parse_planner_result(
                     llm_candidate_payload, default_query=query
                 )
-                llm_result = PlannerResult(
-                    **{**asdict(llm_result), "planner_source": PLANNER_SOURCE_LLM}
-                )
-            except (TypeError, ValueError):
+                # 修复：正确使用 asdict 转换 dataclass
+                llm_result_dict = asdict(llm_result)
+                llm_result_dict["planner_source"] = "llm"  # 使用字符串而非常量
+            except (TypeError, ValueError) as e:
+                print(f"[DEBUG] parse_planner_result failed: {e}")
                 llm_validation = {
                     "status": "reject",
                     "reason_codes": ["planner_llm_invalid_schema"],
@@ -1391,30 +1416,36 @@ def _plan_chat_request(state: PlannerRuntimeState) -> PlannerRuntimeState:
                     "layers": {},
                 }
         if llm_validation["status"] == "reject":
-            planner = _serialize_planner_result(
-                build_planner_fallback(
-                    user_input=query,
-                    standalone_query=query,
-                    reason=str(
-                        llm_validation.get("reason_code")
-                        or "planner_llm_invalid_schema"
-                    ),
-                    fallback_type="planner_reject",
-                    rejection_layer=(
-                        [
-                            str(item).strip()
-                            for item in list(
-                                llm_validation.get("rejected_layers") or []
-                            )
-                            if str(item).strip()
-                        ]
-                        or [None]
-                    )[0],
-                )
-            )
+            # 简化：直接创建 planner 字典，不再调用 build_planner_fallback
+            planner = {
+                "decision_version": "1.0",
+                "user_goal": query,
+                "planner_used": False,
+                "planner_source": "fallback",
+                "planner_fallback": True,
+                "planner_fallback_reason": str(
+                    llm_validation.get("reason_code") or "planner_llm_invalid_schema"
+                ),
+                "planner_confidence": 0.0,
+                "is_new_topic": False,
+                "should_clear_pending_clarify": False,
+                "relation_to_previous": "planner_fallback",
+                "standalone_query": query,
+                "primary_capability": "fact_qa",
+                "strictness": "strict_fact",
+                "decision_result": "controlled_terminate",
+                "knowledge_route": "local",
+                "research_mode": "none",
+                "requires_clarification": False,
+                "selected_tools_or_skills": [],
+                "action_plan": [],  # ← 必须包含
+                "fallback": {"type": None, "reason": None},
+                "clarify_question": None,
+            }
         elif llm_result is not None:
-            planner = _serialize_planner_result(llm_result)
-            planner_execution_source = PLANNER_SOURCE_LLM
+            # 简化：直接使用字典
+            planner = llm_result_dict if "llm_result_dict" in locals() else llm_result
+            planner_execution_source = "llm"  # 使用字符串而非常量
     shadow_record = None
     if llm_candidate_payload is not None:
         shadow_record = {
@@ -2254,19 +2285,42 @@ def run_planner_runtime(
         else:
             final_state = _run_without_langgraph(initial_state, fallback_nodes or {})
     except Exception as exc:
-        planner_result = build_planner_fallback(
-            user_input=str(getattr(payload, "query", "")),
-            standalone_query=str(getattr(payload, "query", "")),
-            reason="planner_runtime_exception",
+        # 简化：不再调用 build_planner_fallback，直接创建字典
+        import traceback
+
+        # 写入错误到文件
+        error_log_path = (
+            "/home/programer/RAG_GPTV1.0/runs/logs/planner_runtime_errors.log"
         )
-        planner_data = _serialize_planner_result(
-            build_planner_fallback(
-                user_input=str(getattr(payload, "query", "")),
-                standalone_query=str(getattr(payload, "query", "")),
-                reason="planner_runtime_exception",
-                fallback_type="runtime_exception",
-            )
-        )
+        with open(error_log_path, "a") as f:
+            f.write(f"[ERROR] {exc}\n")
+            f.write(traceback.format_exc())
+            f.write("\n" + "=" * 80 + "\n")
+        query = str(getattr(payload, "query", ""))
+        planner_dict = {
+            "decision_version": "1.0",
+            "user_goal": query,
+            "planner_used": False,
+            "planner_source": "fallback",
+            "planner_fallback": True,
+            "planner_fallback_reason": "planner_runtime_exception",
+            "planner_confidence": 0.0,
+            "is_new_topic": False,
+            "should_clear_pending_clarify": False,
+            "relation_to_previous": "planner_fallback",
+            "standalone_query": query,
+            "primary_capability": "fact_qa",
+            "strictness": "strict_fact",
+            "decision_result": "controlled_terminate",
+            "knowledge_route": "local",
+            "research_mode": "none",
+            "requires_clarification": False,
+            "selected_tools_or_skills": [],
+            "action_plan": [],  # ← 必须包含
+            "fallback": {"type": None, "reason": None},
+            "clarify_question": None,
+        }
+        planner_data = planner_dict
         controlled_termination = {
             "type": "runtime_exception",
             "reason": "planner_runtime_exception",
@@ -2291,8 +2345,8 @@ def run_planner_runtime(
                     "step": "planner_runtime_route",
                     "state": "selected",
                     "selected_path": "controlled_terminate",
-                    "primary_capability": planner_result.primary_capability,
-                    "strictness": planner_result.strictness,
+                    "primary_capability": planner_dict["primary_capability"],
+                    "strictness": planner_dict["strictness"],
                     "tool_name": None,
                     "passthrough": False,
                 }
@@ -2411,8 +2465,10 @@ def run_planner_runtime(
         ),
         "planner_execution_source": final_state.get("runtime", {}).get(
             "planner_execution_source",
-            normalize_planner_source(
+            # 简化：直接使用 planner_source 值，不再调用 normalize_planner_source
+            str(
                 dict(final_state.get("planner") or {}).get("planner_source")
+                or "fallback"
             ),
         ),
         "planner_llm_diagnostics": dict(

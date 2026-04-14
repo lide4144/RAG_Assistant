@@ -56,6 +56,25 @@ class RerankConfig:
 
 
 @dataclass
+class VectorStoreConfig:
+    """Vector store backend configuration."""
+
+    backend: str = "memory"  # "memory" or "qdrant"
+    # Memory backend options
+    index_dir: str = "data/indexes"
+    # Qdrant backend options
+    host: str = "localhost"
+    port: int = 6333
+    url: str = ""  # For Qdrant Cloud
+    api_key: str = ""  # For Qdrant Cloud
+    collection_name: str = "paper_chunks"
+    vector_size: int = 1024
+    distance: str = "COSINE"  # COSINE, EUCLID, DOT
+    batch_size: int = 100
+    timeout: int = 60
+
+
+@dataclass
 class PipelineConfig:
     chunk_size: int = 400
     overlap: int = 50
@@ -189,6 +208,7 @@ class PipelineConfig:
     dense_backend: str = "embedding"
     embedding: EmbeddingConfig = field(default_factory=EmbeddingConfig)
     rerank: RerankConfig = field(default_factory=RerankConfig)
+    vector_store: VectorStoreConfig = field(default_factory=VectorStoreConfig)
     graph_path: str = "data/processed/graph.json"
     graph_entity_llm_provider: str = "openai"
     graph_entity_llm_base_url: str = "https://api.siliconflow.cn/v1"

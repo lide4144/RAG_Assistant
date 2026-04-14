@@ -1616,6 +1616,11 @@ def _build_llm_answer_prompt(
     return (
         "Use ONLY the evidence provided in ContextPayload to answer the question. "
         "First align with claim_plan, then render readable answer with conclusion/evidence/uncertainty boundary. "
+        "Format your answer using Markdown with clear section headers:\n"
+        "- ## 结论 (Conclusion): Main findings\n"
+        "- ## 证据 (Evidence): Supporting details from sources\n"
+        "- ## 不确定性边界 (Uncertainty): What remains unknown or needs verification\n"
+        "Use bullet points, bold text, and clear formatting to improve readability. "
         "Do not add any fact outside the provided evidence and chat history context. "
         "Return strict JSON with keys: answer, answer_citations. "
         "answer_citations must be a list of objects with chunk_id, paper_id, section_page.\n\n"
@@ -1694,6 +1699,7 @@ def _try_llm_answer_with_evidence(
     history_turns: list[dict[str, Any]],
     on_stream_delta: Callable[[str], None] | None = None,
     answer_mode: str = "evidence_only",
+    intent_params: dict[str, Any] | None = None,
 ) -> tuple[
     str | None,
     list[dict[str, Any]] | None,
@@ -1788,6 +1794,11 @@ def _try_llm_answer_with_evidence(
             "1) The provided evidence (if any) - mark these with [📄 chunk_id] at the end of sentences\n"
             "2) Your training knowledge (for parts not covered by evidence) - mark these with [🤖 模型推测]\n"
             "\n"
+            "Format your answer using Markdown with clear section headers:\n"
+            "- ## 结论 (Conclusion): Main findings\n"
+            "- ## 证据 (Evidence): Supporting details from sources\n"
+            "- ## 不确定性边界 (Uncertainty): What remains unknown\n"
+            "\n"
             "Important rules:\n"
             "- Every sentence must end with either [📄 chunk_id] or [🤖 模型推测]\n"
             "- Be honest about uncertainty\n"
@@ -1798,8 +1809,19 @@ def _try_llm_answer_with_evidence(
         system_prompt = (
             "You are a strict evidence-grounded QA assistant. "
             "Only answer with the provided evidence. "
-            "If evidence is insufficient, state uncertainty and keep citations empty."
+            "If evidence is insufficient, state uncertainty and keep citations empty.\n\n"
+            "Format your answer using Markdown with clear section headers:\n"
+            "- ## 结论 (Conclusion): Main findings\n"
+            "- ## 证据 (Evidence): Supporting details\n"
+            "- ## 不确定性边界 (Uncertainty): What remains unknown"
         )
+    # 根据意图参数添加语言要求
+    intent_params = intent_params or {}
+    language = intent_params.get("language")
+    if language == "zh":
+        system_prompt += "\n\n请用中文回答。"
+    elif language == "en":
+        system_prompt += "\n\nPlease answer in English."
     claim_plan = _build_claim_plan(evidence_grouped, max_claims=5)
     base_user_prompt = _build_llm_answer_prompt(
         question=question,
@@ -1964,6 +1986,7 @@ def _build_catalog_llm_answer(
     config: Any,
     history_turns: list[dict[str, Any]],
     on_stream_delta: Callable[[str], None] | None = None,
+    intent_params: dict[str, Any] | None = None,
 ) -> tuple[
     str,
     list[dict[str, Any]],
@@ -2019,6 +2042,14 @@ def _build_catalog_llm_answer(
         "3. 不要替用户决定是否继续查看，把选择权交给用户。"
         '4. 鼓励用户提出具体需求，比如"查看最近导入的论文"或"只看关于某某主题的论文"。'
     )
+
+    # 根据意图参数添加语言要求
+    intent_params = intent_params or {}
+    language = intent_params.get("language")
+    if language == "zh":
+        system_prompt += "\n\n请用中文回答。"
+    elif language == "en":
+        system_prompt += "\n\nPlease answer in English."
 
     user_prompt = (
         f"用户问题：{question}\n\n"
@@ -2148,6 +2179,7 @@ def _build_answer(
     history_turns: list[dict[str, Any]],
     on_stream_delta: Callable[[str], None] | None = None,
     answer_mode: str = "evidence_only",
+    intent_params: dict[str, Any] | None = None,
 ) -> tuple[
     str,
     list[dict[str, Any]],
@@ -2215,6 +2247,7 @@ def _build_answer(
         history_turns=history_turns,
         on_stream_delta=on_stream_delta,
         answer_mode=answer_mode,
+        intent_params=intent_params,
     )
     if llm_error == "context_overflow_fallback":
         if llm_error not in output_warnings:
@@ -3608,6 +3641,7 @@ def run_qa(args: argparse.Namespace) -> int:
                 config=config,
                 history_turns=history_window,
                 on_stream_delta=_cli_stream_delta,
+                intent_params=intent_params,
             )
             assistant_summary_suggestions = []
             evidence_policy_gate = {
@@ -3633,6 +3667,7 @@ def run_qa(args: argparse.Namespace) -> int:
                 history_turns=history_window,
                 on_stream_delta=_cli_stream_delta,
                 answer_mode=str(sufficiency_gate.get("answer_mode", "evidence_only")),
+                intent_params=intent_params,
             )
         if (
             decision == "answer"

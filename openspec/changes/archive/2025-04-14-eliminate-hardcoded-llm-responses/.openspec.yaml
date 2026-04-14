@@ -1,0 +1,8 @@
+schema: spec-driven
+name: eliminate-hardcoded-llm-responses
+created: 2025-04-14T16:23:00Z
+artifacts:
+  - proposal
+  - design
+  - specs
+  - tasks

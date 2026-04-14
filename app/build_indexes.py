@@ -11,10 +11,22 @@ from app.vector_backend import resolve_vector_backend
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Build BM25 and vector indexes")
-    parser.add_argument("--input", default="data/processed/chunks_clean.jsonl", help="Input chunks_clean.jsonl path")
-    parser.add_argument("--bm25-out", default="data/indexes/bm25_index.json", help="BM25 output path")
-    parser.add_argument("--vec-out", default="data/indexes/vec_index.json", help="Vector output path")
-    parser.add_argument("--embed-out", default="data/indexes/vec_index_embed.json", help="Embedding vector index path")
+    parser.add_argument(
+        "--input",
+        default="data/processed/chunks_clean.jsonl",
+        help="Input chunks_clean.jsonl path",
+    )
+    parser.add_argument(
+        "--bm25-out", default="data/indexes/bm25_index.json", help="BM25 output path"
+    )
+    parser.add_argument(
+        "--vec-out", default="data/indexes/vec_index.json", help="Vector output path"
+    )
+    parser.add_argument(
+        "--embed-out",
+        default="data/indexes/vec_index_embed.json",
+        help="Embedding vector index path",
+    )
     parser.add_argument("--config", default="configs/default.yaml", help="Config path")
     parser.add_argument(
         "--index-mode",
@@ -33,7 +45,11 @@ def main(argv: list[str] | None = None) -> int:
 
     requested_mode = str(args.index_mode).strip()
     if requested_mode == "auto":
-        requested_mode = "incremental" if bool(getattr(config, "index_incremental_enabled", False)) else "rebuild"
+        requested_mode = (
+            "incremental"
+            if bool(getattr(config, "index_incremental_enabled", False))
+            else "rebuild"
+        )
     if requested_mode == "incremental":
         print(
             "[index] incremental mode is reserved and currently falls back to rebuild strategy "
@@ -44,7 +60,13 @@ def main(argv: list[str] | None = None) -> int:
     print(f"BM25 docs: {len(bm25.docs)} -> {args.bm25_out}")
     print(f"Vector docs: {len(vec.docs)} -> {args.vec_out}")
     if config.embedding.enabled:
-        backend = resolve_vector_backend("file")
+        # Determine vector backend from config (defaults to "file" for backward compatibility)
+        vector_backend_name = (
+            getattr(config, "vector_store", {}).get("backend", "file")
+            if hasattr(config, "vector_store")
+            else "file"
+        )
+        backend = resolve_vector_backend(vector_backend_name)
         last_reported = {"step": -1}
 
         def _progress(step: int, total: int) -> None:
@@ -58,7 +80,12 @@ def main(argv: list[str] | None = None) -> int:
             ):
                 return
             last_reported["step"] = step
-            print(f"\rEmbedding progress: {step}/{total}", end="", file=sys.stderr, flush=True)
+            print(
+                f"\rEmbedding progress: {step}/{total}",
+                end="",
+                file=sys.stderr,
+                flush=True,
+            )
 
         def _status(msg: str) -> None:
             print(f"\n[embedding] {msg}", file=sys.stderr, flush=True)

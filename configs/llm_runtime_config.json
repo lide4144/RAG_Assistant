@@ -3,37 +3,37 @@
     "provider": "openai",
     "api_base": "https://api.deepseek.com/v1",
     "api_key": "sk-681ff60480c74638ac0bba02c9420a73",
-    "model": "Pro/deepseek-ai/DeepSeek-V3.2"
+    "model": "deepseek-reasoner"
   },
   "embedding": {
     "provider": "openai",
     "api_base": "https://api.siliconflow.cn/v1",
-    "api_key": "sk-uoijizemjbmqxcaycjuumqzcjuhstjawjtwmoagwoiszznnv",
+    "api_key": "sk-xdynunujqbnujusaxogtirvlemjxajxblpkyasvohrlwdqhl",
     "model": "Qwen/Qwen3-Embedding-8B"
   },
   "rerank": {
     "provider": "siliconflow",
     "api_base": "https://api.siliconflow.cn/v1",
-    "api_key": "sk-uoijizemjbmqxcaycjuumqzcjuhstjawjtwmoagwoiszznnv",
+    "api_key": "sk-xdynunujqbnujusaxogtirvlemjxajxblpkyasvohrlwdqhl",
     "model": "Qwen/Qwen3-Reranker-8B"
   },
   "rewrite": {
     "provider": "openai",
     "api_base": "https://api.siliconflow.cn/v1",
-    "api_key": "sk-uoijizemjbmqxcaycjuumqzcjuhstjawjtwmoagwoiszznnv",
-    "model": "Qwen/Qwen3.5-9B"
+    "api_key": "sk-xdynunujqbnujusaxogtirvlemjxajxblpkyasvohrlwdqhl",
+    "model": "Pro/deepseek-ai/DeepSeek-V3.2"
   },
   "graph_entity": {
     "provider": "openai",
     "api_base": "https://api.siliconflow.cn/v1",
-    "api_key": "sk-uoijizemjbmqxcaycjuumqzcjuhstjawjtwmoagwoiszznnv",
+    "api_key": "sk-xdynunujqbnujusaxogtirvlemjxajxblpkyasvohrlwdqhl",
     "model": "Pro/zai-org/GLM-4.7"
   },
   "sufficiency_judge": {
     "provider": "openai",
     "api_base": "https://api.siliconflow.cn/v1",
-    "api_key": "sk-uoijizemjbmqxcaycjuumqzcjuhstjawjtwmoagwoiszznnv",
-    "model": "Qwen/Qwen3.5-9B"
+    "api_key": "sk-xdynunujqbnujusaxogtirvlemjxajxblpkyasvohrlwdqhl",
+    "model": "Pro/deepseek-ai/DeepSeek-V3.2"
   },
-  "updated_at": "2026-04-13T07:22:52Z"
+  "updated_at": "2026-04-14T17:42:34Z"
 }

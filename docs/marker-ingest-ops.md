@@ -210,3 +210,62 @@ venv/bin/python scripts/eval_marker_title_regression.py \
   --after-qa-report reports/after/qa_eval.json \
   --out reports/marker_title_regression.json
 ```
+
+## 7. 与 Qdrant 向量存储集成
+
+Marker 解析与 Qdrant 向量存储是两个**独立的可选路径**，可以：
+
+1. **只启用 Marker**（不使用 Qdrant）
+2. **只启用 Qdrant**（不使用 Marker）
+3. **同时启用 Marker + Qdrant**
+
+### 配置示例
+
+**场景 1：只启用 Marker**
+```yaml
+# configs/default.yaml
+marker_enabled: true
+vector_store:
+  backend: memory  # 使用内存存储
+```
+
+**场景 2：只启用 Qdrant**
+```yaml
+# configs/default.yaml
+marker_enabled: false  # 使用基础解析
+vector_store:
+  backend: qdrant
+  host: localhost
+  port: 6333
+```
+
+**场景 3：同时启用 Marker + Qdrant**
+```yaml
+# configs/default.yaml
+marker_enabled: true
+vector_store:
+  backend: qdrant
+  host: localhost
+  port: 6333
+  collection_name: paper_chunks
+```
+
+### Marker 数据在 Qdrant 中的保留
+
+当同时使用 Marker 和 Qdrant 时，Marker 产生的增强元数据会被完整保留：
+
+- `block_type`: Marker 识别的区块类型（text, table, figure 等）
+- `markdown_source`: Marker 生成的 Markdown 源码
+- `structure_provenance`: 结构来源信息
+
+这些数据会存储在 Qdrant 的 payload metadata 中，可在检索时用于过滤。
+
+### 数据迁移注意事项
+
+从文件索引迁移到 Qdrant 时，Marker 元数据会自动迁移：
+
+```bash
+python scripts/migrate_to_qdrant.py --verify
+```
+
+迁移脚本会自动识别并保留 chunks 中的 Marker 特定字段。
