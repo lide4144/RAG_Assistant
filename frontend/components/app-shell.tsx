@@ -96,7 +96,7 @@ export function AppShell({ children }: { children: ReactNode }) {
   return (
     <TaskCenterProvider>
       <div className="min-h-screen bg-transparent text-slate-900">
-        <div className="mx-auto flex min-h-screen w-full max-w-[1480px] gap-4 p-3 md:gap-6 md:p-6">
+        <div className="mx-auto flex min-h-screen w-full max-w-[1920px] gap-4 p-3 md:gap-6 md:p-6">
           <div className="fixed inset-x-3 top-3 z-30 rounded-2xl border border-slate-200 bg-white/95 p-2 shadow md:hidden">
             <nav className="grid grid-cols-3 gap-1">
               {navItems.map((item) => {

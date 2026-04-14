@@ -68,14 +68,88 @@ CONTROL_CONTINUATION_PATTERNS = (
     r"^(然后呢|后面呢|继续讲)",
 )
 ALLOWED_DIALOG_STATES = {"normal", "need_clarify", "waiting_followup"}
+_ALLOWED_BACKENDS = {"file", "redis", "sqlite"}
 _REDIS_CLIENT_CACHE: dict[str, Any] = {}
+_STORE_CACHE: dict[str, Any] = {}
 
 
 def _resolve_store_backend(backend: str | None) -> str:
-    selected = (backend or "").strip().lower()
-    if selected:
+    """Resolve storage backend from configuration.
+
+    Supports: 'file' (default), 'redis', 'sqlite'
+
+    Args:
+        backend: Explicit backend choice, or None to read from env.
+
+    Returns:
+        str: Resolved backend name.
+    """
+    selected = (backend or os.environ.get("SESSION_BACKEND", "")).strip().lower()
+    if selected in _ALLOWED_BACKENDS:
         return selected
     return "file"
+
+
+def _create_store(
+    backend: str | None = None,
+    store_path: str | Path = "data/session_store.json",
+    redis_url: str | None = None,
+    redis_key_prefix: str = "rag",
+    redis_ttl_sec: int = 86400,
+) -> Any:
+    """Create a session store instance based on backend configuration.
+
+    This factory function creates the appropriate store backend
+    (FileStore, RedisStore, or SQLiteStore) based on configuration.
+
+    Args:
+        backend: Backend type ('file', 'redis', 'sqlite').
+                If None, reads from SESSION_BACKEND env var.
+        store_path: Path for file-based backends.
+        redis_url: Redis connection URL.
+        redis_key_prefix: Prefix for Redis keys.
+        redis_ttl_sec: Redis TTL in seconds.
+
+    Returns:
+        SessionStore: Configured store instance.
+    """
+    selected = _resolve_store_backend(backend)
+    cache_key = f"{selected}:{store_path}:{redis_url}:{redis_key_prefix}"
+
+    if cache_key in _STORE_CACHE:
+        return _STORE_CACHE[cache_key]
+
+    if selected == "sqlite":
+        # Lazy import to avoid circular dependencies
+        try:
+            from app.db import SQLiteStore
+
+            db_path = os.environ.get("SESSION_SQLITE_PATH", "data/session_store.db")
+            store = SQLiteStore(db_path)
+        except ImportError:
+            # Fallback to file if sqlite3 not available (shouldn't happen)
+            from app.db import FileStore
+
+            store = FileStore(store_path)
+    elif selected == "redis":
+        try:
+            from app.db import RedisStore
+
+            url = redis_url or os.environ.get("RAG_SESSION_REDIS_URL", "")
+            store = RedisStore(url, redis_key_prefix, redis_ttl_sec)
+        except (ImportError, Exception):
+            # Fallback to file if Redis unavailable
+            from app.db import FileStore
+
+            store = FileStore(store_path)
+    else:
+        # Default: file backend
+        from app.db import FileStore
+
+        store = FileStore(store_path)
+
+    _STORE_CACHE[cache_key] = store
+    return store
 
 
 def _redis_session_key(prefix: str, session_id: str) -> str:
@@ -126,7 +200,9 @@ def _read_store(path: str | Path) -> dict[str, Any]:
 def _write_store(path: str | Path, payload: dict[str, Any]) -> None:
     store_path = Path(path)
     store_path.parent.mkdir(parents=True, exist_ok=True)
-    store_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    store_path.write_text(
+        json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
 
 
 def _read_session_record(
@@ -138,23 +214,38 @@ def _read_session_record(
     redis_key_prefix: str = "rag",
     redis_fallback_to_file: bool = True,
 ) -> tuple[dict[str, Any], str]:
+    """Read a session record from storage.
+
+    Supports file, redis, and sqlite backends via the Store interface.
+    """
     selected = _resolve_store_backend(backend)
-    if selected == "redis":
-        client = _get_redis_client(redis_url)
-        if client is not None:
-            key = _redis_session_key(redis_key_prefix, session_id)
-            raw = client.get(key)
-            if isinstance(raw, str) and raw.strip():
-                try:
-                    payload = json.loads(raw)
-                    if isinstance(payload, dict):
-                        return _ensure_session({"sessions": {session_id: payload}}, session_id), "redis"
-                except Exception:
-                    pass
-            if not redis_fallback_to_file:
-                return _ensure_session({"sessions": {}}, session_id), "redis"
-    payload = _read_store(store_path)
-    return _ensure_session(payload, session_id), "file"
+
+    try:
+        store = _create_store(
+            backend=selected,
+            store_path=store_path,
+            redis_url=redis_url,
+            redis_key_prefix=redis_key_prefix,
+        )
+        session = store.read_session(session_id)
+        return _ensure_session(
+            {"sessions": {session_id: session}}, session_id
+        ), selected
+    except Exception as e:
+        # Fallback to file backend on error (if not sqlite which has no fallback)
+        if selected != "file" and redis_fallback_to_file:
+            try:
+                from app.db import FileStore
+
+                store = FileStore(store_path)
+                session = store.read_session(session_id)
+                return _ensure_session(
+                    {"sessions": {session_id: session}}, session_id
+                ), "file"
+            except Exception:
+                pass
+        # Return empty session on error
+        return _ensure_session({"sessions": {}}, session_id), selected
 
 
 def _persist_session_record(
@@ -168,23 +259,33 @@ def _persist_session_record(
     redis_key_prefix: str = "rag",
     redis_fallback_to_file: bool = True,
 ) -> None:
+    """Persist a session record to storage.
+
+    Supports file, redis, and sqlite backends via the Store interface.
+    """
     selected = _resolve_store_backend(backend)
-    if selected == "redis":
-        client = _get_redis_client(redis_url)
-        if client is not None:
-            key = _redis_session_key(redis_key_prefix, session_id)
-            value = json.dumps(session, ensure_ascii=False)
-            if redis_ttl_sec > 0:
-                client.setex(key, redis_ttl_sec, value)
-            else:
-                client.set(key, value)
-            return
-        if not redis_fallback_to_file:
-            return
-    payload = _read_store(store_path)
-    sessions = payload.setdefault("sessions", {})
-    sessions[session_id] = session
-    _write_store(store_path, payload)
+
+    try:
+        store = _create_store(
+            backend=selected,
+            store_path=store_path,
+            redis_url=redis_url,
+            redis_key_prefix=redis_key_prefix,
+            redis_ttl_sec=redis_ttl_sec,
+        )
+        store.write_session(session_id, session)
+    except Exception as e:
+        # Fallback to file backend on error
+        if selected != "file" and redis_fallback_to_file:
+            try:
+                from app.db import FileStore
+
+                store = FileStore(store_path)
+                store.write_session(session_id, session)
+            except Exception:
+                pass
+        else:
+            raise
 
 
 def _estimate_tokens(text: str) -> int:
@@ -225,7 +326,9 @@ def _is_control_only_query(text: str) -> bool:
     normalized = _normalize_spaces(text).lower()
     if not normalized:
         return False
-    for pattern in CONTROL_CONTINUATION_PATTERNS + CONTROL_FORMAT_PATTERNS + CONTROL_STYLE_PATTERNS:
+    for pattern in (
+        CONTROL_CONTINUATION_PATTERNS + CONTROL_FORMAT_PATTERNS + CONTROL_STYLE_PATTERNS
+    ):
         if re.search(pattern, normalized, flags=re.IGNORECASE):
             return True
     return False
@@ -245,6 +348,11 @@ def _ensure_session(payload: dict[str, Any], session_id: str) -> dict[str, Any]:
                 "dialog_state": "normal",
                 "summary_memory": "",
                 "semantic_recall_memory": [],
+                "user_honesty_preferences": {
+                    "hide_low_confidence_warnings": False,
+                    "acknowledged_at": None,
+                    "acknowledgment_count": 0,
+                },
             },
         }
     session = sessions[session_id]
@@ -286,6 +394,15 @@ def _ensure_session(payload: dict[str, Any], session_id: str) -> dict[str, Any]:
     planner_summary = state.get("last_planner_summary")
     if not isinstance(planner_summary, dict):
         state["last_planner_summary"] = {}
+    # Initialize user_honesty_preferences if not exists
+    honesty_prefs = state.get("user_honesty_preferences")
+    if not isinstance(honesty_prefs, dict):
+        honesty_prefs = {
+            "hide_low_confidence_warnings": False,
+            "acknowledged_at": None,
+            "acknowledgment_count": 0,
+        }
+        state["user_honesty_preferences"] = honesty_prefs
     return session
 
 
@@ -293,11 +410,21 @@ def _normalize_planner_summary(summary: dict[str, Any] | None) -> dict[str, Any]
     if not isinstance(summary, dict):
         return None
     normalized: dict[str, Any] = {}
-    for key in ("decision_result", "primary_capability", "strictness", "standalone_query", "clarify_question"):
+    for key in (
+        "decision_result",
+        "primary_capability",
+        "strictness",
+        "standalone_query",
+        "clarify_question",
+    ):
         value = _normalize_spaces(str(summary.get(key, "")))
         if value:
             normalized[key] = value
-    selected = [str(item).strip() for item in list(summary.get("selected_tools_or_skills") or []) if str(item).strip()]
+    selected = [
+        str(item).strip()
+        for item in list(summary.get("selected_tools_or_skills") or [])
+        if str(item).strip()
+    ]
     if selected:
         normalized["selected_tools_or_skills"] = selected
     return normalized or None
@@ -312,25 +439,36 @@ def clear_session(
     redis_key_prefix: str = "rag",
     redis_fallback_to_file: bool = True,
 ) -> bool:
-    cleared = False
+    """Clear a session from storage.
+
+    Supports file, redis, and sqlite backends.
+    """
     selected = _resolve_store_backend(backend)
-    if selected == "redis":
-        client = _get_redis_client(redis_url)
-        if client is not None:
-            key = _redis_session_key(redis_key_prefix, session_id)
-            cleared = bool(client.delete(key))
-            if not redis_fallback_to_file:
-                return cleared
-    payload = _read_store(store_path)
-    sessions = payload.get("sessions", {})
-    if isinstance(sessions, dict) and session_id in sessions:
-        sessions.pop(session_id, None)
-        _write_store(store_path, payload)
-        return True
-    return cleared
+
+    try:
+        store = _create_store(
+            backend=selected,
+            store_path=store_path,
+            redis_url=redis_url,
+            redis_key_prefix=redis_key_prefix,
+        )
+        return store.delete_session(session_id)
+    except Exception:
+        # Fallback to file if needed
+        if selected != "file" and redis_fallback_to_file:
+            try:
+                from app.db import FileStore
+
+                store = FileStore(store_path)
+                return store.delete_session(session_id)
+            except Exception:
+                pass
+        return False
 
 
-def _assemble_summary_memory(turns: list[dict[str, Any]], *, max_chars: int = 360) -> str:
+def _assemble_summary_memory(
+    turns: list[dict[str, Any]], *, max_chars: int = 360
+) -> str:
     if not turns:
         return ""
     rows: list[str] = []
@@ -343,7 +481,9 @@ def _assemble_summary_memory(turns: list[dict[str, Any]], *, max_chars: int = 36
     return out[:max_chars]
 
 
-def _assemble_semantic_memory(turns: list[dict[str, Any]], *, max_items: int = 10) -> list[str]:
+def _assemble_semantic_memory(
+    turns: list[dict[str, Any]], *, max_items: int = 10
+) -> list[str]:
     memory: list[str] = []
     for turn in reversed(turns):
         entities = turn.get("entity_mentions", [])
@@ -384,7 +524,11 @@ def load_history_window(
         state = {}
         session["state"] = state
     summary_memory = _normalize_spaces(str(state.get("summary_memory", "")))
-    semantic_memory = [str(x).strip() for x in state.get("semantic_recall_memory", []) if str(x).strip()]
+    semantic_memory = [
+        str(x).strip()
+        for x in state.get("semantic_recall_memory", [])
+        if str(x).strip()
+    ]
     if include_layered_memory:
         if not summary_memory:
             summary_memory = _assemble_summary_memory(turns)
@@ -430,7 +574,9 @@ def load_history_window(
     for row in window:
         token_est += _estimate_tokens(str(row.get("user_input", "")))
         token_est += _estimate_tokens(str(row.get("answer", "")))
-        token_est += len([x for x in row.get("cited_chunk_ids", []) if isinstance(x, str)])
+        token_est += len(
+            [x for x in row.get("cited_chunk_ids", []) if isinstance(x, str)]
+        )
         token_est += _estimate_tokens(str(row.get("decision", "")))
     return window, token_est
 
@@ -438,7 +584,12 @@ def load_history_window(
 def derive_rewrite_context(
     history_turns: list[dict[str, Any]],
 ) -> tuple[str | None, list[str], list[str], list[str], list[str]]:
-    real_turns = [t for t in history_turns if str(t.get("turn_type", "")).strip() not in {"summary_memory", "semantic_recall_memory"}]
+    real_turns = [
+        t
+        for t in history_turns
+        if str(t.get("turn_type", "")).strip()
+        not in {"summary_memory", "semantic_recall_memory"}
+    ]
     last_turn_decision: str | None = None
     last_turn_warnings: list[str] = []
     entities_from_history: list[str] = []
@@ -456,11 +607,11 @@ def derive_rewrite_context(
                 value = str(warning).strip()
                 if value and value not in last_turn_warnings:
                     last_turn_warnings.append(value)
-        for anchor in (last.get("topic_anchors", []) or []):
+        for anchor in last.get("topic_anchors", []) or []:
             value = str(anchor).strip()
             if value and value not in topic_anchors:
                 topic_anchors.append(value)
-        for constraint in (last.get("transient_constraints", []) or []):
+        for constraint in last.get("transient_constraints", []) or []:
             value = str(constraint).strip()
             if value and value not in transient_constraints:
                 transient_constraints.append(value)
@@ -543,14 +694,18 @@ def rewrite_with_history_context(
             if len(history_entities) >= 4:
                 break
         if history_entities:
-            missing = [e for e in history_entities if e.lower() not in standalone_query.lower()]
+            missing = [
+                e for e in history_entities if e.lower() not in standalone_query.lower()
+            ]
             if missing:
                 standalone_query = f"{' '.join(missing[:3])} {standalone_query}".strip()
                 resolved = True
     return standalone_query, resolved
 
 
-def build_history_brief(history_turns: list[dict[str, Any]], *, max_chars: int = 220) -> str:
+def build_history_brief(
+    history_turns: list[dict[str, Any]], *, max_chars: int = 220
+) -> str:
     if not history_turns:
         return ""
     rows: list[str] = []
@@ -571,7 +726,12 @@ def build_control_intent_anchor_query(
 ) -> tuple[str | None, dict[str, Any]]:
     if max_turn_distance <= 0:
         max_turn_distance = 1
-    real_turns = [t for t in history_turns if str(t.get("turn_type", "")).strip() not in {"summary_memory", "semantic_recall_memory"}]
+    real_turns = [
+        t
+        for t in history_turns
+        if str(t.get("turn_type", "")).strip()
+        not in {"summary_memory", "semantic_recall_memory"}
+    ]
     if not real_turns:
         return None, {"status": "anchor_missing", "reason": "no_history"}
 
@@ -620,7 +780,10 @@ def build_control_intent_anchor_query(
         break
 
     if not chosen_query or chosen_distance is None:
-        return None, {"status": "anchor_missing", "reason": "no_standalone_query_in_window"}
+        return None, {
+            "status": "anchor_missing",
+            "reason": "no_standalone_query_in_window",
+        }
     if chosen_distance > max_turn_distance:
         return None, {
             "status": "anchor_stale",
@@ -693,12 +856,12 @@ def append_turn_record(
         session["state"] = state
 
     merged_anchors: list[str] = []
-    for anchor in (topic_anchors or _extract_entities(standalone_query)):
+    for anchor in topic_anchors or _extract_entities(standalone_query):
         value = str(anchor).strip()
         if value and value not in merged_anchors:
             merged_anchors.append(value)
     merged_constraints: list[str] = []
-    for constraint in (transient_constraints or []):
+    for constraint in transient_constraints or []:
         value = str(constraint).strip()
         if value and value not in merged_constraints:
             merged_constraints.append(value)
@@ -712,12 +875,16 @@ def append_turn_record(
         "answer": answer,
         "cited_chunk_ids": [c for c in cited_chunk_ids if c],
         "decision": decision,
-        "output_warnings": [str(w).strip() for w in (output_warnings or []) if str(w).strip()],
+        "output_warnings": [
+            str(w).strip() for w in (output_warnings or []) if str(w).strip()
+        ],
         "entity_mentions": _extract_entities(standalone_query),
         "topic_anchors": merged_anchors,
         "transient_constraints": merged_constraints,
         "clarify_count_for_topic": (
-            max(0, int(clarify_count_for_topic)) if clarify_count_for_topic is not None else int(state.get("clarify_count_for_topic", 0))
+            max(0, int(clarify_count_for_topic))
+            if clarify_count_for_topic is not None
+            else int(state.get("clarify_count_for_topic", 0))
         ),
     }
     normalized_planner_summary = _normalize_planner_summary(planner_summary)
@@ -751,8 +918,12 @@ def append_turn_record(
             state["transient_constraints"] = []
     if set_pending_clarify is not None:
         session["pending_clarify"] = {
-            "original_question": str(set_pending_clarify.get("original_question", "")).strip(),
-            "clarify_question": str(set_pending_clarify.get("clarify_question", "")).strip(),
+            "original_question": str(
+                set_pending_clarify.get("original_question", "")
+            ).strip(),
+            "clarify_question": str(
+                set_pending_clarify.get("clarify_question", "")
+            ).strip(),
         }
         if dialog_state == "normal":
             state["dialog_state"] = "need_clarify"
@@ -844,7 +1015,11 @@ def load_planner_conversation_state(
     )
     state = session.get("state", {})
     turns = [t for t in session.get("turns", []) if isinstance(t, dict)]
-    recent_topic_anchors = [str(item).strip() for item in list(state.get("topic_anchors") or []) if str(item).strip()]
+    recent_topic_anchors = [
+        str(item).strip()
+        for item in list(state.get("topic_anchors") or [])
+        if str(item).strip()
+    ]
     pending_clarify = load_pending_clarify(
         session_id,
         store_path=store_path,
@@ -868,3 +1043,139 @@ def load_planner_conversation_state(
         "pending_clarify": pending_clarify,
         "previous_planner": previous_planner,
     }
+
+
+def load_user_honesty_preferences(
+    session_id: str,
+    *,
+    store_path: str | Path = "data/session_store.json",
+    backend: str | None = None,
+    redis_url: str | None = None,
+    redis_key_prefix: str = "rag",
+    redis_fallback_to_file: bool = True,
+    max_age_hours: int = 24,
+) -> dict[str, Any]:
+    """加载用户对低置信度提示的偏好设置。
+
+    Args:
+        session_id: 会话ID
+        store_path: 存储路径
+        backend: 存储后端
+        redis_url: Redis URL
+        redis_key_prefix: Redis键前缀
+        redis_fallback_to_file: 是否回退到文件
+        max_age_hours: 偏好设置的最大有效期（小时）
+
+    Returns:
+        用户偏好设置字典，包含 hide_low_confidence_warnings、acknowledged_at、acknowledgment_count
+    """
+    session, _ = _read_session_record(
+        session_id,
+        store_path=store_path,
+        backend=backend,
+        redis_url=redis_url,
+        redis_key_prefix=redis_key_prefix,
+        redis_fallback_to_file=redis_fallback_to_file,
+    )
+    state = session.get("state", {})
+    honesty_prefs = state.get("user_honesty_preferences", {})
+
+    if not isinstance(honesty_prefs, dict):
+        return {
+            "hide_low_confidence_warnings": False,
+            "acknowledged_at": None,
+            "acknowledgment_count": 0,
+        }
+
+    # 检查偏好是否过期
+    acknowledged_at = honesty_prefs.get("acknowledged_at")
+    if acknowledged_at and max_age_hours > 0:
+        try:
+            ack_time = datetime.fromisoformat(
+                str(acknowledged_at).replace("Z", "+00:00")
+            )
+            now = datetime.now(timezone.utc)
+            age_hours = (now - ack_time).total_seconds() / 3600
+            if age_hours > max_age_hours:
+                # 偏好已过期，重置
+                return {
+                    "hide_low_confidence_warnings": False,
+                    "acknowledged_at": None,
+                    "acknowledgment_count": 0,
+                }
+        except (ValueError, TypeError):
+            pass
+
+    return {
+        "hide_low_confidence_warnings": bool(
+            honesty_prefs.get("hide_low_confidence_warnings", False)
+        ),
+        "acknowledged_at": honesty_prefs.get("acknowledged_at"),
+        "acknowledgment_count": int(honesty_prefs.get("acknowledgment_count", 0)),
+    }
+
+
+def save_user_honesty_preference(
+    session_id: str,
+    hide_warnings: bool = True,
+    *,
+    store_path: str | Path = "data/session_store.json",
+    backend: str | None = None,
+    redis_url: str | None = None,
+    redis_ttl_sec: int = 86400,
+    redis_key_prefix: str = "rag",
+    redis_fallback_to_file: bool = True,
+) -> bool:
+    """保存用户对低置信度提示的偏好设置。
+
+    Args:
+        session_id: 会话ID
+        hide_warnings: 是否隐藏低置信度警告
+        store_path: 存储路径
+        backend: 存储后端
+        redis_url: Redis URL
+        redis_ttl_sec: Redis TTL
+        redis_key_prefix: Redis键前缀
+        redis_fallback_to_file: 是否回退到文件
+
+    Returns:
+        是否保存成功
+    """
+    session, _ = _read_session_record(
+        session_id,
+        store_path=store_path,
+        backend=backend,
+        redis_url=redis_url,
+        redis_key_prefix=redis_key_prefix,
+        redis_fallback_to_file=redis_fallback_to_file,
+    )
+    state = session.get("state", {})
+    if not isinstance(state, dict):
+        state = {}
+        session["state"] = state
+
+    # 获取当前的偏好设置
+    honesty_prefs = state.get("user_honesty_preferences", {})
+    if not isinstance(honesty_prefs, dict):
+        honesty_prefs = {}
+
+    # 更新偏好设置
+    current_count = int(honesty_prefs.get("acknowledgment_count", 0))
+    honesty_prefs["hide_low_confidence_warnings"] = hide_warnings
+    honesty_prefs["acknowledged_at"] = datetime.now(timezone.utc).isoformat()
+    honesty_prefs["acknowledgment_count"] = current_count + 1
+
+    state["user_honesty_preferences"] = honesty_prefs
+
+    # 保存会话
+    _persist_session_record(
+        session_id,
+        session,
+        store_path=store_path,
+        backend=backend,
+        redis_url=redis_url,
+        redis_ttl_sec=redis_ttl_sec,
+        redis_key_prefix=redis_key_prefix,
+        redis_fallback_to_file=redis_fallback_to_file,
+    )
+    return True

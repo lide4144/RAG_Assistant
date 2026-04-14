@@ -10,7 +10,9 @@ def build_quote(text: str, max_len: int = 120) -> str:
     return raw[: max_len - 3].rstrip() + "..."
 
 
-def format_evidence(candidates: list[RetrievalCandidate], top_n: int = 5) -> list[dict[str, str]]:
+def format_evidence(
+    candidates: list[RetrievalCandidate], top_n: int = 5
+) -> list[dict[str, str]]:
     evidence: list[dict[str, str]] = []
     for c in candidates[:top_n]:
         section_or_page = c.section if c.section else f"p.{c.page_start}"
@@ -22,13 +24,6 @@ def format_evidence(candidates: list[RetrievalCandidate], top_n: int = 5) -> lis
             }
         )
     return evidence
-
-
-def build_answer(query: str, evidence: list[dict[str, str]]) -> str:
-    if not evidence:
-        return "未找到足够证据支持回答。"
-    first = evidence[0]
-    return f"基于检索证据，问题“{query}”最相关内容见 {first['chunk_id']}。"
 
 
 def main() -> int:

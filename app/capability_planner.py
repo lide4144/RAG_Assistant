@@ -88,7 +88,13 @@ WEB_DELEGATION_TERMS = (
 )
 READY_STATUSES = {"ready", "completed", "active"}
 DEFAULT_PLANNER_DECISION_VERSION = "planner-policy-v1"
-DEFAULT_LOCAL_CAPABILITIES = {"fact_qa", "catalog_lookup", "cross_doc_summary", "control", "paper_assistant"}
+DEFAULT_LOCAL_CAPABILITIES = {
+    "fact_qa",
+    "catalog_lookup",
+    "cross_doc_summary",
+    "control",
+    "paper_assistant",
+}
 DEFAULT_WEB_CAPABILITIES = {"web_research"}
 PLANNER_SOURCE_LLM = "llm"
 PLANNER_SOURCE_FALLBACK = "fallback"
@@ -146,7 +152,11 @@ def _tokenize(text: str) -> set[str]:
 
 def _topic_overlap(current: str, anchors: list[str]) -> bool:
     current_tokens = {tok for tok in _tokenize(current) if tok not in STOPWORDS}
-    history_tokens = {str(item).strip().lower() for item in anchors if str(item).strip() and str(item).strip().lower() not in STOPWORDS}
+    history_tokens = {
+        str(item).strip().lower()
+        for item in anchors
+        if str(item).strip() and str(item).strip().lower() not in STOPWORDS
+    }
     if not current_tokens or not history_tokens:
         return False
     if current_tokens.intersection(history_tokens):
@@ -167,18 +177,25 @@ def detect_new_topic(
 ) -> tuple[bool, bool, str]:
     normalized = _normalize_spaces(user_input)
     has_pending = isinstance(pending_clarify, dict) and bool(
-        _normalize_spaces(str(pending_clarify.get("original_question", ""))) or _normalize_spaces(str(pending_clarify.get("clarify_question", "")))
+        _normalize_spaces(str(pending_clarify.get("original_question", "")))
+        or _normalize_spaces(str(pending_clarify.get("clarify_question", "")))
     )
-    if (dialog_state not in {"need_clarify", "waiting_followup"} and not has_pending) or not normalized:
+    if (
+        dialog_state not in {"need_clarify", "waiting_followup"} and not has_pending
+    ) or not normalized:
         return False, False, "same_topic_or_no_pending"
     if _topic_overlap(normalized, history_topic_anchors):
         return False, False, "followup_overlap"
     original_question = ""
     if isinstance(pending_clarify, dict):
-        original_question = _normalize_spaces(str(pending_clarify.get("original_question", "")))
+        original_question = _normalize_spaces(
+            str(pending_clarify.get("original_question", ""))
+        )
     if original_question and _topic_overlap(normalized, [original_question]):
         return False, False, "followup_pending_overlap"
-    if any(term in normalized.lower() for term in ("库中", "知识库", "有哪些论文", "列出")):
+    if any(
+        term in normalized.lower() for term in ("库中", "知识库", "有哪些论文", "列出")
+    ):
         return True, True, "new_topic_catalog_request"
     return False, False, "pending_followup_default"
 
@@ -199,7 +216,9 @@ def _strict_fact_signal(text: str) -> bool:
     return _contains_any(text, STRICT_FACT_TERMS)
 
 
-def _registered_capabilities(capability_registry: list[dict[str, Any]] | None) -> set[str]:
+def _registered_capabilities(
+    capability_registry: list[dict[str, Any]] | None,
+) -> set[str]:
     if not capability_registry:
         return set(DEFAULT_LOCAL_CAPABILITIES) | set(DEFAULT_WEB_CAPABILITIES)
     names: set[str] = set()
@@ -218,7 +237,9 @@ def _wants_web_delegation(text: str, *, allow_web_delegation: bool) -> bool:
     lowered = (text or "").lower()
     explicit_web = any(term.lower() in lowered for term in WEB_DELEGATION_TERMS[:6])
     recency_signal = any(term.lower() in lowered for term in WEB_DELEGATION_TERMS[6:])
-    local_scope_signal = _contains_any(text, CATALOG_TERMS) or "知识库" in text or "库中" in text
+    local_scope_signal = (
+        _contains_any(text, CATALOG_TERMS) or "知识库" in text or "库中" in text
+    )
     return explicit_web or (recency_signal and not local_scope_signal)
 
 
@@ -248,26 +269,52 @@ def serialize_planner_result(result: PlannerResult) -> dict[str, Any]:
         "knowledge_route": result.knowledge_route,
         "research_mode": result.research_mode,
         "requires_clarification": bool(result.requires_clarification),
-        "selected_tools_or_skills": [str(item).strip() for item in list(result.selected_tools_or_skills or []) if str(item).strip()],
+        "selected_tools_or_skills": [
+            str(item).strip()
+            for item in list(result.selected_tools_or_skills or [])
+            if str(item).strip()
+        ],
         "fallback": dict(result.fallback or {}),
         "clarify_question": result.clarify_question,
-        "action_plan": [dict(step) for step in list(result.action_plan or []) if isinstance(step, dict)],
+        "action_plan": [
+            dict(step)
+            for step in list(result.action_plan or [])
+            if isinstance(step, dict)
+        ],
     }
 
 
-def parse_planner_result(payload: dict[str, Any], *, default_query: str = "") -> PlannerResult:
-    query = _normalize_spaces(str(payload.get("standalone_query") or payload.get("user_goal") or default_query))
+def parse_planner_result(
+    payload: dict[str, Any], *, default_query: str = ""
+) -> PlannerResult:
+    query = _normalize_spaces(
+        str(
+            payload.get("standalone_query") or payload.get("user_goal") or default_query
+        )
+    )
     return PlannerResult(
-        decision_version=str(payload.get("decision_version") or DEFAULT_PLANNER_DECISION_VERSION),
+        decision_version=str(
+            payload.get("decision_version") or DEFAULT_PLANNER_DECISION_VERSION
+        ),
         user_goal=str(payload.get("user_goal") or query),
         planner_used=bool(payload.get("planner_used", True)),
-        planner_source=normalize_planner_source(str(payload.get("planner_source") or PLANNER_SOURCE_FALLBACK)),
+        planner_source=normalize_planner_source(
+            str(payload.get("planner_source") or PLANNER_SOURCE_FALLBACK)
+        ),
         planner_fallback=bool(payload.get("planner_fallback", False)),
-        planner_fallback_reason=(str(payload.get("planner_fallback_reason")).strip() if payload.get("planner_fallback_reason") is not None else None),
+        planner_fallback_reason=(
+            str(payload.get("planner_fallback_reason")).strip()
+            if payload.get("planner_fallback_reason") is not None
+            else None
+        ),
         planner_confidence=float(payload.get("planner_confidence", 0.0)),
         is_new_topic=bool(payload.get("is_new_topic", False)),
-        should_clear_pending_clarify=bool(payload.get("should_clear_pending_clarify", False)),
-        relation_to_previous=str(payload.get("relation_to_previous") or "same_topic_or_no_pending"),
+        should_clear_pending_clarify=bool(
+            payload.get("should_clear_pending_clarify", False)
+        ),
+        relation_to_previous=str(
+            payload.get("relation_to_previous") or "same_topic_or_no_pending"
+        ),
         standalone_query=query,
         primary_capability=str(payload.get("primary_capability") or "fact_qa"),
         strictness=str(payload.get("strictness") or "strict_fact"),
@@ -275,16 +322,32 @@ def parse_planner_result(payload: dict[str, Any], *, default_query: str = "") ->
         knowledge_route=str(payload.get("knowledge_route") or "local"),
         research_mode=str(payload.get("research_mode") or "none"),
         requires_clarification=bool(payload.get("requires_clarification", False)),
-        selected_tools_or_skills=[str(item).strip() for item in list(payload.get("selected_tools_or_skills") or []) if str(item).strip()],
+        selected_tools_or_skills=[
+            str(item).strip()
+            for item in list(payload.get("selected_tools_or_skills") or [])
+            if str(item).strip()
+        ],
         fallback=dict(payload.get("fallback") or {}),
-        clarify_question=(str(payload.get("clarify_question")).strip() if payload.get("clarify_question") is not None else None),
-        action_plan=[dict(step) for step in list(payload.get("action_plan") or []) if isinstance(step, dict)],
+        clarify_question=(
+            str(payload.get("clarify_question")).strip()
+            if payload.get("clarify_question") is not None
+            else None
+        ),
+        action_plan=[
+            dict(step)
+            for step in list(payload.get("action_plan") or [])
+            if isinstance(step, dict)
+        ],
     )
 
 
-def paper_assistant_clarification(query: str, *, depends_on: list[str] | None = None) -> tuple[list[str], str | None]:
+def paper_assistant_clarification(
+    query: str, *, depends_on: list[str] | None = None
+) -> tuple[list[str], str | None]:
     normalized_query = _normalize_spaces(query)
-    normalized_deps = [str(item).strip() for item in list(depends_on or []) if str(item).strip()]
+    normalized_deps = [
+        str(item).strip() for item in list(depends_on or []) if str(item).strip()
+    ]
     if "paper_set" in normalized_deps:
         return [], None
 
@@ -318,9 +381,13 @@ def paper_assistant_clarification(query: str, *, depends_on: list[str] | None = 
         "推荐",
     )
     if _contains_any(normalized_query, deictic_scope_terms):
-        return ["paper_scope"], "请先说明你要比较的是哪些论文，或给出论文标题、作者、年份。"
+        return [
+            "paper_scope"
+        ], "请先说明你要比较的是哪些论文，或给出论文标题、作者、年份。"
     if not _contains_any(normalized_query, topic_terms):
-        return ["research_topic"], "请先说明研究主题或你最关心的方向，例如方法、实验结果或应用场景。"
+        return [
+            "research_topic"
+        ], "请先说明研究主题或你最关心的方向，例如方法、实验结果或应用场景。"
     return [], None
 
 
@@ -393,10 +460,20 @@ def _filter_recent(papers: list[dict[str, Any]], query: str) -> list[dict[str, A
     now = datetime.now(timezone.utc)
     if "昨天" in query or "yesterday" in lowered:
         start = (now - timedelta(days=1)).date()
-        return [row for row in papers if (_parse_imported_at(str(row.get("imported_at", ""))) or now).date() == start]
+        return [
+            row
+            for row in papers
+            if (_parse_imported_at(str(row.get("imported_at", ""))) or now).date()
+            == start
+        ]
     if "今天" in query or "today" in lowered:
         start = now.date()
-        return [row for row in papers if (_parse_imported_at(str(row.get("imported_at", ""))) or now).date() == start]
+        return [
+            row
+            for row in papers
+            if (_parse_imported_at(str(row.get("imported_at", ""))) or now).date()
+            == start
+        ]
     return papers
 
 
@@ -405,8 +482,52 @@ def execute_catalog_lookup(
     query: str,
     papers_path: str | None = None,
     max_papers: int = 20,
+    offset: int = 0,
+    status_filter: str | None = "ready",
 ) -> dict[str, Any]:
-    all_papers = load_papers() if papers_path is None else load_papers(path=papers_path)  # type: ignore[arg-type]
+    """Execute catalog lookup with paper lifecycle status awareness.
+
+    Args:
+        query: Search query
+        papers_path: Optional path to papers file (deprecated, kept for compatibility)
+        max_papers: Maximum number of papers to return per page
+        offset: Number of papers to skip (for pagination)
+        status_filter: Filter by paper status (default: "ready", None for all)
+
+    Returns:
+        Catalog lookup result with paper_set and status summary
+    """
+    # Import paper_store for direct database access
+    from app.paper_store import ensure_store_current, list_papers, paper_store_path
+
+    try:
+        # Query from SQLite database
+        store_path = ensure_store_current(
+            processed_dir=paper_store_path().parent,
+            topics_path=None,
+        )
+        db_papers = list_papers(
+            db_path=store_path,
+            limit=1000,
+            status=status_filter,
+        )
+        all_papers = db_papers
+    except Exception as exc:
+        # Fallback to file-based loading with deprecation warning
+        import warnings
+
+        warnings.warn(
+            f"Database query failed: {exc}. Falling back to file-based paper loading.",
+            RuntimeWarning,
+            stacklevel=2,
+        )
+        all_papers = (
+            load_papers() if papers_path is None else load_papers(path=papers_path)
+        )  # type: ignore[arg-type]
+        # Apply status filter if specified
+        if status_filter:
+            all_papers = [p for p in all_papers if p.get("status") == status_filter]
+
     filtered = _filter_recent(list(all_papers), query)
     keywords = _extract_catalog_keywords(query)
     if keywords:
@@ -424,6 +545,8 @@ def execute_catalog_lookup(
                 matched.append(row)
         if matched:
             filtered = matched
+
+    # Sort by status (ready first), then by imported_at, then by title
     filtered.sort(
         key=lambda row: (
             0 if str(row.get("status", "")).strip().lower() in READY_STATUSES else 1,
@@ -433,8 +556,17 @@ def execute_catalog_lookup(
         reverse=True,
     )
     matched_count = len(filtered)
-    selected_count = min(matched_count, max(1, int(max_papers)))
-    selected = filtered[:selected_count]
+
+    # 分页逻辑
+    offset = max(0, int(offset))
+    page_size = max(1, int(max_papers))
+    selected_count = min(matched_count, page_size)
+
+    # 应用 offset 和 limit
+    start_idx = min(offset, matched_count)
+    end_idx = min(start_idx + page_size, matched_count)
+    selected = filtered[start_idx:end_idx]
+
     paper_set = [
         {
             "paper_id": str(row.get("paper_id", "")).strip(),
@@ -446,8 +578,19 @@ def execute_catalog_lookup(
         for row in selected
         if str(row.get("paper_id", "")).strip()
     ]
+
+    # Build status summary for observability
+    status_summary = _build_status_summary(all_papers)
+
     short_circuit = matched_count == 0
     short_circuit_reason = "catalog_lookup_empty" if short_circuit else None
+
+    # 计算分页信息
+    current_page = (offset // page_size) + 1 if page_size > 0 else 1
+    total_pages = (matched_count + page_size - 1) // page_size if page_size > 0 else 1
+    has_next_page = end_idx < matched_count
+    has_prev_page = offset > 0
+
     return {
         "state": "short_circuit" if short_circuit else "ready",
         "query": query,
@@ -459,22 +602,95 @@ def execute_catalog_lookup(
         "short_circuit": short_circuit,
         "short_circuit_reason": short_circuit_reason,
         "produces": {"paper_set": paper_set},
+        "status_summary": status_summary,
+        "status_filter": status_filter,
+        # 分页元数据
+        "pagination": {
+            "offset": offset,
+            "limit": page_size,
+            "current_page": current_page,
+            "total_pages": total_pages,
+            "has_next_page": has_next_page,
+            "has_prev_page": has_prev_page,
+            "total_count": matched_count,
+        },
     }
 
 
-def compose_catalog_answer(catalog_result: dict[str, Any]) -> str:
+def _build_status_summary(papers: list[dict[str, Any]]) -> dict[str, Any]:
+    """Build summary of paper statuses for observability."""
+    statuses: dict[str, int] = {}
+    for paper in papers:
+        status = str(paper.get("status", "unknown")).strip() or "unknown"
+        statuses[status] = statuses.get(status, 0) + 1
+
+    ready_count = sum(
+        count for status, count in statuses.items() if status in READY_STATUSES
+    )
+
+    return {
+        "total": len(papers),
+        "by_status": statuses,
+        "ready_count": ready_count,
+    }
+
+
+def format_catalog_context(catalog_result: dict[str, Any]) -> str:
+    """Format catalog result as context for LLM.
+
+    This function converts catalog metadata into a structured context
+    that can be passed to LLM for natural language generation.
+    """
     paper_set = list(catalog_result.get("paper_set") or [])
+    status_summary = catalog_result.get("status_summary") or {}
+
     if not paper_set:
-        return "未找到符合条件的论文，因此未继续执行后续步骤。"
-    lines = ["基于目录元数据，匹配到这些论文："]
+        context_lines = ["No papers found matching the criteria."]
+        if status_summary:
+            total = status_summary.get("total", 0)
+            ready_count = status_summary.get("ready_count", 0)
+            context_lines.append(
+                f"Library statistics: {total} total, {ready_count} ready."
+            )
+        return "\n".join(context_lines)
+
+    context_lines = [f"Found {len(paper_set)} papers:"]
     for idx, row in enumerate(paper_set, start=1):
-        title = str(row.get("title", "")).strip() or str(row.get("paper_id", "")).strip()
-        imported_at = str(row.get("imported_at", "")).strip() or "未知导入时间"
+        raw_title = str(row.get("title", "")).strip()
+        paper_id = str(row.get("paper_id", "")).strip()
+
+        if not raw_title or raw_title.lower() in {
+            "untitled paper",
+            "untitled",
+            "无标题",
+        }:
+            title = paper_id
+        else:
+            title = raw_title
+
+        imported_at = str(row.get("imported_at", "")).strip() or "unknown"
         status = str(row.get("status", "")).strip() or "unknown"
-        lines.append(f"{idx}. {title} | paper_id={row.get('paper_id', '')} | imported_at={imported_at} | status={status}")
+
+        context_lines.append(f"[{idx}] Title: {title}")
+        context_lines.append(f"    Paper ID: {paper_id}")
+        context_lines.append(f"    Status: {status}")
+        context_lines.append(f"    Imported: {imported_at}")
+
+        # Add optional fields if present
+        authors = row.get("authors")
+        if authors:
+            context_lines.append(f"    Authors: {authors}")
+        year = row.get("year")
+        if year:
+            context_lines.append(f"    Year: {year}")
+
+        context_lines.append("")  # Empty line between papers
+
     if bool(catalog_result.get("truncated")):
-        lines.append(
-            f"结果已截断：matched_count={catalog_result.get('matched_count', 0)}, "
-            f"selected_count={catalog_result.get('selected_count', 0)}。"
+        matched = catalog_result.get("matched_count", 0)
+        selected = catalog_result.get("selected_count", 0)
+        context_lines.append(
+            f"(Results truncated: {matched} matched, {selected} selected)"
         )
-    return "\n".join(lines)
+
+    return "\n".join(context_lines)

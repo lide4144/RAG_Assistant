@@ -10,7 +10,14 @@ from app.llm_log_config import resolve_effective_llm_log_config
 
 
 _LOGGER_NAME = "rag_gpt.llm_api"
-_SECRET_KEY_HINTS = ("api_key", "apikey", "authorization", "token", "secret", "password")
+_SECRET_KEY_HINTS = (
+    "api_key",
+    "apikey",
+    "authorization",
+    "token",
+    "secret",
+    "password",
+)
 _LOGGER_INITIALIZED = False
 _LOGGER_FILE_PATH: str | None = None
 
@@ -48,13 +55,29 @@ def sanitize_llm_debug_value(value: Any) -> Any:
 
 
 def _parse_json_text(value: str) -> Any | None:
+    """尝试解析 JSON 文本，支持标准 JSON 和 Python 字典字符串表示"""
     text = str(value or "").strip()
     if not text or text[0] not in "{[":
         return None
     try:
+        # 首先尝试标准 JSON 解析
         return json.loads(text)
     except json.JSONDecodeError:
-        return None
+        pass
+
+    # 尝试处理 Python 字典字符串（单引号）
+    try:
+        # 安全地评估 Python 字面量
+        import ast
+
+        parsed = ast.literal_eval(text)
+        # 确保结果是 dict 或 list
+        if isinstance(parsed, (dict, list)):
+            return parsed
+    except (ValueError, SyntaxError):
+        pass
+
+    return None
 
 
 def dump_llm_debug_text(value: Any) -> str | None:
@@ -97,15 +120,45 @@ def _stringify_meta(payload: dict[str, Any], key: str) -> str | None:
     return text or None
 
 
+def _format_json_block(text: str | None) -> str | None:
+    """尝试格式化 JSON 内容，使其美观易读"""
+    if text is None:
+        return None
+    # 尝试解析为 JSON
+    parsed = _parse_json_text(text)
+    if parsed is not None:
+        # 是 JSON，格式化输出
+        try:
+            return json.dumps(parsed, ensure_ascii=False, indent=2, sort_keys=True)
+        except (TypeError, ValueError):
+            pass
+    # 不是 JSON 或格式化失败，返回原文本
+    return text
+
+
 def render_llm_debug_event(event: dict[str, Any]) -> str:
     payload = {
         key: sanitize_llm_debug_value(value)
         for key, value in event.items()
         if value is not None
     }
-    for text_key in ("request_payload", "response_payload", "system_prompt", "user_prompt", "response_text"):
+
+    # 处理非 JSON 文本字段（截断）
+    for text_key in ("system_prompt", "user_prompt"):
         if text_key in payload:
             payload[text_key] = truncate_llm_debug_text(str(payload[text_key]))
+
+    # 处理 JSON 字段（格式化但不截断，保持可读性）
+    for json_key in ("request_payload", "response_payload", "response_text"):
+        if json_key in payload:
+            original = str(payload[json_key])
+            formatted = _format_json_block(original)
+            if formatted != original:
+                # 成功格式化，使用格式化版本
+                payload[json_key] = formatted
+            else:
+                # 不是 JSON，进行截断
+                payload[json_key] = truncate_llm_debug_text(original)
 
     title = f"[LLM API] event={payload.get('event', '-')} stage={payload.get('debug_stage') or payload.get('stage') or '-'}"
     meta_keys = (
@@ -132,15 +185,15 @@ def render_llm_debug_event(event: dict[str, Any]) -> str:
         if text is not None:
             lines.append(f"{key}: {text}")
     for block_key, label in (
-        ("system_prompt", "system_prompt"),
-        ("user_prompt", "user_prompt"),
-        ("request_payload", "request_payload"),
-        ("response_payload", "response_payload"),
-        ("response_text", "response_text"),
+        ("system_prompt", "system_prompt:"),
+        ("user_prompt", "user_prompt:"),
+        ("request_payload", "request_payload:"),
+        ("response_payload", "response_payload:"),
+        ("response_text", "response_text:"),
     ):
         text = _stringify_meta(payload, block_key)
         if text is not None:
-            lines.append(f"{label}:")
+            lines.append(f"{label}")
             lines.append(text)
     lines.append("=" * 88)
     return "\n".join(lines)

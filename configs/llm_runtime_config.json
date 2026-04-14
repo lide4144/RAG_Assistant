@@ -27,13 +27,13 @@
     "provider": "openai",
     "api_base": "https://api.siliconflow.cn/v1",
     "api_key": "sk-uoijizemjbmqxcaycjuumqzcjuhstjawjtwmoagwoiszznnv",
-    "model": "Pro/moonshotai/Kimi-K2.5"
+    "model": "Pro/zai-org/GLM-4.7"
   },
   "sufficiency_judge": {
     "provider": "openai",
     "api_base": "https://api.siliconflow.cn/v1",
     "api_key": "sk-uoijizemjbmqxcaycjuumqzcjuhstjawjtwmoagwoiszznnv",
-    "model": "Pro/deepseek-ai/DeepSeek-V3.2"
+    "model": "Qwen/Qwen3.5-9B"
   },
-  "updated_at": "2026-03-30T20:20:41Z"
+  "updated_at": "2026-04-13T07:22:52Z"
 }

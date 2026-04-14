@@ -9,7 +9,11 @@ import yaml
 
 from app.admin_llm_config import load_runtime_llm_config
 from app.config_governance import resolve_effective_llm_stages
-from app.planner_runtime_config import PLANNER_RUNTIME_API_KEY_ENV, load_planner_runtime_config, resolve_effective_planner_runtime
+from app.planner_runtime_config import (
+    PLANNER_RUNTIME_API_KEY_ENV,
+    load_planner_runtime_config,
+    resolve_effective_planner_runtime,
+)
 
 DEFAULT_CONFIG_PATH = Path("configs/default.yaml")
 RUNTIME_LLM_API_KEY_ENV = "RAG_RUNTIME_LLM_API_KEY"
@@ -132,6 +136,7 @@ class PipelineConfig:
     rewrite_max_keywords: int = 12
     evidence_policy_enforced: bool = True
     sufficiency_gate_enabled: bool = True
+    sufficiency_append_advice: bool = True  # 是否在回答后追加证据质量建议
     sufficiency_topic_match_threshold: float = 0.15
     sufficiency_semantic_policy: str = "balanced"
     sufficiency_semantic_threshold_strict: float = 0.35
@@ -144,6 +149,8 @@ class PipelineConfig:
     sufficiency_judge_llm_api_base: str = "https://api.siliconflow.cn/v1"
     sufficiency_judge_llm_api_key_env: str = "SILICONFLOW_API_KEY"
     sufficiency_judge_llm_timeout_ms: int = 6000
+    # Catalog 路由配置：是否使用大模型生成回答（而非系统直接回答）
+    catalog_use_llm_answer: bool = True
     assistant_mode_enabled: bool = True
     assistant_mode_force_legacy_gate: bool = False
     assistant_mode_clarify_limit: int = 2
@@ -153,6 +160,7 @@ class PipelineConfig:
     session_redis_ttl_sec: int = 86400
     session_redis_key_prefix: str = "rag"
     session_redis_fallback_to_file: bool = True
+    session_sqlite_path: str = "data/session_store.db"
     session_recent_turns_window: int = 3
     session_memory_summary_enabled: bool = True
     session_memory_semantic_enabled: bool = True
@@ -170,7 +178,9 @@ class PipelineConfig:
     planner_model: str = "Pro/deepseek-ai/DeepSeek-V3.2"
     planner_api_base: str = "https://api.siliconflow.cn/v1"
     planner_api_key_env: str = "SILICONFLOW_API_KEY"
-    planner_timeout_ms: int = 6000
+    planner_timeout_ms: int = (
+        30000  # Increased from 6000 to 30000 for deepseek-reasoner
+    )
     planner_max_steps: int = 3
     planner_max_papers: int = 20
     planner_summary_min_papers: int = 2
@@ -354,7 +364,9 @@ def _merge_defaults(data: dict[str, Any]) -> PipelineConfig:
                         default_value=emb_default,
                     )
                 else:
-                    merged_embedding[emb_key] = _coerce_with_default(raw_embedding.get(emb_key), emb_default)
+                    merged_embedding[emb_key] = _coerce_with_default(
+                        raw_embedding.get(emb_key), emb_default
+                    )
             kwargs[key] = EmbeddingConfig(**merged_embedding)
             continue
         if key == "rerank":
@@ -393,7 +405,9 @@ def _merge_defaults(data: dict[str, Any]) -> PipelineConfig:
                         default_value=rr_default,
                     )
                 else:
-                    merged_rerank[rr_key] = _coerce_with_default(raw_rerank.get(rr_key), rr_default)
+                    merged_rerank[rr_key] = _coerce_with_default(
+                        raw_rerank.get(rr_key), rr_default
+                    )
             kwargs[key] = RerankConfig(**merged_rerank)
             continue
         if key == "embedding_provider":
@@ -474,23 +488,29 @@ def _merge_defaults(data: dict[str, Any]) -> PipelineConfig:
 
 def validate_config(config: PipelineConfig) -> tuple[PipelineConfig, list[str]]:
     warnings: list[str] = []
-    validated = PipelineConfig(**{k: v for k, v in asdict(config).items() if k != "embedding"})
+    validated = PipelineConfig(
+        **{k: v for k, v in asdict(config).items() if k != "embedding"}
+    )
     if isinstance(config.embedding, EmbeddingConfig):
         validated.embedding = EmbeddingConfig(**asdict(config.embedding))
     elif isinstance(config.embedding, dict):
-        validated.embedding = EmbeddingConfig(**{
-            k: config.embedding.get(k, getattr(EmbeddingConfig(), k))
-            for k in asdict(EmbeddingConfig()).keys()
-        })
+        validated.embedding = EmbeddingConfig(
+            **{
+                k: config.embedding.get(k, getattr(EmbeddingConfig(), k))
+                for k in asdict(EmbeddingConfig()).keys()
+            }
+        )
     else:
         validated.embedding = EmbeddingConfig()
     if isinstance(config.rerank, RerankConfig):
         validated.rerank = RerankConfig(**asdict(config.rerank))
     elif isinstance(config.rerank, dict):
-        validated.rerank = RerankConfig(**{
-            k: config.rerank.get(k, getattr(RerankConfig(), k))
-            for k in asdict(RerankConfig()).keys()
-        })
+        validated.rerank = RerankConfig(
+            **{
+                k: config.rerank.get(k, getattr(RerankConfig(), k))
+                for k in asdict(RerankConfig()).keys()
+            }
+        )
     else:
         validated.rerank = RerankConfig()
     defaults = PipelineConfig()
@@ -508,14 +528,19 @@ def validate_config(config: PipelineConfig) -> tuple[PipelineConfig, list[str]]:
             f"{validated.style_control_max_turn_distance}; fallback to "
             f"{defaults.style_control_max_turn_distance} (must be > 0)."
         )
-        validated.style_control_max_turn_distance = defaults.style_control_max_turn_distance
+        validated.style_control_max_turn_distance = (
+            defaults.style_control_max_turn_distance
+        )
     if validated.rewrite_arbitration_min_delta < 0:
         warnings.append(
             "Invalid rewrite_arbitration_min_delta="
             f"{validated.rewrite_arbitration_min_delta}; fallback to {defaults.rewrite_arbitration_min_delta}."
         )
         validated.rewrite_arbitration_min_delta = defaults.rewrite_arbitration_min_delta
-    if validated.intent_control_min_confidence < 0 or validated.intent_control_min_confidence > 1:
+    if (
+        validated.intent_control_min_confidence < 0
+        or validated.intent_control_min_confidence > 1
+    ):
         warnings.append(
             "Invalid intent_control_min_confidence="
             f"{validated.intent_control_min_confidence}; fallback to "
@@ -529,13 +554,16 @@ def validate_config(config: PipelineConfig) -> tuple[PipelineConfig, list[str]]:
             f"{defaults.assistant_mode_clarify_limit} (must be > 0)."
         )
         validated.assistant_mode_clarify_limit = defaults.assistant_mode_clarify_limit
-    if validated.session_store_backend not in {"redis", "file"}:
+    if validated.session_store_backend not in {"redis", "file", "sqlite"}:
         warnings.append(
             "Invalid session_store_backend="
             f"{validated.session_store_backend}; fallback to {defaults.session_store_backend}."
         )
         validated.session_store_backend = defaults.session_store_backend
-    if not isinstance(validated.session_redis_url, str) or not validated.session_redis_url.strip():
+    if (
+        not isinstance(validated.session_redis_url, str)
+        or not validated.session_redis_url.strip()
+    ):
         warnings.append("Invalid session_redis_url; fallback to defaults.")
         validated.session_redis_url = defaults.session_redis_url
     if validated.session_redis_ttl_sec < 0:
@@ -544,7 +572,10 @@ def validate_config(config: PipelineConfig) -> tuple[PipelineConfig, list[str]]:
             f"{validated.session_redis_ttl_sec}; fallback to {defaults.session_redis_ttl_sec} (must be >= 0)."
         )
         validated.session_redis_ttl_sec = defaults.session_redis_ttl_sec
-    if not isinstance(validated.session_redis_key_prefix, str) or not validated.session_redis_key_prefix.strip():
+    if (
+        not isinstance(validated.session_redis_key_prefix, str)
+        or not validated.session_redis_key_prefix.strip()
+    ):
         warnings.append("Invalid session_redis_key_prefix; fallback to defaults.")
         validated.session_redis_key_prefix = defaults.session_redis_key_prefix
     if validated.session_recent_turns_window <= 0:
@@ -553,6 +584,13 @@ def validate_config(config: PipelineConfig) -> tuple[PipelineConfig, list[str]]:
             f"{validated.session_recent_turns_window}; fallback to {defaults.session_recent_turns_window} (must be > 0)."
         )
         validated.session_recent_turns_window = defaults.session_recent_turns_window
+    # Validate SQLite path
+    if (
+        not isinstance(validated.session_sqlite_path, str)
+        or not validated.session_sqlite_path.strip()
+    ):
+        warnings.append("Invalid session_sqlite_path; fallback to defaults.")
+        validated.session_sqlite_path = defaults.session_sqlite_path
 
     if validated.overlap < 0 or validated.overlap >= validated.chunk_size:
         warnings.append(
@@ -570,7 +608,10 @@ def validate_config(config: PipelineConfig) -> tuple[PipelineConfig, list[str]]:
         )
         validated.marker_timeout_sec = defaults.marker_timeout_sec
 
-    if validated.title_confidence_threshold < 0 or validated.title_confidence_threshold > 1:
+    if (
+        validated.title_confidence_threshold < 0
+        or validated.title_confidence_threshold > 1
+    ):
         warnings.append(
             f"Invalid title_confidence_threshold={validated.title_confidence_threshold}; "
             f"fallback to {defaults.title_confidence_threshold} (must satisfy 0 <= value <= 1)."
@@ -581,7 +622,11 @@ def validate_config(config: PipelineConfig) -> tuple[PipelineConfig, list[str]]:
         warnings.append("Invalid title_blacklist_patterns; fallback to defaults.")
         validated.title_blacklist_patterns = list(defaults.title_blacklist_patterns)
     else:
-        normalized_patterns = [str(item).strip() for item in validated.title_blacklist_patterns if str(item).strip()]
+        normalized_patterns = [
+            str(item).strip()
+            for item in validated.title_blacklist_patterns
+            if str(item).strip()
+        ]
         if not normalized_patterns:
             warnings.append("Empty title_blacklist_patterns; fallback to defaults.")
             normalized_patterns = list(defaults.title_blacklist_patterns)
@@ -614,27 +659,47 @@ def validate_config(config: PipelineConfig) -> tuple[PipelineConfig, list[str]]:
             f"fallback to {defaults.rewrite_max_keywords} (must be > 0)."
         )
         validated.rewrite_max_keywords = defaults.rewrite_max_keywords
-    if validated.rewrite_entity_preservation_min_ratio < 0 or validated.rewrite_entity_preservation_min_ratio > 1:
+    if (
+        validated.rewrite_entity_preservation_min_ratio < 0
+        or validated.rewrite_entity_preservation_min_ratio > 1
+    ):
         warnings.append(
             "Invalid rewrite_entity_preservation_min_ratio="
             f"{validated.rewrite_entity_preservation_min_ratio}; fallback to "
             f"{defaults.rewrite_entity_preservation_min_ratio} (must satisfy 0 <= value <= 1)."
         )
-        validated.rewrite_entity_preservation_min_ratio = defaults.rewrite_entity_preservation_min_ratio
+        validated.rewrite_entity_preservation_min_ratio = (
+            defaults.rewrite_entity_preservation_min_ratio
+        )
 
-    if not isinstance(validated.rewrite_llm_provider, str) or not validated.rewrite_llm_provider.strip():
+    if (
+        not isinstance(validated.rewrite_llm_provider, str)
+        or not validated.rewrite_llm_provider.strip()
+    ):
         warnings.append("Invalid rewrite_llm_provider; fallback to defaults.")
         validated.rewrite_llm_provider = defaults.rewrite_llm_provider
-    if not isinstance(validated.rewrite_llm_model, str) or not validated.rewrite_llm_model.strip():
+    if (
+        not isinstance(validated.rewrite_llm_model, str)
+        or not validated.rewrite_llm_model.strip()
+    ):
         warnings.append("Invalid rewrite_llm_model; fallback to defaults.")
         validated.rewrite_llm_model = defaults.rewrite_llm_model
-    if not isinstance(validated.rewrite_llm_api_base, str) or not validated.rewrite_llm_api_base.strip():
+    if (
+        not isinstance(validated.rewrite_llm_api_base, str)
+        or not validated.rewrite_llm_api_base.strip()
+    ):
         warnings.append("Invalid rewrite_llm_api_base; fallback to defaults.")
         validated.rewrite_llm_api_base = defaults.rewrite_llm_api_base
-    if not isinstance(validated.rewrite_llm_api_key_env, str) or not validated.rewrite_llm_api_key_env.strip():
+    if (
+        not isinstance(validated.rewrite_llm_api_key_env, str)
+        or not validated.rewrite_llm_api_key_env.strip()
+    ):
         warnings.append("Invalid rewrite_llm_api_key_env; fallback to defaults.")
         validated.rewrite_llm_api_key_env = defaults.rewrite_llm_api_key_env
-    if not isinstance(validated.rewrite_llm_fallback_provider, str) or not validated.rewrite_llm_fallback_provider.strip():
+    if (
+        not isinstance(validated.rewrite_llm_fallback_provider, str)
+        or not validated.rewrite_llm_fallback_provider.strip()
+    ):
         warnings.append("Invalid rewrite_llm_fallback_provider; fallback to defaults.")
         validated.rewrite_llm_fallback_provider = defaults.rewrite_llm_fallback_provider
     if not isinstance(validated.rewrite_llm_fallback_model, str):
@@ -644,21 +709,40 @@ def validate_config(config: PipelineConfig) -> tuple[PipelineConfig, list[str]]:
         warnings.append("Invalid rewrite_llm_fallback_api_base; fallback to defaults.")
         validated.rewrite_llm_fallback_api_base = defaults.rewrite_llm_fallback_api_base
     if not isinstance(validated.rewrite_llm_fallback_api_key_env, str):
-        warnings.append("Invalid rewrite_llm_fallback_api_key_env; fallback to defaults.")
-        validated.rewrite_llm_fallback_api_key_env = defaults.rewrite_llm_fallback_api_key_env
-    if not isinstance(validated.answer_llm_provider, str) or not validated.answer_llm_provider.strip():
+        warnings.append(
+            "Invalid rewrite_llm_fallback_api_key_env; fallback to defaults."
+        )
+        validated.rewrite_llm_fallback_api_key_env = (
+            defaults.rewrite_llm_fallback_api_key_env
+        )
+    if (
+        not isinstance(validated.answer_llm_provider, str)
+        or not validated.answer_llm_provider.strip()
+    ):
         warnings.append("Invalid answer_llm_provider; fallback to defaults.")
         validated.answer_llm_provider = defaults.answer_llm_provider
-    if not isinstance(validated.answer_llm_model, str) or not validated.answer_llm_model.strip():
+    if (
+        not isinstance(validated.answer_llm_model, str)
+        or not validated.answer_llm_model.strip()
+    ):
         warnings.append("Invalid answer_llm_model; fallback to defaults.")
         validated.answer_llm_model = defaults.answer_llm_model
-    if not isinstance(validated.answer_llm_api_base, str) or not validated.answer_llm_api_base.strip():
+    if (
+        not isinstance(validated.answer_llm_api_base, str)
+        or not validated.answer_llm_api_base.strip()
+    ):
         warnings.append("Invalid answer_llm_api_base; fallback to defaults.")
         validated.answer_llm_api_base = defaults.answer_llm_api_base
-    if not isinstance(validated.answer_llm_api_key_env, str) or not validated.answer_llm_api_key_env.strip():
+    if (
+        not isinstance(validated.answer_llm_api_key_env, str)
+        or not validated.answer_llm_api_key_env.strip()
+    ):
         warnings.append("Invalid answer_llm_api_key_env; fallback to defaults.")
         validated.answer_llm_api_key_env = defaults.answer_llm_api_key_env
-    if not isinstance(validated.answer_llm_fallback_provider, str) or not validated.answer_llm_fallback_provider.strip():
+    if (
+        not isinstance(validated.answer_llm_fallback_provider, str)
+        or not validated.answer_llm_fallback_provider.strip()
+    ):
         warnings.append("Invalid answer_llm_fallback_provider; fallback to defaults.")
         validated.answer_llm_fallback_provider = defaults.answer_llm_fallback_provider
     if not isinstance(validated.answer_llm_fallback_model, str):
@@ -668,21 +752,40 @@ def validate_config(config: PipelineConfig) -> tuple[PipelineConfig, list[str]]:
         warnings.append("Invalid answer_llm_fallback_api_base; fallback to defaults.")
         validated.answer_llm_fallback_api_base = defaults.answer_llm_fallback_api_base
     if not isinstance(validated.answer_llm_fallback_api_key_env, str):
-        warnings.append("Invalid answer_llm_fallback_api_key_env; fallback to defaults.")
-        validated.answer_llm_fallback_api_key_env = defaults.answer_llm_fallback_api_key_env
-    if not isinstance(validated.embedding_provider, str) or not validated.embedding_provider.strip():
+        warnings.append(
+            "Invalid answer_llm_fallback_api_key_env; fallback to defaults."
+        )
+        validated.answer_llm_fallback_api_key_env = (
+            defaults.answer_llm_fallback_api_key_env
+        )
+    if (
+        not isinstance(validated.embedding_provider, str)
+        or not validated.embedding_provider.strip()
+    ):
         warnings.append("Invalid embedding_provider; fallback to defaults.")
         validated.embedding_provider = defaults.embedding_provider
-    if not isinstance(validated.embedding_model, str) or not validated.embedding_model.strip():
+    if (
+        not isinstance(validated.embedding_model, str)
+        or not validated.embedding_model.strip()
+    ):
         warnings.append("Invalid embedding_model; fallback to defaults.")
         validated.embedding_model = defaults.embedding_model
-    if not isinstance(validated.embedding_api_base, str) or not validated.embedding_api_base.strip():
+    if (
+        not isinstance(validated.embedding_api_base, str)
+        or not validated.embedding_api_base.strip()
+    ):
         warnings.append("Invalid embedding_api_base; fallback to defaults.")
         validated.embedding_api_base = defaults.embedding_api_base
-    if not isinstance(validated.embedding_api_key_env, str) or not validated.embedding_api_key_env.strip():
+    if (
+        not isinstance(validated.embedding_api_key_env, str)
+        or not validated.embedding_api_key_env.strip()
+    ):
         warnings.append("Invalid embedding_api_key_env; fallback to defaults.")
         validated.embedding_api_key_env = defaults.embedding_api_key_env
-    if not isinstance(validated.embedding_fallback_provider, str) or not validated.embedding_fallback_provider.strip():
+    if (
+        not isinstance(validated.embedding_fallback_provider, str)
+        or not validated.embedding_fallback_provider.strip()
+    ):
         warnings.append("Invalid embedding_fallback_provider; fallback to defaults.")
         validated.embedding_fallback_provider = defaults.embedding_fallback_provider
     if not isinstance(validated.embedding_fallback_model, str):
@@ -693,20 +796,37 @@ def validate_config(config: PipelineConfig) -> tuple[PipelineConfig, list[str]]:
         validated.embedding_fallback_api_base = defaults.embedding_fallback_api_base
     if not isinstance(validated.embedding_fallback_api_key_env, str):
         warnings.append("Invalid embedding_fallback_api_key_env; fallback to defaults.")
-        validated.embedding_fallback_api_key_env = defaults.embedding_fallback_api_key_env
-    if not isinstance(validated.rerank_provider, str) or not validated.rerank_provider.strip():
+        validated.embedding_fallback_api_key_env = (
+            defaults.embedding_fallback_api_key_env
+        )
+    if (
+        not isinstance(validated.rerank_provider, str)
+        or not validated.rerank_provider.strip()
+    ):
         warnings.append("Invalid rerank_provider; fallback to defaults.")
         validated.rerank_provider = defaults.rerank_provider
-    if not isinstance(validated.rerank_model, str) or not validated.rerank_model.strip():
+    if (
+        not isinstance(validated.rerank_model, str)
+        or not validated.rerank_model.strip()
+    ):
         warnings.append("Invalid rerank_model; fallback to defaults.")
         validated.rerank_model = defaults.rerank_model
-    if not isinstance(validated.rerank_api_base, str) or not validated.rerank_api_base.strip():
+    if (
+        not isinstance(validated.rerank_api_base, str)
+        or not validated.rerank_api_base.strip()
+    ):
         warnings.append("Invalid rerank_api_base; fallback to defaults.")
         validated.rerank_api_base = defaults.rerank_api_base
-    if not isinstance(validated.rerank_api_key_env, str) or not validated.rerank_api_key_env.strip():
+    if (
+        not isinstance(validated.rerank_api_key_env, str)
+        or not validated.rerank_api_key_env.strip()
+    ):
         warnings.append("Invalid rerank_api_key_env; fallback to defaults.")
         validated.rerank_api_key_env = defaults.rerank_api_key_env
-    if not isinstance(validated.rerank_fallback_provider, str) or not validated.rerank_fallback_provider.strip():
+    if (
+        not isinstance(validated.rerank_fallback_provider, str)
+        or not validated.rerank_fallback_provider.strip()
+    ):
         warnings.append("Invalid rerank_fallback_provider; fallback to defaults.")
         validated.rerank_fallback_provider = defaults.rerank_fallback_provider
     if not isinstance(validated.rerank_fallback_model, str):
@@ -760,12 +880,17 @@ def validate_config(config: PipelineConfig) -> tuple[PipelineConfig, list[str]]:
             f"fallback to {defaults.max_context_tokens} (must be > 0)."
         )
         validated.max_context_tokens = defaults.max_context_tokens
-    if validated.sufficiency_topic_match_threshold < 0 or validated.sufficiency_topic_match_threshold > 1:
+    if (
+        validated.sufficiency_topic_match_threshold < 0
+        or validated.sufficiency_topic_match_threshold > 1
+    ):
         warnings.append(
             f"Invalid sufficiency_topic_match_threshold={validated.sufficiency_topic_match_threshold}; "
             f"fallback to {defaults.sufficiency_topic_match_threshold} (must satisfy 0 <= value <= 1)."
         )
-        validated.sufficiency_topic_match_threshold = defaults.sufficiency_topic_match_threshold
+        validated.sufficiency_topic_match_threshold = (
+            defaults.sufficiency_topic_match_threshold
+        )
     if validated.sufficiency_semantic_policy not in {"strict", "balanced", "explore"}:
         warnings.append(
             "Invalid sufficiency_semantic_policy="
@@ -785,30 +910,57 @@ def validate_config(config: PipelineConfig) -> tuple[PipelineConfig, list[str]]:
                 "(must satisfy 0 <= value <= 1)."
             )
             setattr(validated, field_name, default_val)
-    if validated.sufficiency_key_element_min_coverage < 0 or validated.sufficiency_key_element_min_coverage > 1:
+    if (
+        validated.sufficiency_key_element_min_coverage < 0
+        or validated.sufficiency_key_element_min_coverage > 1
+    ):
         warnings.append(
             f"Invalid sufficiency_key_element_min_coverage={validated.sufficiency_key_element_min_coverage}; "
             f"fallback to {defaults.sufficiency_key_element_min_coverage} (must satisfy 0 <= value <= 1)."
         )
-        validated.sufficiency_key_element_min_coverage = defaults.sufficiency_key_element_min_coverage
-    if not isinstance(validated.sufficiency_judge_llm_provider, str) or not validated.sufficiency_judge_llm_provider.strip():
+        validated.sufficiency_key_element_min_coverage = (
+            defaults.sufficiency_key_element_min_coverage
+        )
+    if (
+        not isinstance(validated.sufficiency_judge_llm_provider, str)
+        or not validated.sufficiency_judge_llm_provider.strip()
+    ):
         warnings.append("Invalid sufficiency_judge_llm_provider; fallback to defaults.")
-        validated.sufficiency_judge_llm_provider = defaults.sufficiency_judge_llm_provider
-    if not isinstance(validated.sufficiency_judge_llm_model, str) or not validated.sufficiency_judge_llm_model.strip():
+        validated.sufficiency_judge_llm_provider = (
+            defaults.sufficiency_judge_llm_provider
+        )
+    if (
+        not isinstance(validated.sufficiency_judge_llm_model, str)
+        or not validated.sufficiency_judge_llm_model.strip()
+    ):
         warnings.append("Invalid sufficiency_judge_llm_model; fallback to defaults.")
         validated.sufficiency_judge_llm_model = defaults.sufficiency_judge_llm_model
-    if not isinstance(validated.sufficiency_judge_llm_api_base, str) or not validated.sufficiency_judge_llm_api_base.strip():
+    if (
+        not isinstance(validated.sufficiency_judge_llm_api_base, str)
+        or not validated.sufficiency_judge_llm_api_base.strip()
+    ):
         warnings.append("Invalid sufficiency_judge_llm_api_base; fallback to defaults.")
-        validated.sufficiency_judge_llm_api_base = defaults.sufficiency_judge_llm_api_base
-    if not isinstance(validated.sufficiency_judge_llm_api_key_env, str) or not validated.sufficiency_judge_llm_api_key_env.strip():
-        warnings.append("Invalid sufficiency_judge_llm_api_key_env; fallback to defaults.")
-        validated.sufficiency_judge_llm_api_key_env = defaults.sufficiency_judge_llm_api_key_env
+        validated.sufficiency_judge_llm_api_base = (
+            defaults.sufficiency_judge_llm_api_base
+        )
+    if (
+        not isinstance(validated.sufficiency_judge_llm_api_key_env, str)
+        or not validated.sufficiency_judge_llm_api_key_env.strip()
+    ):
+        warnings.append(
+            "Invalid sufficiency_judge_llm_api_key_env; fallback to defaults."
+        )
+        validated.sufficiency_judge_llm_api_key_env = (
+            defaults.sufficiency_judge_llm_api_key_env
+        )
     if validated.sufficiency_judge_llm_timeout_ms <= 0:
         warnings.append(
             f"Invalid sufficiency_judge_llm_timeout_ms={validated.sufficiency_judge_llm_timeout_ms}; "
             f"fallback to {defaults.sufficiency_judge_llm_timeout_ms} (must be > 0)."
         )
-        validated.sufficiency_judge_llm_timeout_ms = defaults.sufficiency_judge_llm_timeout_ms
+        validated.sufficiency_judge_llm_timeout_ms = (
+            defaults.sufficiency_judge_llm_timeout_ms
+        )
 
     if validated.dense_backend not in {"embedding", "tfidf"}:
         warnings.append(
@@ -960,19 +1112,33 @@ def validate_config(config: PipelineConfig) -> tuple[PipelineConfig, list[str]]:
         validated.graph_expand_max_candidates = defaults.graph_expand_max_candidates
 
     if not isinstance(validated.graph_path, str) or not validated.graph_path.strip():
-        warnings.append(f"Invalid graph_path={validated.graph_path}; fallback to {defaults.graph_path}.")
+        warnings.append(
+            f"Invalid graph_path={validated.graph_path}; fallback to {defaults.graph_path}."
+        )
         validated.graph_path = defaults.graph_path
 
-    if not isinstance(validated.graph_entity_llm_provider, str) or not validated.graph_entity_llm_provider.strip():
+    if (
+        not isinstance(validated.graph_entity_llm_provider, str)
+        or not validated.graph_entity_llm_provider.strip()
+    ):
         warnings.append("Invalid graph_entity_llm_provider; fallback to defaults.")
         validated.graph_entity_llm_provider = defaults.graph_entity_llm_provider
-    if not isinstance(validated.graph_entity_llm_base_url, str) or not validated.graph_entity_llm_base_url.strip():
+    if (
+        not isinstance(validated.graph_entity_llm_base_url, str)
+        or not validated.graph_entity_llm_base_url.strip()
+    ):
         warnings.append("Invalid graph_entity_llm_base_url; fallback to defaults.")
         validated.graph_entity_llm_base_url = defaults.graph_entity_llm_base_url
-    if not isinstance(validated.graph_entity_llm_api_key_env, str) or not validated.graph_entity_llm_api_key_env.strip():
+    if (
+        not isinstance(validated.graph_entity_llm_api_key_env, str)
+        or not validated.graph_entity_llm_api_key_env.strip()
+    ):
         warnings.append("Invalid graph_entity_llm_api_key_env; fallback to defaults.")
         validated.graph_entity_llm_api_key_env = defaults.graph_entity_llm_api_key_env
-    if not isinstance(validated.graph_entity_llm_model, str) or not validated.graph_entity_llm_model.strip():
+    if (
+        not isinstance(validated.graph_entity_llm_model, str)
+        or not validated.graph_entity_llm_model.strip()
+    ):
         warnings.append("Invalid graph_entity_llm_model; fallback to defaults.")
         validated.graph_entity_llm_model = defaults.graph_entity_llm_model
     if validated.graph_entity_llm_timeout_ms <= 0:
@@ -986,7 +1152,9 @@ def validate_config(config: PipelineConfig) -> tuple[PipelineConfig, list[str]]:
             f"Invalid graph_entity_llm_max_concurrency={validated.graph_entity_llm_max_concurrency}; "
             f"fallback to {defaults.graph_entity_llm_max_concurrency} (must be > 0)."
         )
-        validated.graph_entity_llm_max_concurrency = defaults.graph_entity_llm_max_concurrency
+        validated.graph_entity_llm_max_concurrency = (
+            defaults.graph_entity_llm_max_concurrency
+        )
     if validated.graph_entity_llm_max_retries < 0:
         warnings.append(
             f"Invalid graph_entity_llm_max_retries={validated.graph_entity_llm_max_retries}; "
@@ -994,26 +1162,48 @@ def validate_config(config: PipelineConfig) -> tuple[PipelineConfig, list[str]]:
         )
         validated.graph_entity_llm_max_retries = defaults.graph_entity_llm_max_retries
 
-    if not isinstance(validated.graph_expand_author_keywords, list) or not validated.graph_expand_author_keywords:
+    if (
+        not isinstance(validated.graph_expand_author_keywords, list)
+        or not validated.graph_expand_author_keywords
+    ):
         warnings.append("Invalid graph_expand_author_keywords; fallback to defaults.")
         validated.graph_expand_author_keywords = defaults.graph_expand_author_keywords
     else:
-        validated.graph_expand_author_keywords = [str(x).strip() for x in validated.graph_expand_author_keywords if str(x).strip()]
+        validated.graph_expand_author_keywords = [
+            str(x).strip()
+            for x in validated.graph_expand_author_keywords
+            if str(x).strip()
+        ]
         if not validated.graph_expand_author_keywords:
-            validated.graph_expand_author_keywords = defaults.graph_expand_author_keywords
+            validated.graph_expand_author_keywords = (
+                defaults.graph_expand_author_keywords
+            )
 
-    if not isinstance(validated.graph_expand_reference_keywords, list) or not validated.graph_expand_reference_keywords:
-        warnings.append("Invalid graph_expand_reference_keywords; fallback to defaults.")
-        validated.graph_expand_reference_keywords = defaults.graph_expand_reference_keywords
+    if (
+        not isinstance(validated.graph_expand_reference_keywords, list)
+        or not validated.graph_expand_reference_keywords
+    ):
+        warnings.append(
+            "Invalid graph_expand_reference_keywords; fallback to defaults."
+        )
+        validated.graph_expand_reference_keywords = (
+            defaults.graph_expand_reference_keywords
+        )
     else:
         validated.graph_expand_reference_keywords = [
-            str(x).strip() for x in validated.graph_expand_reference_keywords if str(x).strip()
+            str(x).strip()
+            for x in validated.graph_expand_reference_keywords
+            if str(x).strip()
         ]
         if not validated.graph_expand_reference_keywords:
-            validated.graph_expand_reference_keywords = defaults.graph_expand_reference_keywords
+            validated.graph_expand_reference_keywords = (
+                defaults.graph_expand_reference_keywords
+            )
 
     if not isinstance(validated.rewrite_synonyms, dict):
-        warnings.append("Invalid rewrite_synonyms; fallback to defaults (must be mapping).")
+        warnings.append(
+            "Invalid rewrite_synonyms; fallback to defaults (must be mapping)."
+        )
         validated.rewrite_synonyms = defaults.rewrite_synonyms
     else:
         normalized: dict[str, list[str]] = {}
@@ -1026,17 +1216,28 @@ def validate_config(config: PipelineConfig) -> tuple[PipelineConfig, list[str]]:
                 normalized[key] = [val.strip()]
         validated.rewrite_synonyms = normalized or defaults.rewrite_synonyms
 
-    if not isinstance(validated.rewrite_meta_patterns, list) or not validated.rewrite_meta_patterns:
-        warnings.append("Invalid rewrite_meta_patterns; fallback to defaults (must be non-empty list).")
+    if (
+        not isinstance(validated.rewrite_meta_patterns, list)
+        or not validated.rewrite_meta_patterns
+    ):
+        warnings.append(
+            "Invalid rewrite_meta_patterns; fallback to defaults (must be non-empty list)."
+        )
         validated.rewrite_meta_patterns = defaults.rewrite_meta_patterns
     else:
-        validated.rewrite_meta_patterns = [str(x).strip() for x in validated.rewrite_meta_patterns if str(x).strip()]
+        validated.rewrite_meta_patterns = [
+            str(x).strip() for x in validated.rewrite_meta_patterns if str(x).strip()
+        ]
         if not validated.rewrite_meta_patterns:
-            warnings.append("Invalid rewrite_meta_patterns; fallback to defaults (must contain valid strings).")
+            warnings.append(
+                "Invalid rewrite_meta_patterns; fallback to defaults (must contain valid strings)."
+            )
             validated.rewrite_meta_patterns = defaults.rewrite_meta_patterns
 
     if not isinstance(validated.rewrite_meta_noise_terms, list):
-        warnings.append("Invalid rewrite_meta_noise_terms; fallback to defaults (must be list).")
+        warnings.append(
+            "Invalid rewrite_meta_noise_terms; fallback to defaults (must be list)."
+        )
         validated.rewrite_meta_noise_terms = defaults.rewrite_meta_noise_terms
     else:
         validated.rewrite_meta_noise_terms = [
@@ -1047,11 +1248,17 @@ def validate_config(config: PipelineConfig) -> tuple[PipelineConfig, list[str]]:
     if validated.rewrite_use_llm:
         required_envs.add(validated.rewrite_llm_api_key_env)
         if validated.rewrite_llm_fallback_model:
-            required_envs.add(validated.rewrite_llm_fallback_api_key_env or validated.rewrite_llm_api_key_env)
+            required_envs.add(
+                validated.rewrite_llm_fallback_api_key_env
+                or validated.rewrite_llm_api_key_env
+            )
     if validated.answer_use_llm:
         required_envs.add(validated.answer_llm_api_key_env)
         if validated.answer_llm_fallback_model:
-            required_envs.add(validated.answer_llm_fallback_api_key_env or validated.answer_llm_api_key_env)
+            required_envs.add(
+                validated.answer_llm_fallback_api_key_env
+                or validated.answer_llm_api_key_env
+            )
     missing_envs = sorted(env for env in required_envs if env and not os.getenv(env))
     if missing_envs:
         warnings.append(
@@ -1063,7 +1270,9 @@ def validate_config(config: PipelineConfig) -> tuple[PipelineConfig, list[str]]:
     return validated, warnings
 
 
-def load_and_validate_config(path: str | Path = DEFAULT_CONFIG_PATH) -> tuple[PipelineConfig, list[str]]:
+def load_and_validate_config(
+    path: str | Path = DEFAULT_CONFIG_PATH,
+) -> tuple[PipelineConfig, list[str]]:
     warnings: list[str] = []
     cfg_path = Path(path)
     if not cfg_path.exists():
@@ -1073,7 +1282,9 @@ def load_and_validate_config(path: str | Path = DEFAULT_CONFIG_PATH) -> tuple[Pi
     try:
         raw_data = yaml.safe_load(cfg_path.read_text(encoding="utf-8"))
     except Exception as exc:
-        warnings.append(f"Failed to parse YAML config {cfg_path}: {exc}. Using defaults.")
+        warnings.append(
+            f"Failed to parse YAML config {cfg_path}: {exc}. Using defaults."
+        )
         return PipelineConfig(), warnings
 
     if raw_data is None:
@@ -1085,10 +1296,14 @@ def load_and_validate_config(path: str | Path = DEFAULT_CONFIG_PATH) -> tuple[Pi
     merged = _merge_defaults(raw_data)
     runtime_cfg, runtime_err = load_runtime_llm_config()
     if runtime_err:
-        warnings.append(f"Runtime LLM config ignored: {runtime_err}. Falling back to static config.")
+        warnings.append(
+            f"Runtime LLM config ignored: {runtime_err}. Falling back to static config."
+        )
     planner_runtime_cfg, planner_runtime_err = load_planner_runtime_config()
     if planner_runtime_err:
-        warnings.append(f"Planner runtime config ignored: {planner_runtime_err}. Falling back to static config.")
+        warnings.append(
+            f"Planner runtime config ignored: {planner_runtime_err}. Falling back to static config."
+        )
     effective_stages = resolve_effective_llm_stages(
         raw_data=raw_data,
         runtime_cfg=runtime_cfg if runtime_err is None else None,
@@ -1132,9 +1347,11 @@ def load_and_validate_config(path: str | Path = DEFAULT_CONFIG_PATH) -> tuple[Pi
     merged.sufficiency_judge_llm_api_key_env = sufficiency_stage.api_key_env
     merged.sufficiency_judge_llm_model = sufficiency_stage.model
 
-    planner_effective, _planner_source, planner_warnings = resolve_effective_planner_runtime(
-        raw_data=raw_data,
-        runtime_cfg=planner_runtime_cfg if planner_runtime_err is None else None,
+    planner_effective, _planner_source, planner_warnings = (
+        resolve_effective_planner_runtime(
+            raw_data=raw_data,
+            runtime_cfg=planner_runtime_cfg if planner_runtime_err is None else None,
+        )
     )
     warnings.extend(planner_warnings)
     merged.planner_service_mode = planner_effective.service_mode
@@ -1142,7 +1359,11 @@ def load_and_validate_config(path: str | Path = DEFAULT_CONFIG_PATH) -> tuple[Pi
     merged.planner_legacy_use_llm = planner_effective.legacy_use_llm
     merged.planner_provider = planner_effective.provider
     merged.planner_api_base = planner_effective.api_base
-    merged.planner_api_key_env = PLANNER_RUNTIME_API_KEY_ENV if planner_effective.api_key else merged.planner_api_key_env
+    merged.planner_api_key_env = (
+        PLANNER_RUNTIME_API_KEY_ENV
+        if planner_effective.api_key
+        else merged.planner_api_key_env
+    )
     if planner_effective.api_key:
         os.environ[PLANNER_RUNTIME_API_KEY_ENV] = planner_effective.api_key
     merged.planner_model = planner_effective.model

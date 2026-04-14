@@ -23,13 +23,23 @@ from pydantic import BaseModel, Field
 import yaml
 
 from app.agent_tools import build_tool_failure, build_tool_result_envelope
-from app.admin_llm_config import load_runtime_llm_config, mask_api_key, normalize_api_base, normalize_provider_alias, save_runtime_llm_config
+from app.admin_llm_config import (
+    load_runtime_llm_config,
+    mask_api_key,
+    normalize_api_base,
+    normalize_provider_alias,
+    save_runtime_llm_config,
+)
 from app.config import load_and_validate_config
 from app.config_governance import resolve_effective_llm_stages, runtime_source_label
 from app.graph_build import run_graph_build
 from app.library import load_papers, run_import_workflow
 from app.llm_routing import build_stage_policy, get_last_stage_failure
-from app.llm_client import llm_debug_scope, register_llm_event_callback, unregister_llm_event_callback
+from app.llm_client import (
+    llm_debug_scope,
+    register_llm_event_callback,
+    unregister_llm_event_callback,
+)
 from app.llm_log_config import resolve_effective_llm_log_config
 from app.pipeline_runtime_config import (
     default_marker_enabled,
@@ -51,6 +61,7 @@ from app.paper_store import (
     get_paper as get_store_paper,
     get_vector_backend_state,
     list_papers as list_store_papers,
+    list_papers_pending_rebuild,
     mark_paper_deleted,
     mark_paper_rebuild_pending,
     update_paper,
@@ -82,7 +93,9 @@ from app.vector_backend import resolve_vector_backend
 
 app = FastAPI(title="RAG GPT Kernel API", version="0.1.0")
 
-_raw_cors_origins = os.getenv("KERNEL_CORS_ALLOW_ORIGINS", "http://localhost:3000,http://127.0.0.1:3000")
+_raw_cors_origins = os.getenv(
+    "KERNEL_CORS_ALLOW_ORIGINS", "http://localhost:3000,http://127.0.0.1:3000"
+)
 _cors_origins = [item.strip() for item in _raw_cors_origins.split(",") if item.strip()]
 app.add_middleware(
     CORSMiddleware,
@@ -91,8 +104,12 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-ADMIN_UPSTREAM_TIMEOUT_SEC = max(1.0, float(os.getenv("KERNEL_ADMIN_UPSTREAM_TIMEOUT_SEC", "10")))
-STREAM_FALLBACK_CHUNK_SIZE = max(8, int(os.getenv("KERNEL_STREAM_FALLBACK_CHUNK_SIZE", "48")))
+ADMIN_UPSTREAM_TIMEOUT_SEC = max(
+    1.0, float(os.getenv("KERNEL_ADMIN_UPSTREAM_TIMEOUT_SEC", "10"))
+)
+STREAM_FALLBACK_CHUNK_SIZE = max(
+    8, int(os.getenv("KERNEL_STREAM_FALLBACK_CHUNK_SIZE", "48"))
+)
 LLM_DEBUG_TRACE_LIMIT = max(1, int(os.getenv("KERNEL_LLM_DEBUG_TRACE_LIMIT", "64")))
 _LLM_DEBUG_STORE_LOCK = threading.Lock()
 _LLM_DEBUG_STORE: dict[str, dict[str, Any]] = {}
@@ -103,11 +120,16 @@ class HistoryMessage(BaseModel):
     content: str
 
 
-def _chunk_stream_fallback_answer(text: str, *, chunk_size: int = STREAM_FALLBACK_CHUNK_SIZE) -> list[str]:
+def _chunk_stream_fallback_answer(
+    text: str, *, chunk_size: int = STREAM_FALLBACK_CHUNK_SIZE
+) -> list[str]:
     normalized_size = max(8, int(chunk_size))
     if not text:
         return [""]
-    return [text[index : index + normalized_size] for index in range(0, len(text), normalized_size)]
+    return [
+        text[index : index + normalized_size]
+        for index in range(0, len(text), normalized_size)
+    ]
 
 
 def _store_llm_debug_event(event: dict[str, Any]) -> None:
@@ -124,23 +146,37 @@ def _store_llm_debug_event(event: dict[str, Any]) -> None:
         "endpoint": str(event.get("endpoint") or "") or None,
         "transport": str(event.get("transport") or "") or None,
         "route_id": str(event.get("route_id") or "") or None,
-        "attempts_used": int(event.get("attempts_used")) if isinstance(event.get("attempts_used"), int) else None,
-        "elapsed_ms": int(event.get("elapsed_ms")) if isinstance(event.get("elapsed_ms"), int) else None,
+        "attempts_used": int(event.get("attempts_used"))
+        if isinstance(event.get("attempts_used"), int)
+        else None,
+        "elapsed_ms": int(event.get("elapsed_ms"))
+        if isinstance(event.get("elapsed_ms"), int)
+        else None,
         "reason": str(event.get("reason") or "") or None,
-        "status_code": int(event.get("status_code")) if isinstance(event.get("status_code"), int) else None,
+        "status_code": int(event.get("status_code"))
+        if isinstance(event.get("status_code"), int)
+        else None,
         "error_category": str(event.get("error_category") or "") or None,
         "fallback_reason": str(event.get("fallback_reason") or "") or None,
-        "first_token_latency_ms": int(event.get("first_token_latency_ms")) if isinstance(event.get("first_token_latency_ms"), int) else None,
-        "chunks_received": int(event.get("chunks_received")) if isinstance(event.get("chunks_received"), int) else None,
+        "first_token_latency_ms": int(event.get("first_token_latency_ms"))
+        if isinstance(event.get("first_token_latency_ms"), int)
+        else None,
+        "chunks_received": int(event.get("chunks_received"))
+        if isinstance(event.get("chunks_received"), int)
+        else None,
         "system_prompt": str(event.get("system_prompt") or "") or None,
         "user_prompt": str(event.get("user_prompt") or "") or None,
         "request_payload": str(event.get("request_payload") or "") or None,
         "response_payload": str(event.get("response_payload") or "") or None,
         "response_text": str(event.get("response_text") or "") or None,
-        "timestamp": datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z"),
+        "timestamp": datetime.now(timezone.utc)
+        .isoformat(timespec="seconds")
+        .replace("+00:00", "Z"),
     }
     with _LLM_DEBUG_STORE_LOCK:
-        bucket = _LLM_DEBUG_STORE.setdefault(trace_id, {"trace_id": trace_id, "records": []})
+        bucket = _LLM_DEBUG_STORE.setdefault(
+            trace_id, {"trace_id": trace_id, "records": []}
+        )
         bucket_records = list(bucket.get("records") or [])
         bucket_records.append(record)
         bucket["records"] = bucket_records[-LLM_DEBUG_TRACE_LIMIT:]
@@ -161,7 +197,9 @@ def _reconcile_unfinished_jobs_after_restart() -> int:
         metadata["recovered_at"] = cancelled_at
         error_payload = dict(record.error_payload or {})
         error_payload.setdefault("code", "JOB_INTERRUPTED_BY_RESTART")
-        error_payload.setdefault("message", "任务在服务重启后被中断，已自动标记为取消。")
+        error_payload.setdefault(
+            "message", "任务在服务重启后被中断，已自动标记为取消。"
+        )
         updated = record.model_copy(
             update={
                 "state": "cancelled",
@@ -477,11 +515,31 @@ _PIPELINE_STATUS_PATH = DATA_DIR / "processed" / "pipeline_status_latest.json"
 _ARTIFACT_INDEX = (
     ("indexes:bmp25", DATA_DIR / "indexes" / "bm25_index.json", "bm25-index", "index"),
     ("indexes:vec", DATA_DIR / "indexes" / "vec_index.json", "vector-index", "index"),
-    ("indexes:embed", DATA_DIR / "indexes" / "vec_index_embed.json", "embedding-index", "index"),
+    (
+        "indexes:embed",
+        DATA_DIR / "indexes" / "vec_index_embed.json",
+        "embedding-index",
+        "index",
+    ),
     ("processed:chunks", DATA_DIR / "processed" / "chunks.jsonl", "chunks", "import"),
-    ("processed:chunks_clean", DATA_DIR / "processed" / "chunks_clean.jsonl", "clean-chunks", "clean"),
-    ("processed:papers", DATA_DIR / "processed" / "papers.json", "papers-catalog", "import"),
-    ("processed:paper_summary", DATA_DIR / "processed" / "paper_summary.json", "paper-summary", "clean"),
+    (
+        "processed:chunks_clean",
+        DATA_DIR / "processed" / "chunks_clean.jsonl",
+        "clean-chunks",
+        "clean",
+    ),
+    (
+        "processed:papers",
+        DATA_DIR / "processed" / "papers.json",
+        "papers-catalog",
+        "import",
+    ),
+    (
+        "processed:paper_summary",
+        DATA_DIR / "processed" / "paper_summary.json",
+        "paper-summary",
+        "clean",
+    ),
     ("processed:graph", DATA_DIR / "processed" / "graph.json", "graph", "graph_build"),
 )
 _ARTIFACT_DEPENDENCIES: dict[str, tuple[str, ...]] = {
@@ -675,7 +733,10 @@ def _build_tool_provenance_sources(
     execution_trace = list((trace or {}).get("execution_trace") or [])
     if tool_name == "catalog_lookup":
         for row in execution_trace:
-            if not isinstance(row, dict) or str(row.get("action") or "") != "catalog_lookup":
+            if (
+                not isinstance(row, dict)
+                or str(row.get("action") or "") != "catalog_lookup"
+            ):
                 continue
             matched = int(row.get("matched_count", 0) or 0)
             selected = int(row.get("selected_count", 0) or 0)
@@ -743,7 +804,9 @@ def _build_sources_from_qa_report(qa_report: dict[str, Any]) -> list[SourceItem]
     for group in grouped:
         if not isinstance(group, dict):
             continue
-        paper_title = str(group.get("paper_title") or group.get("paper_id") or "Untitled source")
+        paper_title = str(
+            group.get("paper_title") or group.get("paper_id") or "Untitled source"
+        )
         evidence_rows = group.get("evidence", [])
         if not isinstance(evidence_rows, list):
             continue
@@ -762,7 +825,8 @@ def _build_sources_from_qa_report(qa_report: dict[str, Any]) -> list[SourceItem]
                     source_id=source_id,
                     title=paper_title,
                     snippet=str(row.get("quote", "")).strip(),
-                    locator=str(row.get("section_page", source_id)).strip() or source_id,
+                    locator=str(row.get("section_page", source_id)).strip()
+                    or source_id,
                     score=float(score) if isinstance(score, (int, float)) else 0.0,
                     provenance_type="citation",
                     citation_indexable=True,
@@ -771,7 +835,11 @@ def _build_sources_from_qa_report(qa_report: dict[str, Any]) -> list[SourceItem]
     return normalized
 
 
-def _build_qa_args(payload: KernelChatRequest, run_id: str, on_stream_delta: Callable[[str], None] | None) -> argparse.Namespace:
+def _build_qa_args(
+    payload: KernelChatRequest,
+    run_id: str,
+    on_stream_delta: Callable[[str], None] | None,
+) -> argparse.Namespace:
     qa_mode = _map_kernel_mode_to_qa_mode(payload.mode)
     config_path = str(payload.configPath or (CONFIGS_DIR / "default.yaml"))
     args = parse_args(
@@ -821,21 +889,35 @@ def _save_run_artifact(path: Path, payload: dict[str, Any]) -> None:
     path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
-def _merge_planner_runtime_observation(run_id: str, observation: dict[str, Any]) -> None:
+def _merge_planner_runtime_observation(
+    run_id: str, observation: dict[str, Any]
+) -> None:
     run_dir = Path(RUNS_DIR) / run_id
     planner = dict(observation.get("planner") or {})
     extra = {
         "planner_runtime_used": bool(observation.get("planner_runtime_used", True)),
         "planner_runtime_backend": observation.get("planner_runtime_backend"),
-        "planner_runtime_fallback": bool(observation.get("planner_runtime_fallback", False)),
-        "planner_runtime_fallback_reason": observation.get("planner_runtime_fallback_reason"),
-        "planner_runtime_passthrough": bool(observation.get("planner_runtime_passthrough", False)),
+        "planner_runtime_fallback": bool(
+            observation.get("planner_runtime_fallback", False)
+        ),
+        "planner_runtime_fallback_reason": observation.get(
+            "planner_runtime_fallback_reason"
+        ),
+        "planner_runtime_passthrough": bool(
+            observation.get("planner_runtime_passthrough", False)
+        ),
         # Backward-compatible aliases while consumers migrate off "shell" wording.
         "planner_shell_used": bool(observation.get("planner_runtime_used", True)),
         "planner_shell_backend": observation.get("planner_runtime_backend"),
-        "planner_shell_fallback": bool(observation.get("planner_runtime_fallback", False)),
-        "planner_shell_fallback_reason": observation.get("planner_runtime_fallback_reason"),
-        "planner_shell_passthrough": bool(observation.get("planner_runtime_passthrough", False)),
+        "planner_shell_fallback": bool(
+            observation.get("planner_runtime_fallback", False)
+        ),
+        "planner_shell_fallback_reason": observation.get(
+            "planner_runtime_fallback_reason"
+        ),
+        "planner_shell_passthrough": bool(
+            observation.get("planner_runtime_passthrough", False)
+        ),
         "runtime_contract_version": observation.get("runtime_contract_version"),
         "runtime_stable_fields": observation.get("runtime_stable_fields"),
         "runtime_envelope_fields": observation.get("runtime_envelope_fields"),
@@ -862,15 +944,21 @@ def _merge_planner_runtime_observation(run_id: str, observation: dict[str, Any])
         extra.setdefault("user_goal", planner.get("user_goal"))
         extra.setdefault("planner_source", planner.get("planner_source"))
         extra.setdefault("planner_fallback", planner.get("planner_fallback"))
-        extra.setdefault("planner_fallback_reason", planner.get("planner_fallback_reason"))
+        extra.setdefault(
+            "planner_fallback_reason", planner.get("planner_fallback_reason")
+        )
         extra.setdefault("planner_confidence", planner.get("planner_confidence"))
         extra.setdefault("primary_capability", planner.get("primary_capability"))
         extra.setdefault("strictness", planner.get("strictness"))
         extra.setdefault("decision_result", planner.get("decision_result"))
         extra.setdefault("knowledge_route", planner.get("knowledge_route"))
         extra.setdefault("research_mode", planner.get("research_mode"))
-        extra.setdefault("requires_clarification", planner.get("requires_clarification"))
-        extra.setdefault("selected_tools_or_skills", planner.get("selected_tools_or_skills"))
+        extra.setdefault(
+            "requires_clarification", planner.get("requires_clarification")
+        )
+        extra.setdefault(
+            "selected_tools_or_skills", planner.get("selected_tools_or_skills")
+        )
         extra.setdefault("action_plan", planner.get("action_plan"))
 
     for filename in ("run_trace.json", "qa_report.json"):
@@ -878,7 +966,9 @@ def _merge_planner_runtime_observation(run_id: str, observation: dict[str, Any])
         if not path.exists():
             continue
         payload = json.loads(path.read_text(encoding="utf-8"))
-        payload.update({key: value for key, value in extra.items() if value is not None})
+        payload.update(
+            {key: value for key, value in extra.items() if value is not None}
+        )
         _save_run_artifact(path, payload)
 
 
@@ -898,37 +988,61 @@ def _run_qa_pipeline(
 
     sources = _build_sources_from_qa_report(qa_report)
     trace_id = payload.traceId or f"trace_{run_id}"
-    return KernelChatResponse(traceId=trace_id, answer=answer, sources=sources, runId=run_id), run_id
+    return KernelChatResponse(
+        traceId=trace_id, answer=answer, sources=sources, runId=run_id
+    ), run_id
 
 
-def _run_qa_once(payload: KernelChatRequest, on_stream_delta: Callable[[str], None] | None = None) -> KernelChatResponse:
+def _run_qa_once(
+    payload: KernelChatRequest, on_stream_delta: Callable[[str], None] | None = None
+) -> KernelChatResponse:
     response, _ = _run_qa_pipeline(payload, on_stream_delta)
     return response
 
 
-def _derive_runtime_tool_fallback(trace: dict[str, Any], observation: dict[str, Any]) -> tuple[bool, str | None, str | None]:
+def _derive_runtime_tool_fallback(
+    trace: dict[str, Any], observation: dict[str, Any]
+) -> tuple[bool, str | None, str | None]:
     existing_flag = observation.get("tool_fallback")
     existing_reason = observation.get("tool_fallback_reason")
     existing_failed_tool = observation.get("failed_tool")
     if existing_flag:
-        return bool(existing_flag), (
-            str(existing_reason) if existing_reason is not None else None
-        ), (str(existing_failed_tool) if existing_failed_tool is not None else None)
+        return (
+            bool(existing_flag),
+            (str(existing_reason) if existing_reason is not None else None),
+            (str(existing_failed_tool) if existing_failed_tool is not None else None),
+        )
 
     short_circuit = dict(trace.get("short_circuit") or {})
     if bool(short_circuit.get("triggered")):
-        return True, (
-            str(short_circuit.get("reason")) if short_circuit.get("reason") is not None else "short_circuit"
-        ), (str(short_circuit.get("step")) if short_circuit.get("step") is not None else None)
+        return (
+            True,
+            (
+                str(short_circuit.get("reason"))
+                if short_circuit.get("reason") is not None
+                else "short_circuit"
+            ),
+            (
+                str(short_circuit.get("step"))
+                if short_circuit.get("step") is not None
+                else None
+            ),
+        )
 
     execution_trace = list(trace.get("execution_trace") or [])
     for row in execution_trace:
         if not isinstance(row, dict):
             continue
         if str(row.get("state") or "").strip() == "short_circuit":
-            return True, (
-                str(row.get("short_circuit_reason")) if row.get("short_circuit_reason") is not None else "short_circuit"
-            ), (str(row.get("action")) if row.get("action") is not None else None)
+            return (
+                True,
+                (
+                    str(row.get("short_circuit_reason"))
+                    if row.get("short_circuit_reason") is not None
+                    else "short_circuit"
+                ),
+                (str(row.get("action")) if row.get("action") is not None else None),
+            )
 
     return False, None, None
 
@@ -943,7 +1057,9 @@ def _build_runtime_tool_results(
     trace: dict[str, Any] | None = None,
     response: KernelChatResponse | None = None,
 ) -> list[dict[str, Any]]:
-    normalized_calls = [dict(item) for item in list(tool_calls or []) if isinstance(item, dict)]
+    normalized_calls = [
+        dict(item) for item in list(tool_calls or []) if isinstance(item, dict)
+    ]
     if not normalized_calls:
         return []
 
@@ -953,7 +1069,12 @@ def _build_runtime_tool_results(
 
     short_circuit = dict((trace or {}).get("short_circuit") or {})
     if bool(short_circuit.get("triggered")):
-        short_circuit_tool = str(short_circuit.get("step") or failed_tool or normalized_calls[0].get("tool_name") or "")
+        short_circuit_tool = str(
+            short_circuit.get("step")
+            or failed_tool
+            or normalized_calls[0].get("tool_name")
+            or ""
+        )
         short_circuit_reason = str(short_circuit.get("reason") or "short_circuit")
         failure_type = "precondition_failed"
         user_safe_message = short_circuit_reason
@@ -963,9 +1084,15 @@ def _build_runtime_tool_results(
         return [
             build_tool_result_envelope(
                 tool_call,
-                status="clarify_required" if tool_call.get("tool_name") == short_circuit_tool else "skipped",
+                status="clarify_required"
+                if tool_call.get("tool_name") == short_circuit_tool
+                else "skipped",
                 output=(
-                    {"clarify_questions": list((trace or {}).get("clarify_questions") or [])}
+                    {
+                        "clarify_questions": list(
+                            (trace or {}).get("clarify_questions") or []
+                        )
+                    }
                     if tool_call.get("tool_name") == short_circuit_tool
                     else {}
                 ),
@@ -1022,11 +1149,19 @@ def _build_runtime_tool_results(
         if response is not None and status == "succeeded":
             observability["trace_id"] = response.traceId
             observability["source_count"] = len(response.sources)
-            sources_payload = [_serialize_source_item(item) for item in response.sources if item.provenance_type == "citation"]
-        sources_payload.extend(_build_tool_provenance_sources(tool_name, trace=trace, response=response))
+            sources_payload = [
+                _serialize_source_item(item)
+                for item in response.sources
+                if item.provenance_type == "citation"
+            ]
+        sources_payload.extend(
+            _build_tool_provenance_sources(tool_name, trace=trace, response=response)
+        )
         artifacts_payload = []
         for artifact_name in list(tool_call.get("produces") or []):
-            artifacts_payload.append({"artifact_name": artifact_name, "available": status == "succeeded"})
+            artifacts_payload.append(
+                {"artifact_name": artifact_name, "available": status == "succeeded"}
+            )
         results.append(
             build_tool_result_envelope(
                 tool_call,
@@ -1066,7 +1201,11 @@ def _planner_runtime_route_executor(
         "capability_registry": None,
         "tool_registry_entries": None,
         "tool_calls": list(tool_calls or []),
-        "tool_results": [dict(item) for item in list(prior_tool_results or []) if isinstance(item, dict)],
+        "tool_results": [
+            dict(item)
+            for item in list(prior_tool_results or [])
+            if isinstance(item, dict)
+        ],
         "selected_path": selected_path,
         "planner": {
             "decision_version": getattr(planner_result, "decision_version", None),
@@ -1074,29 +1213,41 @@ def _planner_runtime_route_executor(
             "planner_used": getattr(planner_result, "planner_used", None),
             "planner_source": getattr(planner_result, "planner_source", None),
             "planner_fallback": getattr(planner_result, "planner_fallback", None),
-            "planner_fallback_reason": getattr(planner_result, "planner_fallback_reason", None),
+            "planner_fallback_reason": getattr(
+                planner_result, "planner_fallback_reason", None
+            ),
             "planner_confidence": getattr(planner_result, "planner_confidence", None),
             "primary_capability": getattr(planner_result, "primary_capability", None),
             "strictness": getattr(planner_result, "strictness", None),
             "decision_result": getattr(planner_result, "decision_result", None),
             "knowledge_route": getattr(planner_result, "knowledge_route", None),
             "research_mode": getattr(planner_result, "research_mode", None),
-            "requires_clarification": getattr(planner_result, "requires_clarification", None),
-            "selected_tools_or_skills": getattr(planner_result, "selected_tools_or_skills", None),
+            "requires_clarification": getattr(
+                planner_result, "requires_clarification", None
+            ),
+            "selected_tools_or_skills": getattr(
+                planner_result, "selected_tools_or_skills", None
+            ),
             "action_plan": getattr(planner_result, "action_plan", None),
         },
     }
     try:
         trace = _load_run_trace(run_id)
         observation["planner_runtime_backend"] = (
-            "langgraph" if trace.get("planner_runtime_used") is None else trace.get("planner_runtime_backend", "langgraph")
+            "langgraph"
+            if trace.get("planner_runtime_used") is None
+            else trace.get("planner_runtime_backend", "langgraph")
         )
         observation["execution_trace"] = trace.get("execution_trace", [])
-        observation["short_circuit"] = trace.get("short_circuit", {"triggered": False, "reason": None, "step": None})
+        observation["short_circuit"] = trace.get(
+            "short_circuit", {"triggered": False, "reason": None, "step": None}
+        )
         observation["truncated"] = bool(trace.get("truncated", False))
         observation["capability_registry"] = trace.get("capability_registry")
         observation["tool_registry_entries"] = trace.get("tool_registry_entries")
-        tool_fallback, tool_fallback_reason, failed_tool = _derive_runtime_tool_fallback(trace, observation)
+        tool_fallback, tool_fallback_reason, failed_tool = (
+            _derive_runtime_tool_fallback(trace, observation)
+        )
         observation["tool_fallback"] = tool_fallback
         observation["tool_fallback_reason"] = tool_fallback_reason
         observation["failed_tool"] = failed_tool
@@ -1109,10 +1260,16 @@ def _planner_runtime_route_executor(
             trace=trace,
             response=response,
         )
-        observation["tool_results"].extend(current_results[len(observation["tool_results"]) :])
+        observation["tool_results"].extend(
+            current_results[len(observation["tool_results"]) :]
+        )
     except FileNotFoundError:
         observation["execution_trace"] = []
-        observation["short_circuit"] = {"triggered": False, "reason": None, "step": None}
+        observation["short_circuit"] = {
+            "triggered": False,
+            "reason": None,
+            "step": None,
+        }
         observation["truncated"] = False
         observation["tool_fallback"] = bool(observation.get("tool_fallback", False))
         observation["tool_fallback_reason"] = observation.get("tool_fallback_reason")
@@ -1125,7 +1282,9 @@ def _planner_runtime_route_executor(
             failed_tool=observation.get("failed_tool"),
             response=response,
         )
-        observation["tool_results"].extend(current_results[len(observation["tool_results"]) :])
+        observation["tool_results"].extend(
+            current_results[len(observation["tool_results"]) :]
+        )
     if record_runtime_observation:
         _merge_planner_runtime_observation(run_id, observation)
     return response
@@ -1147,9 +1306,13 @@ def _run_planner_runtime_once(
 def _run_planner_shell_once(
     payload: KernelChatRequest, on_stream_delta: Callable[[str], None] | None = None
 ) -> KernelChatResponse:
-    _, _, planner_state = _load_planner_config_state(payload.configPath or (CONFIGS_DIR / "default.yaml"))
+    _, _, planner_state = _load_planner_config_state(
+        payload.configPath or (CONFIGS_DIR / "default.yaml")
+    )
     if not bool(planner_state.get("formal_chat_available")):
-        raise HTTPException(status_code=503, detail=_planner_block_detail(planner_state))
+        raise HTTPException(
+            status_code=503, detail=_planner_block_detail(planner_state)
+        )
     return _run_planner_runtime_once(payload, on_stream_delta)
 
 
@@ -1180,12 +1343,22 @@ def _build_agent_execution_stream_events(
                 "mode": mode,
                 "timestamp": _agent_event_timestamp(),
                 "phase": "planning",
-                "decisionResult": str(planner.get("decision_result") or "controlled_terminate"),
-                "selectedPath": str(observation.get("selected_path") or "controlled_terminate"),
+                "decisionResult": str(
+                    planner.get("decision_result") or "controlled_terminate"
+                ),
+                "selectedPath": str(
+                    observation.get("selected_path") or "controlled_terminate"
+                ),
                 "selectedToolsOrSkills": selected_tools,
                 "plannerSource": str(planner.get("planner_source") or "fallback"),
-                "plannerSourceMode": str(observation.get("planner_source_mode") or "llm_primary"),
-                "executionSource": str(observation.get("planner_execution_source") or planner.get("planner_source") or "fallback"),
+                "plannerSourceMode": str(
+                    observation.get("planner_source_mode") or "llm_primary"
+                ),
+                "executionSource": str(
+                    observation.get("planner_execution_source")
+                    or planner.get("planner_source")
+                    or "fallback"
+                ),
             },
         }
     ]
@@ -1193,7 +1366,9 @@ def _build_agent_execution_stream_events(
     tool_results_by_call: dict[str, dict[str, Any]] = {}
     for result in list(observation.get("tool_results") or []):
         if isinstance(result, dict):
-            call_id = str(result.get("call_id") or result.get("tool_call_id") or "").strip()
+            call_id = str(
+                result.get("call_id") or result.get("tool_call_id") or ""
+            ).strip()
             if call_id:
                 tool_results_by_call[call_id] = result
 
@@ -1226,7 +1401,10 @@ def _build_agent_execution_stream_events(
 
         failure = dict(result.get("failure") or {})
         failure_type = str(failure.get("failure_type") or "").strip()
-        result_status = str(result.get("status") or result.get("tool_status") or "failed").strip() or "failed"
+        result_status = (
+            str(result.get("status") or result.get("tool_status") or "failed").strip()
+            or "failed"
+        )
         should_emit_running = not (
             result_status in {"failed", "blocked", "skipped"}
             and failure_type in {"missing_dependencies", "unsupported_tool"}
@@ -1259,7 +1437,9 @@ def _build_agent_execution_stream_events(
             result_kind = "failed"
 
         warnings = result.get("warnings")
-        warning_message = warnings[0] if isinstance(warnings, list) and warnings else None
+        warning_message = (
+            warnings[0] if isinstance(warnings, list) and warnings else None
+        )
         message = str(
             failure.get("user_safe_message")
             or failure.get("message")
@@ -1295,7 +1475,9 @@ def _build_agent_execution_stream_events(
         ).strip()
     elif bool(observation.get("tool_fallback", False)):
         fallback_scope = "tool"
-        fallback_reason = str(observation.get("tool_fallback_reason") or "tool_fallback").strip()
+        fallback_reason = str(
+            observation.get("tool_fallback_reason") or "tool_fallback"
+        ).strip()
     elif str(planner.get("decision_result") or "").strip() == "controlled_terminate":
         fallback_scope = "planner"
         fallback_reason = str(
@@ -1310,9 +1492,14 @@ def _build_agent_execution_stream_events(
         fallback_message = ""
         if fallback_scope == "tool":
             for result in tool_results_by_call.values():
-                if str(result.get("tool_name") or "").strip() == str(failed_tool or "").strip():
+                if (
+                    str(result.get("tool_name") or "").strip()
+                    == str(failed_tool or "").strip()
+                ):
                     failure = dict(result.get("failure") or {})
-                    fallback_message = str(failure.get("user_safe_message") or failure.get("message") or "").strip()
+                    fallback_message = str(
+                        failure.get("user_safe_message") or failure.get("message") or ""
+                    ).strip()
                     break
         events.append(
             {
@@ -1325,7 +1512,8 @@ def _build_agent_execution_stream_events(
                     "fallbackScope": fallback_scope,
                     "reasonCode": fallback_reason,
                     "failedTool": str(failed_tool).strip() if failed_tool else None,
-                    "continues": str(observation.get("selected_path") or "").strip() not in {"controlled_terminate", "planner_runtime_clarify"},
+                    "continues": str(observation.get("selected_path") or "").strip()
+                    not in {"controlled_terminate", "planner_runtime_clarify"},
                     "message": fallback_message or None,
                 },
             }
@@ -1336,7 +1524,9 @@ def _build_agent_execution_stream_events(
 
 def _build_streaming_chat_response(
     payload: KernelChatRequest,
-    runner: Callable[[KernelChatRequest, Callable[[str], None] | None], KernelChatResponse],
+    runner: Callable[
+        [KernelChatRequest, Callable[[str], None] | None], KernelChatResponse
+    ],
 ) -> StreamingResponse:
     trace_id = payload.traceId or f"trace_{uuid4().hex}"
 
@@ -1345,7 +1535,9 @@ def _build_streaming_chat_response(
         streamed_chunks = 0
 
         def send_sse(event_name: str, data: dict[str, Any]) -> str:
-            return f"event: {event_name}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
+            return (
+                f"event: {event_name}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
+            )
 
         def on_delta(piece: str) -> None:
             nonlocal streamed_chunks
@@ -1375,7 +1567,10 @@ def _build_streaming_chat_response(
                             "type": "sources",
                             "traceId": trace_id,
                             "mode": payload.mode,
-                            "sources": [_serialize_source_item(item) for item in response.sources],
+                            "sources": [
+                                _serialize_source_item(item)
+                                for item in response.sources
+                            ],
                             "runId": getattr(response, "runId", None),
                         },
                     }
@@ -1454,7 +1649,9 @@ def _build_streaming_chat_response(
     return StreamingResponse(event_stream(), media_type="text/event-stream")
 
 
-def _build_planner_streaming_chat_response(payload: KernelChatRequest) -> StreamingResponse:
+def _build_planner_streaming_chat_response(
+    payload: KernelChatRequest,
+) -> StreamingResponse:
     trace_id = payload.traceId or f"trace_{uuid4().hex}"
 
     def event_stream() -> Iterator[str]:
@@ -1462,7 +1659,9 @@ def _build_planner_streaming_chat_response(payload: KernelChatRequest) -> Stream
         streamed_chunks = 0
 
         def send_sse(event_name: str, data: dict[str, Any]) -> str:
-            return f"event: {event_name}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
+            return (
+                f"event: {event_name}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
+            )
 
         def on_delta(piece: str) -> None:
             nonlocal streamed_chunks
@@ -1483,7 +1682,9 @@ def _build_planner_streaming_chat_response(payload: KernelChatRequest) -> Stream
 
         def worker() -> None:
             try:
-                _, _, planner_state = _load_planner_config_state(payload.configPath or (CONFIGS_DIR / "default.yaml"))
+                _, _, planner_state = _load_planner_config_state(
+                    payload.configPath or (CONFIGS_DIR / "default.yaml")
+                )
                 if not bool(planner_state.get("formal_chat_available")):
                     queue.put(
                         {
@@ -1506,7 +1707,8 @@ def _build_planner_streaming_chat_response(payload: KernelChatRequest) -> Stream
                                 "type": "error",
                                 "traceId": trace_id,
                                 "code": "PLANNER_SYSTEM_BLOCKED",
-                                "message": planner_state.get("reason_message") or "Planner Runtime 当前不可服务。",
+                                "message": planner_state.get("reason_message")
+                                or "Planner Runtime 当前不可服务。",
                             },
                         }
                     )
@@ -1522,7 +1724,9 @@ def _build_planner_streaming_chat_response(payload: KernelChatRequest) -> Stream
                 response = result["response"]
                 observation = result.get("observation")
                 response_trace_id = getattr(response, "traceId", None) or trace_id
-                for agent_event in _build_agent_execution_stream_events(response_trace_id, payload.mode, observation):
+                for agent_event in _build_agent_execution_stream_events(
+                    response_trace_id, payload.mode, observation
+                ):
                     queue.put(agent_event)
                 queue.put(
                     {
@@ -1531,7 +1735,10 @@ def _build_planner_streaming_chat_response(payload: KernelChatRequest) -> Stream
                             "type": "sources",
                             "traceId": response_trace_id,
                             "mode": payload.mode,
-                            "sources": [_serialize_source_item(item) for item in response.sources],
+                            "sources": [
+                                _serialize_source_item(item)
+                                for item in response.sources
+                            ],
                             "runId": getattr(response, "runId", None),
                         },
                     }
@@ -1614,20 +1821,28 @@ def _normalize_admin_api_base(value: str) -> str:
     try:
         return normalize_api_base(value)
     except ValueError as exc:
-        raise HTTPException(status_code=400, detail={"code": "INVALID_PARAMS", "message": str(exc)}) from exc
+        raise HTTPException(
+            status_code=400, detail={"code": "INVALID_PARAMS", "message": str(exc)}
+        ) from exc
 
 
 def _extract_models_from_payload(payload: Any) -> tuple[list[AdminModelInfo], int]:
     if not isinstance(payload, dict):
         raise HTTPException(
             status_code=502,
-            detail={"code": "UPSTREAM_INVALID_RESPONSE", "message": "upstream payload must be a JSON object"},
+            detail={
+                "code": "UPSTREAM_INVALID_RESPONSE",
+                "message": "upstream payload must be a JSON object",
+            },
         )
     rows = payload.get("data", [])
     if not isinstance(rows, list):
         raise HTTPException(
             status_code=502,
-            detail={"code": "UPSTREAM_INVALID_RESPONSE", "message": "upstream payload.data must be a list"},
+            detail={
+                "code": "UPSTREAM_INVALID_RESPONSE",
+                "message": "upstream payload.data must be a list",
+            },
         )
     result: list[AdminModelInfo] = []
     seen: set[str] = set()
@@ -1661,7 +1876,14 @@ def _build_stage_payload(
             stage_payload.model is not None,
         )
     )
-    has_flat = any((provider is not None, api_base is not None, api_key is not None, model is not None))
+    has_flat = any(
+        (
+            provider is not None,
+            api_base is not None,
+            api_key is not None,
+            model is not None,
+        )
+    )
     if not has_nested and not has_flat:
         return None
 
@@ -1670,8 +1892,12 @@ def _build_stage_payload(
     selected_api_key = str(api_key or "").strip()
     selected_model = str(model or "").strip()
     if has_nested and stage_payload is not None:
-        selected_provider = str(stage_payload.provider or "").strip() or selected_provider
-        selected_api_base = str(stage_payload.api_base or "").strip() or selected_api_base
+        selected_provider = (
+            str(stage_payload.provider or "").strip() or selected_provider
+        )
+        selected_api_base = (
+            str(stage_payload.api_base or "").strip() or selected_api_base
+        )
         selected_api_key = str(stage_payload.api_key or "").strip() or selected_api_key
         selected_model = str(stage_payload.model or "").strip() or selected_model
 
@@ -1682,7 +1908,10 @@ def _build_stage_payload(
     if not selected_model:
         raise ValueError(f"{stage_name}.model is required")
     return {
-        "provider": normalize_provider_alias(selected_provider or default_provider, preserve_native=(stage_name == "rerank"))
+        "provider": normalize_provider_alias(
+            selected_provider or default_provider,
+            preserve_native=(stage_name == "rerank"),
+        )
         or default_provider,
         "api_base": _normalize_admin_api_base(selected_api_base),
         "api_key": selected_api_key,
@@ -1692,7 +1921,14 @@ def _build_stage_payload(
 
 def _extract_stage_from_error_message(message: str) -> str | None:
     normalized = str(message or "").strip().lower()
-    for stage in ("answer", "embedding", "rerank", "rewrite", "graph_entity", "sufficiency_judge"):
+    for stage in (
+        "answer",
+        "embedding",
+        "rerank",
+        "rewrite",
+        "graph_entity",
+        "sufficiency_judge",
+    ):
         if normalized.startswith(f"{stage}."):
             return stage
     return None
@@ -1702,16 +1938,28 @@ def _summarize_runtime_source(source_map: dict[str, str] | None) -> str:
     if not isinstance(source_map, dict):
         return "default"
     ordered = ("provider", "api_base", "model", "api_key")
-    values = [str(source_map.get(key, "")).strip() for key in ordered if str(source_map.get(key, "")).strip()]
+    values = [
+        str(source_map.get(key, "")).strip()
+        for key in ordered
+        if str(source_map.get(key, "")).strip()
+    ]
     for preferred in ("env", "runtime", "default"):
         if preferred in values:
             return preferred
     return "default"
 
 
-def _runtime_stage_entry(raw: Any, *, effective_source: dict[str, str] | None = None) -> dict[str, Any]:
+def _runtime_stage_entry(
+    raw: Any, *, effective_source: dict[str, str] | None = None
+) -> dict[str, Any]:
     if not isinstance(raw, dict):
-        return {"provider": "", "model": "", "configured": False, "source": "default", "source_label": runtime_source_label("default")}
+        return {
+            "provider": "",
+            "model": "",
+            "configured": False,
+            "source": "default",
+            "source_label": runtime_source_label("default"),
+        }
     provider = str(raw.get("provider", "")).strip()
     model = str(raw.get("model", "")).strip()
     source = _summarize_runtime_source(effective_source)
@@ -1721,7 +1969,9 @@ def _runtime_stage_entry(raw: Any, *, effective_source: dict[str, str] | None = 
         "model": model,
         "configured": bool(provider and model),
         "source": source,
-        "source_label": runtime_source_label(source),  # 中文文案统一在后端和前端共享同一语义。
+        "source_label": runtime_source_label(
+            source
+        ),  # 中文文案统一在后端和前端共享同一语义。
         "effective_source": effective_source or {},
     }
 
@@ -1735,7 +1985,9 @@ def _mask_value(field: str, value: Any) -> str:
     return text
 
 
-def _marker_llm_runtime_entry(raw: Any, effective_source: dict[str, str] | None = None) -> dict[str, Any]:
+def _marker_llm_runtime_entry(
+    raw: Any, effective_source: dict[str, str] | None = None
+) -> dict[str, Any]:
     if not isinstance(raw, dict):
         raw = {}
     use_llm = bool(raw.get("use_llm"))
@@ -1743,7 +1995,9 @@ def _marker_llm_runtime_entry(raw: Any, effective_source: dict[str, str] | None 
     required_errors: list[str] = []
     try:
         _, field_errors = validate_marker_llm_payload(raw)
-        required_errors = [f"{field}: {message}" for field, message in field_errors.items()]
+        required_errors = [
+            f"{field}: {message}" for field, message in field_errors.items()
+        ]
     except ValueError as exc:
         required_errors = [str(exc)]
 
@@ -1760,7 +2014,13 @@ def _marker_llm_runtime_entry(raw: Any, effective_source: dict[str, str] | None 
     ):
         value = _mask_value(field, raw.get(field))
         if value:
-            summary_fields.append({"field": field, "value": value, "source": (effective_source or {}).get(field, "default")})
+            summary_fields.append(
+                {
+                    "field": field,
+                    "value": value,
+                    "source": (effective_source or {}).get(field, "default"),
+                }
+            )
 
     configured = use_llm and not required_errors and bool(llm_service)
     status = "disabled"
@@ -1820,23 +2080,42 @@ def _artifact_status_from_path(
 ) -> tuple[str, str | None, int | None, str | None]:
     if not path.exists():
         return "missing", "文件不存在", None, None
-    updated_at = datetime.fromtimestamp(path.stat().st_mtime, timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
+    updated_at = (
+        datetime.fromtimestamp(path.stat().st_mtime, timezone.utc)
+        .isoformat(timespec="seconds")
+        .replace("+00:00", "Z")
+    )
     size_bytes = int(path.stat().st_size)
     file_dt = _parse_iso_utc(updated_at)
     if file_dt is not None:
         for dependency_path in dependency_paths:
             if not dependency_path.exists():
                 continue
-            dependency_updated_at = datetime.fromtimestamp(dependency_path.stat().st_mtime, timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
+            dependency_updated_at = (
+                datetime.fromtimestamp(dependency_path.stat().st_mtime, timezone.utc)
+                .isoformat(timespec="seconds")
+                .replace("+00:00", "Z")
+            )
             dependency_dt = _parse_iso_utc(dependency_updated_at)
             if dependency_dt is not None and file_dt < dependency_dt:
-                return "stale", "产物早于上游依赖，建议检查是否需要重建", size_bytes, updated_at
+                return (
+                    "stale",
+                    "产物早于上游依赖，建议检查是否需要重建",
+                    size_bytes,
+                    updated_at,
+                )
     return "healthy", "产物可用", size_bytes, updated_at
 
 
-def _build_marker_artifacts(*, latest_updated_at: str | None = None, stage_updated_at: dict[str, str] | None = None) -> list[MarkerArtifactEntryResponse]:
+def _build_marker_artifacts(
+    *,
+    latest_updated_at: str | None = None,
+    stage_updated_at: dict[str, str] | None = None,
+) -> list[MarkerArtifactEntryResponse]:
     artifacts: list[MarkerArtifactEntryResponse] = []
-    path_by_key = {key: path for key, path, _artifact_type, _related_stage in _ARTIFACT_INDEX}
+    path_by_key = {
+        key: path for key, path, _artifact_type, _related_stage in _ARTIFACT_INDEX
+    }
     for key, path, artifact_type, related_stage in _ARTIFACT_INDEX:
         group = "indexes" if key.startswith("indexes:") else "processed"
         dependency_paths = tuple(
@@ -1876,7 +2155,9 @@ def _build_marker_artifacts(*, latest_updated_at: str | None = None, stage_updat
     return artifacts
 
 
-def _summarize_marker_artifacts(artifacts: list[MarkerArtifactEntryResponse]) -> dict[str, Any]:
+def _summarize_marker_artifacts(
+    artifacts: list[MarkerArtifactEntryResponse],
+) -> dict[str, Any]:
     groups: dict[str, list[dict[str, Any]]] = {"indexes": [], "processed": []}
     counts = {"healthy": 0, "missing": 0, "stale": 0}
     for artifact in artifacts:
@@ -1890,9 +2171,16 @@ def _extract_ingest_degradation(payload: dict[str, Any]) -> dict[str, Any]:
     if not isinstance(rows, list):
         rows = []
     fallback_rows = [
-        row for row in rows if isinstance(row, dict) and str(row.get("parser_mode", "")).strip() == "degraded_from_marker"
+        row
+        for row in rows
+        if isinstance(row, dict)
+        and str(row.get("parser_mode", "")).strip() == "degraded_from_marker"
     ]
-    controlled_skip_rows = [row for row in rows if isinstance(row, dict) and bool(row.get("controlled_skip"))]
+    controlled_skip_rows = [
+        row
+        for row in rows
+        if isinstance(row, dict) and bool(row.get("controlled_skip"))
+    ]
     if not fallback_rows and not controlled_skip_rows:
         return {
             "degraded": False,
@@ -1902,7 +2190,10 @@ def _extract_ingest_degradation(payload: dict[str, Any]) -> dict[str, Any]:
         }
     if fallback_rows:
         first = fallback_rows[0]
-        reason = str(first.get("parser_fallback_reason", "")).strip() or "marker parser fallback"
+        reason = (
+            str(first.get("parser_fallback_reason", "")).strip()
+            or "marker parser fallback"
+        )
         stage = str(first.get("parser_fallback_stage", "")).strip() or "unknown"
         return {
             "degraded": True,
@@ -1913,7 +2204,8 @@ def _extract_ingest_degradation(payload: dict[str, Any]) -> dict[str, Any]:
     first_skip = controlled_skip_rows[0]
     return {
         "degraded": False,
-        "fallback_reason": str(first_skip.get("controlled_skip_reason", "")).strip() or "controlled skip",
+        "fallback_reason": str(first_skip.get("controlled_skip_reason", "")).strip()
+        or "controlled skip",
         "fallback_path": f"controlled-skip ({str(first_skip.get('file_ext', '')).strip() or 'unknown'})",
         "confidence_note": "最近一次导入包含按类型受控跳过的文件，请检查支持范围或文件内容。",
     }
@@ -1939,15 +2231,31 @@ def _extract_parser_diagnostics(payload: dict[str, Any]) -> list[dict[str, Any]]
                 "base_parser": str(row.get("base_parser", "")).strip() or None,
                 "enhanced_parser": str(row.get("enhanced_parser", "")).strip() or None,
                 "controlled_skip": bool(row.get("controlled_skip")),
-                "controlled_skip_reason": str(row.get("controlled_skip_reason", "")).strip() or None,
+                "controlled_skip_reason": str(
+                    row.get("controlled_skip_reason", "")
+                ).strip()
+                or None,
                 "parser_fallback": bool(row.get("parser_fallback")),
-                "parser_fallback_stage": str(row.get("parser_fallback_stage", "")).strip() or None,
-                "parser_fallback_reason": str(row.get("parser_fallback_reason", "")).strip() or None,
-                "marker_attempt_duration_sec": round(float(marker_timing.get("attempt_duration_sec", 0.0) or 0.0), 3),
-                "marker_stage_timings": marker_timing.get("stage_timings", {}) if isinstance(marker_timing.get("stage_timings"), dict) else {},
+                "parser_fallback_stage": str(
+                    row.get("parser_fallback_stage", "")
+                ).strip()
+                or None,
+                "parser_fallback_reason": str(
+                    row.get("parser_fallback_reason", "")
+                ).strip()
+                or None,
+                "marker_attempt_duration_sec": round(
+                    float(marker_timing.get("attempt_duration_sec", 0.0) or 0.0), 3
+                ),
+                "marker_stage_timings": marker_timing.get("stage_timings", {})
+                if isinstance(marker_timing.get("stage_timings"), dict)
+                else {},
             }
         )
-    diagnostics.sort(key=lambda item: float(item.get("marker_attempt_duration_sec", 0.0) or 0.0), reverse=True)
+    diagnostics.sort(
+        key=lambda item: float(item.get("marker_attempt_duration_sec", 0.0) or 0.0),
+        reverse=True,
+    )
     return diagnostics[:10]
 
 
@@ -1975,22 +2283,38 @@ def _build_runtime_status(
         reasons.append("answer stage is not configured")
         return "BLOCKED", reasons
     if not isinstance(planner, dict) or not bool(planner.get("formal_chat_available")):
-        reasons.append(str(planner.get("block_reason_message") or planner.get("block_reason_code") or "planner runtime is blocked"))
+        reasons.append(
+            str(
+                planner.get("block_reason_message")
+                or planner.get("block_reason_code")
+                or "planner runtime is blocked"
+            )
+        )
         return "BLOCKED", reasons
 
     for stage in ("rerank", "rewrite"):
         stage_payload = llm.get(stage, {})
-        if not isinstance(stage_payload, dict) or not bool(stage_payload.get("configured")):
+        if not isinstance(stage_payload, dict) or not bool(
+            stage_payload.get("configured")
+        ):
             reasons.append(f"{stage} stage is not configured")
 
-    default_fallback_fields = sorted([field for field, source in marker_source.items() if source == "default"])
+    default_fallback_fields = sorted(
+        [field for field, source in marker_source.items() if source == "default"]
+    )
     if default_fallback_fields:
-        reasons.append(f"marker tuning fallback to default: {', '.join(default_fallback_fields)}")
+        reasons.append(
+            f"marker tuning fallback to default: {', '.join(default_fallback_fields)}"
+        )
     if bool(marker_llm.get("use_llm")) and not bool(marker_llm.get("configured")):
         reasons.append("marker llm service is enabled but configuration is incomplete")
     if bool(ingest_degradation.get("degraded")):
-        reasons.append(str(ingest_degradation.get("fallback_reason") or "marker ingest degraded"))
-    artifact_counts = artifact_summary.get("counts", {}) if isinstance(artifact_summary, dict) else {}
+        reasons.append(
+            str(ingest_degradation.get("fallback_reason") or "marker ingest degraded")
+        )
+    artifact_counts = (
+        artifact_summary.get("counts", {}) if isinstance(artifact_summary, dict) else {}
+    )
     missing = int(artifact_counts.get("missing", 0) or 0)
     stale = int(artifact_counts.get("stale", 0) or 0)
     if missing > 0:
@@ -2010,7 +2334,10 @@ async def detect_models(payload: AdminDetectModelsRequest) -> AdminDetectModelsR
     api_base = _normalize_admin_api_base(payload.api_base)
     api_key = payload.api_key.strip()
     if not api_key:
-        raise HTTPException(status_code=400, detail={"code": "INVALID_PARAMS", "message": "api_key is required"})
+        raise HTTPException(
+            status_code=400,
+            detail={"code": "INVALID_PARAMS", "message": "api_key is required"},
+        )
 
     endpoint = f"{api_base}/models"
     headers = {"Authorization": f"Bearer {api_key}"}
@@ -2020,18 +2347,27 @@ async def detect_models(payload: AdminDetectModelsRequest) -> AdminDetectModelsR
     except httpx.TimeoutException as exc:
         raise HTTPException(
             status_code=504,
-            detail={"code": "UPSTREAM_TIMEOUT", "message": f"timed out while requesting {endpoint}"},
+            detail={
+                "code": "UPSTREAM_TIMEOUT",
+                "message": f"timed out while requesting {endpoint}",
+            },
         ) from exc
     except httpx.RequestError as exc:
         raise HTTPException(
             status_code=502,
-            detail={"code": "UPSTREAM_NETWORK_ERROR", "message": f"failed to reach upstream endpoint: {exc}"},
+            detail={
+                "code": "UPSTREAM_NETWORK_ERROR",
+                "message": f"failed to reach upstream endpoint: {exc}",
+            },
         ) from exc
 
     if response.status_code in {401, 403}:
         raise HTTPException(
             status_code=401,
-            detail={"code": "AUTH_FAILED", "message": "authentication failed against upstream models endpoint"},
+            detail={
+                "code": "AUTH_FAILED",
+                "message": "authentication failed against upstream models endpoint",
+            },
         )
     if response.status_code >= 400:
         raise HTTPException(
@@ -2046,7 +2382,10 @@ async def detect_models(payload: AdminDetectModelsRequest) -> AdminDetectModelsR
     except ValueError as exc:
         raise HTTPException(
             status_code=502,
-            detail={"code": "UPSTREAM_INVALID_RESPONSE", "message": "upstream returned invalid JSON payload"},
+            detail={
+                "code": "UPSTREAM_INVALID_RESPONSE",
+                "message": "upstream returned invalid JSON payload",
+            },
         ) from exc
 
     models, raw_count = _extract_models_from_payload(upstream_payload)
@@ -2054,7 +2393,9 @@ async def detect_models(payload: AdminDetectModelsRequest) -> AdminDetectModelsR
 
 
 def _iso_now() -> str:
-    return datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
+    return (
+        datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
+    )
 
 
 def _task_snapshot(task: TaskStatusResponse) -> TaskStatusResponse:
@@ -2090,7 +2431,9 @@ def _task_to_job_record(task: TaskStatusResponse) -> JobRecord:
     error = task.error.model_dump() if task.error is not None else None
     latest_output_text = None
     if isinstance(task.result, dict):
-        latest_output_text = str(task.result.get("answer") or task.result.get("message") or "") or None
+        latest_output_text = (
+            str(task.result.get("answer") or task.result.get("message") or "") or None
+        )
     return JobRecord(
         job_id=task.task_id,
         kind=task.task_kind,
@@ -2106,7 +2449,9 @@ def _task_to_job_record(task: TaskStatusResponse) -> JobRecord:
     )
 
 
-def _sync_task_to_job_store(task: TaskStatusResponse, *, event_type: str = "task_snapshot") -> None:
+def _sync_task_to_job_store(
+    task: TaskStatusResponse, *, event_type: str = "task_snapshot"
+) -> None:
     snapshot = _task_snapshot(task)
     upsert_job(_task_to_job_record(snapshot))
     append_job_event(
@@ -2119,8 +2464,12 @@ def _sync_task_to_job_store(task: TaskStatusResponse, *, event_type: str = "task
             "state": snapshot.state,
             "updatedAt": snapshot.updated_at,
             "accepted": snapshot.accepted,
-            "progress": snapshot.progress.model_dump() if snapshot.progress is not None else None,
-            "error": snapshot.error.model_dump() if snapshot.error is not None else None,
+            "progress": snapshot.progress.model_dump()
+            if snapshot.progress is not None
+            else None,
+            "error": snapshot.error.model_dump()
+            if snapshot.error is not None
+            else None,
             "result": snapshot.result,
         },
     )
@@ -2156,7 +2505,9 @@ def _job_event_response(record: JobEventRecord) -> JobEventResponse:
     )
 
 
-def _job_cancel_response(record: JobRecord, *, cancelled: bool, message: str) -> JobCancelResponse:
+def _job_cancel_response(
+    record: JobRecord, *, cancelled: bool, message: str
+) -> JobCancelResponse:
     return JobCancelResponse(
         job_id=record.job_id,
         kind=record.kind,
@@ -2195,7 +2546,9 @@ def _ensure_no_active_jobs_for_settings() -> None:
     )
 
 
-def _create_config_snapshot(*, scope: str, payload: KernelChatRequest, planner: bool) -> ConfigSnapshotRecord:
+def _create_config_snapshot(
+    *, scope: str, payload: KernelChatRequest, planner: bool
+) -> ConfigSnapshotRecord:
     llm_cfg, _ = load_runtime_llm_config()
     planner_cfg, _ = load_planner_runtime_config()
     pipeline_cfg, _ = load_pipeline_runtime_config()
@@ -2228,14 +2581,25 @@ def _append_chat_job_delta(job_id: str, trace_id: str, mode: str, piece: str) ->
     if not piece:
         return
     current = get_stored_job(job_id)
-    latest_output = f"{current.latest_output_text or ''}{piece}" if current is not None else piece
+    latest_output = (
+        f"{current.latest_output_text or ''}{piece}" if current is not None else piece
+    )
     if current is not None:
-        upsert_job(current.model_copy(update={"latest_output_text": latest_output, "updated_at": _iso_now()}))
+        upsert_job(
+            current.model_copy(
+                update={"latest_output_text": latest_output, "updated_at": _iso_now()}
+            )
+        )
     append_job_event(
         job_id=job_id,
         event_type="message",
         created_at=_iso_now(),
-        payload={"type": "message", "traceId": trace_id, "mode": mode, "content": piece},
+        payload={
+            "type": "message",
+            "traceId": trace_id,
+            "mode": mode,
+            "content": piece,
+        },
     )
 
 
@@ -2246,7 +2610,11 @@ def _update_chat_job_progress_stage(job_id: str, stage: str) -> None:
     current = get_stored_job(job_id)
     if current is None or current.progress_stage == normalized:
         return
-    upsert_job(current.model_copy(update={"progress_stage": normalized, "updated_at": _iso_now()}))
+    upsert_job(
+        current.model_copy(
+            update={"progress_stage": normalized, "updated_at": _iso_now()}
+        )
+    )
 
 
 def _append_chat_job_agent_event(job_id: str, event: dict[str, Any]) -> None:
@@ -2261,7 +2629,9 @@ def _append_chat_job_agent_event(job_id: str, event: dict[str, Any]) -> None:
     )
 
 
-def _append_chat_job_llm_stage_event(job_id: str, trace_id: str, mode: str, event: dict[str, Any]) -> None:
+def _append_chat_job_llm_stage_event(
+    job_id: str, trace_id: str, mode: str, event: dict[str, Any]
+) -> None:
     debug_stage = str(event.get("debug_stage") or event.get("stage") or "").strip()
     event_name = str(event.get("event") or "").strip()
     if not debug_stage or not event_name:
@@ -2274,8 +2644,12 @@ def _append_chat_job_llm_stage_event(job_id: str, trace_id: str, mode: str, even
         "event": event_name,
         "provider": str(event.get("provider") or "").strip() or None,
         "model": str(event.get("model") or "").strip() or None,
-        "statusCode": int(event.get("status_code")) if isinstance(event.get("status_code"), int) else None,
-        "elapsedMs": int(event.get("elapsed_ms")) if isinstance(event.get("elapsed_ms"), int) else None,
+        "statusCode": int(event.get("status_code"))
+        if isinstance(event.get("status_code"), int)
+        else None,
+        "elapsedMs": int(event.get("elapsed_ms"))
+        if isinstance(event.get("elapsed_ms"), int)
+        else None,
         "reason": str(event.get("reason") or "").strip() or None,
         "timestamp": str(event.get("timestamp") or _iso_now()),
     }
@@ -2304,7 +2678,9 @@ def _list_llm_log_files(*, limit: int = 12) -> list[dict[str, Any]]:
                 "file_name": path.name,
                 "path": str(path),
                 "size_bytes": int(stat.st_size),
-                "updated_at": datetime.fromtimestamp(stat.st_mtime, timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z"),
+                "updated_at": datetime.fromtimestamp(stat.st_mtime, timezone.utc)
+                .isoformat(timespec="seconds")
+                .replace("+00:00", "Z"),
                 "current": path.name == current_name,
                 "download_url": f"/api/admin/llm-logs/download?filename={path.name}",
             }
@@ -2320,19 +2696,37 @@ def _resolve_llm_log_download_target(filename: str | None) -> Path:
         return Path(effective.log_path)
     normalized_name = Path(str(filename)).name
     if normalized_name != str(filename):
-        raise HTTPException(status_code=400, detail={"code": "INVALID_LLM_LOG_FILENAME", "message": "filename must not include path segments"})
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "code": "INVALID_LLM_LOG_FILENAME",
+                "message": "filename must not include path segments",
+            },
+        )
     target = (safe_root / normalized_name).resolve()
     try:
         target.relative_to(safe_root)
     except ValueError as exc:
-        raise HTTPException(status_code=400, detail={"code": "INVALID_LLM_LOG_FILENAME", "message": "filename is outside llm log safe root"}) from exc
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "code": "INVALID_LLM_LOG_FILENAME",
+                "message": "filename is outside llm log safe root",
+            },
+        ) from exc
     return target
 
 
-def _create_background_chat_job(payload: KernelChatRequest, *, planner: bool) -> JobStatusResponse:
+def _create_background_chat_job(
+    payload: KernelChatRequest, *, planner: bool
+) -> JobStatusResponse:
     trace_id = payload.traceId or f"trace_{uuid4().hex}"
     job_id = f"job_{'planner' if planner else 'chat'}_{uuid4().hex}"
-    snapshot = _create_config_snapshot(scope="planner_chat" if planner else "chat_answer", payload=payload, planner=planner)
+    snapshot = _create_config_snapshot(
+        scope="planner_chat" if planner else "chat_answer",
+        payload=payload,
+        planner=planner,
+    )
     queued_at = _iso_now()
     initial = JobRecord(
         job_id=job_id,
@@ -2344,7 +2738,11 @@ def _create_background_chat_job(payload: KernelChatRequest, *, planner: bool) ->
         session_id=payload.sessionId,
         trace_id=trace_id,
         config_version_id=snapshot.config_version_id,
-        metadata={"mode": payload.mode, "configPath": payload.configPath, "historyLength": len(payload.history)},
+        metadata={
+            "mode": payload.mode,
+            "configPath": payload.configPath,
+            "historyLength": len(payload.history),
+        },
     )
     upsert_job(initial)
     append_job_event(
@@ -2360,13 +2758,24 @@ def _create_background_chat_job(payload: KernelChatRequest, *, planner: bool) ->
     def worker() -> None:
         started_at = _iso_now()
         running_stage = "planner" if planner else "answer"
-        running = initial.model_copy(update={"state": "running", "updated_at": started_at, "progress_stage": running_stage})
+        running = initial.model_copy(
+            update={
+                "state": "running",
+                "updated_at": started_at,
+                "progress_stage": running_stage,
+            }
+        )
         upsert_job(running)
         append_job_event(
             job_id=job_id,
             event_type="state_changed",
             created_at=started_at,
-            payload={"state": "running", "traceId": trace_id, "mode": payload.mode, "progressStage": running_stage},
+            payload={
+                "state": "running",
+                "traceId": trace_id,
+                "mode": payload.mode,
+                "progressStage": running_stage,
+            },
         )
         streamed_chunks = 0
 
@@ -2391,7 +2800,9 @@ def _create_background_chat_job(payload: KernelChatRequest, *, planner: bool) ->
                 raise _TaskCancelledError("task cancelled by user")
             runner = _run_planner_shell_once if planner else _run_qa_once
             with llm_debug_scope(trace_id=trace_id):
-                response = runner(payload.model_copy(update={"traceId": trace_id}), on_delta)
+                response = runner(
+                    payload.model_copy(update={"traceId": trace_id}), on_delta
+                )
             if cancel_event.is_set():
                 raise _TaskCancelledError("task cancelled by user")
             if streamed_chunks == 0:
@@ -2410,7 +2821,9 @@ def _create_background_chat_job(payload: KernelChatRequest, *, planner: bool) ->
                     "traceId": trace_id,
                     "mode": payload.mode,
                     "runId": getattr(response, "runId", None),
-                    "sources": [_serialize_source_item(item) for item in response.sources],
+                    "sources": [
+                        _serialize_source_item(item) for item in response.sources
+                    ],
                 },
             )
             completed_at = _iso_now()
@@ -2424,7 +2837,10 @@ def _create_background_chat_job(payload: KernelChatRequest, *, planner: bool) ->
                         "latest_output_text": response.answer,
                         "result_payload": {
                             "answer": response.answer,
-                            "sources": [_serialize_source_item(item) for item in response.sources],
+                            "sources": [
+                                _serialize_source_item(item)
+                                for item in response.sources
+                            ],
                             "runId": getattr(response, "runId", None),
                             "traceId": trace_id,
                         },
@@ -2435,7 +2851,12 @@ def _create_background_chat_job(payload: KernelChatRequest, *, planner: bool) ->
                 job_id=job_id,
                 event_type="messageEnd",
                 created_at=completed_at,
-                payload={"type": "messageEnd", "traceId": trace_id, "mode": payload.mode, "runId": getattr(response, "runId", None)},
+                payload={
+                    "type": "messageEnd",
+                    "traceId": trace_id,
+                    "mode": payload.mode,
+                    "runId": getattr(response, "runId", None),
+                },
             )
         except _TaskCancelledError:
             cancelled_at = _iso_now()
@@ -2454,11 +2875,19 @@ def _create_background_chat_job(payload: KernelChatRequest, *, planner: bool) ->
                     job_id=job_id,
                     event_type="state_changed",
                     created_at=cancelled_at,
-                    payload={"state": "cancelled", "traceId": trace_id, "mode": payload.mode},
+                    payload={
+                        "state": "cancelled",
+                        "traceId": trace_id,
+                        "mode": payload.mode,
+                    },
                 )
         except HTTPException as exc:
             failed_at = _iso_now()
-            detail = exc.detail if isinstance(exc.detail, dict) else {"message": str(exc.detail)}
+            detail = (
+                exc.detail
+                if isinstance(exc.detail, dict)
+                else {"message": str(exc.detail)}
+            )
             upsert_job(
                 running.model_copy(
                     update={
@@ -2473,7 +2902,12 @@ def _create_background_chat_job(payload: KernelChatRequest, *, planner: bool) ->
                 job_id=job_id,
                 event_type="error",
                 created_at=failed_at,
-                payload={"type": "error", "traceId": trace_id, "statusCode": exc.status_code, "detail": detail},
+                payload={
+                    "type": "error",
+                    "traceId": trace_id,
+                    "statusCode": exc.status_code,
+                    "detail": detail,
+                },
             )
         except Exception as exc:
             failed_at = _iso_now()
@@ -2575,7 +3009,9 @@ def _build_task_progress(
     stage_total: int | None = None,
     recent_items: list[TaskProgressItem] | None = None,
 ) -> TaskProgressInfo:
-    normalized_stage_processed = max(0, stage_processed if stage_processed is not None else processed)
+    normalized_stage_processed = max(
+        0, stage_processed if stage_processed is not None else processed
+    )
     normalized_stage_total = max(0, stage_total if stage_total is not None else total)
     return TaskProgressInfo(
         stage=stage,
@@ -2595,22 +3031,38 @@ def _build_task_progress(
     )
 
 
-def _task_progress_from_event(event: dict[str, Any], *, elapsed_ms: int) -> TaskProgressInfo:
+def _task_progress_from_event(
+    event: dict[str, Any], *, elapsed_ms: int
+) -> TaskProgressInfo:
     stage = str(event.get("stage", "running")).strip() or "running"
     return _build_task_progress(
         stage=stage,
-        processed=max(0, _safe_int(event.get("processed", event.get("stage_processed", 0)), 0)),
+        processed=max(
+            0, _safe_int(event.get("processed", event.get("stage_processed", 0)), 0)
+        ),
         total=max(0, _safe_int(event.get("total", event.get("stage_total", 0)), 0)),
         elapsed_ms=elapsed_ms,
         message=str(event.get("message", "")).strip(),
-        batch_total=_safe_int(event.get("batch_total"), 0) if event.get("batch_total") is not None else None,
-        batch_completed=_safe_int(event.get("batch_completed"), 0) if event.get("batch_completed") is not None else None,
-        batch_running=_safe_int(event.get("batch_running"), 0) if event.get("batch_running") is not None else None,
-        batch_failed=_safe_int(event.get("batch_failed"), 0) if event.get("batch_failed") is not None else None,
+        batch_total=_safe_int(event.get("batch_total"), 0)
+        if event.get("batch_total") is not None
+        else None,
+        batch_completed=_safe_int(event.get("batch_completed"), 0)
+        if event.get("batch_completed") is not None
+        else None,
+        batch_running=_safe_int(event.get("batch_running"), 0)
+        if event.get("batch_running") is not None
+        else None,
+        batch_failed=_safe_int(event.get("batch_failed"), 0)
+        if event.get("batch_failed") is not None
+        else None,
         current_stage=str(event.get("current_stage", stage)).strip() or stage,
         current_item_name=str(event.get("current_item_name", "")).strip() or None,
-        stage_processed=_safe_int(event.get("stage_processed"), 0) if event.get("stage_processed") is not None else None,
-        stage_total=_safe_int(event.get("stage_total"), 0) if event.get("stage_total") is not None else None,
+        stage_processed=_safe_int(event.get("stage_processed"), 0)
+        if event.get("stage_processed") is not None
+        else None,
+        stage_total=_safe_int(event.get("stage_total"), 0)
+        if event.get("stage_total") is not None
+        else None,
         recent_items=_normalize_task_progress_items(event.get("recent_items")),
     )
 
@@ -2624,7 +3076,9 @@ def _latest_task(task_kind: TaskKind) -> TaskStatusResponse | None:
     return _task_snapshot(latest)
 
 
-def _stage_library_import_files(files: list[StarletteUploadFile], task_id: str) -> list[Path]:
+def _stage_library_import_files(
+    files: list[StarletteUploadFile], task_id: str
+) -> list[Path]:
     staging_root = DATA_DIR / "raw" / "_api_upload_staging" / task_id
     staging_root.mkdir(parents=True, exist_ok=True)
     upload_paths: list[Path] = []
@@ -2645,7 +3099,9 @@ def _stage_library_import_files(files: list[StarletteUploadFile], task_id: str) 
     return upload_paths
 
 
-def _start_library_import_task(*, task_id: str, upload_paths: list[Path], topic: str) -> TaskStatusResponse:
+def _start_library_import_task(
+    *, task_id: str, upload_paths: list[Path], topic: str
+) -> TaskStatusResponse:
     active = _find_active_task("library_import")
     if active is not None:
         active.accepted = False
@@ -2674,7 +3130,9 @@ def _start_library_import_task(*, task_id: str, upload_paths: list[Path], topic:
             stage_processed=0,
             stage_total=len(upload_paths),
             recent_items=[
-                TaskProgressItem(name=path.name, state="queued", stage="queued", message="等待处理")
+                TaskProgressItem(
+                    name=path.name, state="queued", stage="queued", message="等待处理"
+                )
                 for path in upload_paths[:6]
             ],
         ),
@@ -2730,11 +3188,15 @@ def _start_library_import_task(*, task_id: str, upload_paths: list[Path], topic:
                         return
                     if local.state == "cancelled":
                         raise _TaskCancelledError("task cancelled by user")
-                    local.progress = _task_progress_from_event(event, elapsed_ms=elapsed_ms)
+                    local.progress = _task_progress_from_event(
+                        event, elapsed_ms=elapsed_ms
+                    )
                     local.updated_at = _iso_now()
                     _save_task(local)
 
-            result = run_import_workflow(uploaded_files=upload_paths, topic=topic, progress_callback=on_progress)
+            result = run_import_workflow(
+                uploaded_files=upload_paths, topic=topic, progress_callback=on_progress
+            )
             finished_at = _iso_now()
             _write_latest_pipeline_status(result=result, updated_at=finished_at)
             with _TASKS_LOCK:
@@ -2742,7 +3204,11 @@ def _start_library_import_task(*, task_id: str, upload_paths: list[Path], topic:
                 if local is None:
                     return
                 is_cancelled = cancel_event.is_set() or local.state == "cancelled"
-                local.state = "cancelled" if is_cancelled else ("succeeded" if result.get("ok") else "failed")
+                local.state = (
+                    "cancelled"
+                    if is_cancelled
+                    else ("succeeded" if result.get("ok") else "failed")
+                )
                 local.updated_at = finished_at
                 local.result = {
                     "message": str(result.get("message", "") or ""),
@@ -2764,11 +3230,15 @@ def _start_library_import_task(*, task_id: str, upload_paths: list[Path], topic:
                     )
                 if local.progress is None:
                     local.progress = _build_task_progress(
-                        stage="cancelled" if is_cancelled else ("done" if result.get("ok") else latest_stage),
+                        stage="cancelled"
+                        if is_cancelled
+                        else ("done" if result.get("ok") else latest_stage),
                         processed=0 if is_cancelled else max(1, len(upload_paths)),
                         total=max(1, len(upload_paths)),
                         elapsed_ms=int((time.perf_counter() - started) * 1000),
-                        message="论文导入已取消" if is_cancelled else str(result.get("message", "") or "论文导入已结束"),
+                        message="论文导入已取消"
+                        if is_cancelled
+                        else str(result.get("message", "") or "论文导入已结束"),
                     )
                 elif is_cancelled:
                     local.progress = _build_task_progress(
@@ -2798,7 +3268,9 @@ def _start_library_import_task(*, task_id: str, upload_paths: list[Path], topic:
                         + _safe_int(summary.get("skipped"), 0)
                         + _safe_int(summary.get("failed"), 0),
                     )
-                    recent_items = _normalize_task_progress_items(result.get("recent_items"))
+                    recent_items = _normalize_task_progress_items(
+                        result.get("recent_items")
+                    )
                     local.progress = _build_task_progress(
                         stage="done" if result.get("ok") else latest_stage,
                         processed=max(1, total_candidates),
@@ -2806,11 +3278,15 @@ def _start_library_import_task(*, task_id: str, upload_paths: list[Path], topic:
                         elapsed_ms=int((time.perf_counter() - started) * 1000),
                         message=str(result.get("message", "") or "论文导入已结束"),
                         batch_total=total_candidates,
-                        batch_completed=_safe_int(summary.get("added"), 0) + _safe_int(summary.get("skipped"), 0),
+                        batch_completed=_safe_int(summary.get("added"), 0)
+                        + _safe_int(summary.get("skipped"), 0),
                         batch_running=0,
                         batch_failed=_safe_int(summary.get("failed"), 0),
                         current_stage="done" if result.get("ok") else latest_stage,
-                        current_item_name=str(result.get("current_item_name", "")).strip() or None,
+                        current_item_name=str(
+                            result.get("current_item_name", "")
+                        ).strip()
+                        or None,
                         stage_processed=max(1, total_candidates),
                         stage_total=max(1, total_candidates),
                         recent_items=recent_items,
@@ -2826,17 +3302,29 @@ def _start_library_import_task(*, task_id: str, upload_paths: list[Path], topic:
                 local.progress = _build_task_progress(
                     stage="cancelled",
                     processed=local.progress.processed if local.progress else 0,
-                    total=local.progress.total if local.progress else max(1, len(upload_paths)),
+                    total=local.progress.total
+                    if local.progress
+                    else max(1, len(upload_paths)),
                     elapsed_ms=int((time.perf_counter() - started) * 1000),
                     message="论文导入已取消",
-                    batch_total=local.progress.batch_total if local.progress else len(upload_paths),
-                    batch_completed=local.progress.batch_completed if local.progress else 0,
+                    batch_total=local.progress.batch_total
+                    if local.progress
+                    else len(upload_paths),
+                    batch_completed=local.progress.batch_completed
+                    if local.progress
+                    else 0,
                     batch_running=0,
                     batch_failed=local.progress.batch_failed if local.progress else 0,
                     current_stage="cancelled",
-                    current_item_name=local.progress.current_item_name if local.progress else None,
-                    stage_processed=local.progress.stage_processed if local.progress else 0,
-                    stage_total=local.progress.stage_total if local.progress else len(upload_paths),
+                    current_item_name=local.progress.current_item_name
+                    if local.progress
+                    else None,
+                    stage_processed=local.progress.stage_processed
+                    if local.progress
+                    else 0,
+                    stage_total=local.progress.stage_total
+                    if local.progress
+                    else len(upload_paths),
                     recent_items=local.progress.recent_items if local.progress else [],
                 )
                 _save_task(local)
@@ -2855,22 +3343,36 @@ def _start_library_import_task(*, task_id: str, upload_paths: list[Path], topic:
                 local.progress = _build_task_progress(
                     stage=latest_stage or "failed",
                     processed=local.progress.processed if local.progress else 0,
-                    total=local.progress.total if local.progress else max(1, len(upload_paths)),
+                    total=local.progress.total
+                    if local.progress
+                    else max(1, len(upload_paths)),
                     elapsed_ms=int((time.perf_counter() - started) * 1000),
                     message="论文导入失败",
-                    batch_total=local.progress.batch_total if local.progress else len(upload_paths),
-                    batch_completed=local.progress.batch_completed if local.progress else 0,
+                    batch_total=local.progress.batch_total
+                    if local.progress
+                    else len(upload_paths),
+                    batch_completed=local.progress.batch_completed
+                    if local.progress
+                    else 0,
                     batch_running=0,
                     batch_failed=local.progress.batch_failed if local.progress else 0,
                     current_stage=latest_stage or "failed",
-                    current_item_name=local.progress.current_item_name if local.progress else None,
-                    stage_processed=local.progress.stage_processed if local.progress else 0,
-                    stage_total=local.progress.stage_total if local.progress else len(upload_paths),
+                    current_item_name=local.progress.current_item_name
+                    if local.progress
+                    else None,
+                    stage_processed=local.progress.stage_processed
+                    if local.progress
+                    else 0,
+                    stage_total=local.progress.stage_total
+                    if local.progress
+                    else len(upload_paths),
                     recent_items=local.progress.recent_items if local.progress else [],
                 )
                 _save_task(local)
         finally:
-            shutil.rmtree(DATA_DIR / "raw" / "_api_upload_staging" / task_id, ignore_errors=True)
+            shutil.rmtree(
+                DATA_DIR / "raw" / "_api_upload_staging" / task_id, ignore_errors=True
+            )
             with _TASKS_LOCK:
                 _TASK_CANCEL_EVENTS.pop(task_id, None)
 
@@ -2918,9 +3420,13 @@ def _fallback_index_state() -> str:
 def _fallback_graph_state() -> tuple[str, str | None, str | None]:
     graph_path = DATA_DIR / "processed" / "graph.json"
     if graph_path.exists():
-        updated_at = datetime.fromtimestamp(graph_path.stat().st_mtime, timezone.utc).isoformat(timespec="seconds").replace(
-            "+00:00",
-            "Z",
+        updated_at = (
+            datetime.fromtimestamp(graph_path.stat().st_mtime, timezone.utc)
+            .isoformat(timespec="seconds")
+            .replace(
+                "+00:00",
+                "Z",
+            )
         )
         return "succeeded", updated_at, f"已检测到图文件: {graph_path.name}"
     return "not_started", None, "尚未启动图构建任务"
@@ -2941,7 +3447,14 @@ def _recent_item_name_from_outcome(row: dict[str, Any]) -> str:
 
 def _recent_item_state_from_outcome(status: str) -> str:
     normalized = status.strip().lower()
-    if normalized in {"added", "succeeded", "success", "completed", "imported", "skipped"}:
+    if normalized in {
+        "added",
+        "succeeded",
+        "success",
+        "completed",
+        "imported",
+        "skipped",
+    }:
         return "succeeded"
     if normalized in {"failed", "error"}:
         return "failed"
@@ -2966,7 +3479,10 @@ def _build_recent_items_from_outcomes(
         paper_row = paper_lookup.get(paper_id) if paper_id else None
         items.append(
             TaskProgressItem(
-                name=str((paper_row or {}).get("title") or _recent_item_name_from_outcome(row)).strip(),
+                name=str(
+                    (paper_row or {}).get("title")
+                    or _recent_item_name_from_outcome(row)
+                ).strip(),
                 state=_recent_item_state_from_outcome(status),
                 stage=stage,
                 message=str(row.get("reason", status)).strip(),
@@ -2993,7 +3509,9 @@ def _build_import_result_progress(
         + _safe_int(import_summary.get("skipped"), 0)
         + _safe_int(import_summary.get("failed"), 0),
     )
-    completed = _safe_int(import_summary.get("added"), 0) + _safe_int(import_summary.get("skipped"), 0)
+    completed = _safe_int(import_summary.get("added"), 0) + _safe_int(
+        import_summary.get("skipped"), 0
+    )
     failed = _safe_int(import_summary.get("failed"), 0)
     current_stage = "done"
     index_stage = report.get("index_stage")
@@ -3002,8 +3520,12 @@ def _build_import_result_progress(
         if index_status in {"running", "queued", "conflict", "failed"}:
             current_stage = "index_build"
     outcomes = report.get("import_outcomes")
-    recent_items = _build_recent_items_from_outcomes(outcomes, stage=current_stage, papers_by_id=papers_by_id)
-    current_item_name = next((item.name for item in recent_items if item.state == "running"), None)
+    recent_items = _build_recent_items_from_outcomes(
+        outcomes, stage=current_stage, papers_by_id=papers_by_id
+    )
+    current_item_name = next(
+        (item.name for item in recent_items if item.state == "running"), None
+    )
     return {
         "batch_total": total_candidates if total_candidates > 0 else None,
         "batch_completed": completed if total_candidates > 0 else None,
@@ -3017,30 +3539,56 @@ def _build_import_result_progress(
     }
 
 
-def _build_pipeline_stages(*, report: dict[str, Any], updated_at: str | None) -> list[PipelineStageStatus]:
+def _build_pipeline_stages(
+    *, report: dict[str, Any], updated_at: str | None
+) -> list[PipelineStageStatus]:
     import_summary = report.get("import_summary")
     if not isinstance(import_summary, dict):
         import_summary = {}
-    import_state = _resolve_import_stage_state(import_summary) if report else "not_started"
+    import_state = (
+        _resolve_import_stage_state(import_summary) if report else "not_started"
+    )
     index_stage = report.get("index_stage")
-    index_state = _resolve_index_stage_state(index_stage) if isinstance(index_stage, dict) else _fallback_index_state()
+    index_state = (
+        _resolve_index_stage_state(index_stage)
+        if isinstance(index_stage, dict)
+        else _fallback_index_state()
+    )
 
     latest_graph_task = _latest_task("graph_build")
     if latest_graph_task is not None:
         graph_state = latest_graph_task.state
         graph_updated_at = latest_graph_task.updated_at
-        graph_message = latest_graph_task.progress.message if latest_graph_task.progress else None
+        graph_message = (
+            latest_graph_task.progress.message if latest_graph_task.progress else None
+        )
     else:
         graph_state, graph_updated_at, graph_message = _fallback_graph_state()
 
-    degradation = _extract_ingest_degradation(report if isinstance(report, dict) else {})
+    degradation = _extract_ingest_degradation(
+        report if isinstance(report, dict) else {}
+    )
     detail = str(degradation.get("fallback_reason") or "").strip() or None
-    stage_updated_at = _collect_stage_updated_at(report=report, latest_updated_at=updated_at)
+    stage_updated_at = _collect_stage_updated_at(
+        report=report, latest_updated_at=updated_at
+    )
 
     return [
-        PipelineStageStatus(stage="import", state=import_state, updated_at=stage_updated_at.get("import"), detail=detail),
-        PipelineStageStatus(stage="clean", state=import_state, updated_at=stage_updated_at.get("clean"), detail=detail),
-        PipelineStageStatus(stage="index", state=index_state, updated_at=stage_updated_at.get("index")),
+        PipelineStageStatus(
+            stage="import",
+            state=import_state,
+            updated_at=stage_updated_at.get("import"),
+            detail=detail,
+        ),
+        PipelineStageStatus(
+            stage="clean",
+            state=import_state,
+            updated_at=stage_updated_at.get("clean"),
+            detail=detail,
+        ),
+        PipelineStageStatus(
+            stage="index", state=index_state, updated_at=stage_updated_at.get("index")
+        ),
         PipelineStageStatus(
             stage="graph_build",
             state=graph_state,
@@ -3051,7 +3599,9 @@ def _build_pipeline_stages(*, report: dict[str, Any], updated_at: str | None) ->
 
 
 def _write_latest_pipeline_status(*, result: dict[str, Any], updated_at: str) -> None:
-    stage_updated_at = _collect_stage_updated_at(report=result, latest_updated_at=updated_at)
+    stage_updated_at = _collect_stage_updated_at(
+        report=result, latest_updated_at=updated_at
+    )
     payload = {
         "updated_at": updated_at,
         "import_summary": result.get("import_summary", {}),
@@ -3065,7 +3615,9 @@ def _write_latest_pipeline_status(*, result: dict[str, Any], updated_at: str) ->
     }
     try:
         _PIPELINE_STATUS_PATH.parent.mkdir(parents=True, exist_ok=True)
-        _PIPELINE_STATUS_PATH.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+        _PIPELINE_STATUS_PATH.write_text(
+            json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8"
+        )
     except Exception:
         # best effort only
         pass
@@ -3089,13 +3641,23 @@ def _safe_upload_name(raw: str, idx: int) -> str:
     return cleaned
 
 
-def _load_store_papers(*, limit: int = 200, include_stage_statuses: bool = False) -> list[dict[str, Any]]:
-    store_path = ensure_store_current(processed_dir=DATA_DIR / "processed", topics_path=DATA_DIR / "library_topics.json")
-    return list_store_papers(db_path=store_path, limit=limit, include_stage_statuses=include_stage_statuses)
+def _load_store_papers(
+    *, limit: int = 200, include_stage_statuses: bool = False
+) -> list[dict[str, Any]]:
+    store_path = ensure_store_current(
+        processed_dir=DATA_DIR / "processed",
+        topics_path=DATA_DIR / "library_topics.json",
+    )
+    return list_store_papers(
+        db_path=store_path, limit=limit, include_stage_statuses=include_stage_statuses
+    )
 
 
 def _load_vector_backend_summary() -> dict[str, Any] | None:
-    store_path = ensure_store_current(processed_dir=DATA_DIR / "processed", topics_path=DATA_DIR / "library_topics.json")
+    store_path = ensure_store_current(
+        processed_dir=DATA_DIR / "processed",
+        topics_path=DATA_DIR / "library_topics.json",
+    )
     return get_vector_backend_state(db_path=store_path)
 
 
@@ -3108,8 +3670,16 @@ def _prune_paper_from_json_array(path: Path, *, paper_id: str) -> None:
         return
     if not isinstance(payload, list):
         return
-    filtered = [row for row in payload if not (isinstance(row, dict) and str(row.get("paper_id", "")).strip() == paper_id)]
-    path.write_text(json.dumps(filtered, ensure_ascii=False, indent=2), encoding="utf-8")
+    filtered = [
+        row
+        for row in payload
+        if not (
+            isinstance(row, dict) and str(row.get("paper_id", "")).strip() == paper_id
+        )
+    ]
+    path.write_text(
+        json.dumps(filtered, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
 
 
 def _prune_paper_from_jsonl(path: Path, *, paper_id: str) -> None:
@@ -3126,7 +3696,10 @@ def _prune_paper_from_jsonl(path: Path, *, paper_id: str) -> None:
             except Exception:
                 lines.append(raw)
                 continue
-            if isinstance(payload, dict) and str(payload.get("paper_id", "")).strip() == paper_id:
+            if (
+                isinstance(payload, dict)
+                and str(payload.get("paper_id", "")).strip() == paper_id
+            ):
                 continue
             lines.append(raw if raw.endswith("\n") else f"{raw}\n")
     path.write_text("".join(lines), encoding="utf-8")
@@ -3145,7 +3718,11 @@ def _prune_paper_from_structure_index(path: Path, *, paper_id: str) -> None:
     if not isinstance(papers, list):
         return
     payload["papers"] = [
-        row for row in papers if not (isinstance(row, dict) and str(row.get("paper_id", "")).strip() == paper_id)
+        row
+        for row in papers
+        if not (
+            isinstance(row, dict) and str(row.get("paper_id", "")).strip() == paper_id
+        )
     ]
     path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
 
@@ -3163,27 +3740,47 @@ def _prune_paper_from_topics(path: Path, *, paper_id: str) -> None:
     for topic, values in payload.items():
         if not isinstance(values, list):
             continue
-        remaining = [str(value).strip() for value in values if str(value).strip() and str(value).strip() != paper_id]
+        remaining = [
+            str(value).strip()
+            for value in values
+            if str(value).strip() and str(value).strip() != paper_id
+        ]
         if remaining:
             normalized[str(topic)] = remaining
-    path.write_text(json.dumps(normalized, ensure_ascii=False, indent=2), encoding="utf-8")
+    path.write_text(
+        json.dumps(normalized, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
 
 
 def _orchestrate_paper_delete(*, paper_id: str) -> dict[str, Any]:
     processed_dir = DATA_DIR / "processed"
-    store_path = ensure_store_current(processed_dir=processed_dir, topics_path=DATA_DIR / "library_topics.json")
+    store_path = ensure_store_current(
+        processed_dir=processed_dir, topics_path=DATA_DIR / "library_topics.json"
+    )
     row = get_store_paper(paper_id, db_path=store_path)
     if row is None:
-        raise HTTPException(status_code=404, detail={"code": "PAPER_NOT_FOUND", "message": f"paper_id not found: {paper_id}"})
+        raise HTTPException(
+            status_code=404,
+            detail={
+                "code": "PAPER_NOT_FOUND",
+                "message": f"paper_id not found: {paper_id}",
+            },
+        )
     _prune_paper_from_json_array(processed_dir / "papers.json", paper_id=paper_id)
     _prune_paper_from_jsonl(processed_dir / "chunks.jsonl", paper_id=paper_id)
     _prune_paper_from_jsonl(processed_dir / "chunks_clean.jsonl", paper_id=paper_id)
-    _prune_paper_from_json_array(processed_dir / "paper_summary.json", paper_id=paper_id)
-    _prune_paper_from_structure_index(processed_dir / "structure_index.json", paper_id=paper_id)
+    _prune_paper_from_json_array(
+        processed_dir / "paper_summary.json", paper_id=paper_id
+    )
+    _prune_paper_from_structure_index(
+        processed_dir / "structure_index.json", paper_id=paper_id
+    )
     _prune_paper_from_topics(DATA_DIR / "library_topics.json", paper_id=paper_id)
     mark_paper_deleted(paper_id, reason="deleted_by_user", db_path=store_path)
     backend = resolve_vector_backend("file", db_path=store_path)
-    vector_state = backend.delete_papers(paper_ids=[paper_id], index_path=DATA_DIR / "indexes" / "vec_index_embed.json")
+    vector_state = backend.delete_papers(
+        paper_ids=[paper_id], index_path=DATA_DIR / "indexes" / "vec_index_embed.json"
+    )
     return {
         "paper": get_store_paper(paper_id, db_path=store_path),
         "vector_backend": {
@@ -3197,13 +3794,23 @@ def _orchestrate_paper_delete(*, paper_id: str) -> dict[str, Any]:
 
 def _orchestrate_paper_rebuild(*, paper_id: str, reason: str) -> dict[str, Any]:
     processed_dir = DATA_DIR / "processed"
-    store_path = ensure_store_current(processed_dir=processed_dir, topics_path=DATA_DIR / "library_topics.json")
+    store_path = ensure_store_current(
+        processed_dir=processed_dir, topics_path=DATA_DIR / "library_topics.json"
+    )
     row = get_store_paper(paper_id, db_path=store_path)
     if row is None:
-        raise HTTPException(status_code=404, detail={"code": "PAPER_NOT_FOUND", "message": f"paper_id not found: {paper_id}"})
+        raise HTTPException(
+            status_code=404,
+            detail={
+                "code": "PAPER_NOT_FOUND",
+                "message": f"paper_id not found: {paper_id}",
+            },
+        )
     mark_paper_rebuild_pending(paper_id, reason=reason, db_path=store_path)
     backend = resolve_vector_backend("file", db_path=store_path)
-    vector_state = backend.delete_papers(paper_ids=[paper_id], index_path=DATA_DIR / "indexes" / "vec_index_embed.json")
+    vector_state = backend.delete_papers(
+        paper_ids=[paper_id], index_path=DATA_DIR / "indexes" / "vec_index_embed.json"
+    )
     return {
         "paper": get_store_paper(paper_id, db_path=store_path),
         "vector_backend": {
@@ -3275,9 +3882,13 @@ def _load_latest_import_result() -> ImportLatestResultResponse:
     if not isinstance(import_summary, dict):
         import_summary = {}
     failure_reasons = _extract_import_failure_reasons(payload)
-    updated_at = datetime.fromtimestamp(latest.stat().st_mtime, timezone.utc).isoformat(timespec="seconds").replace(
-        "+00:00",
-        "Z",
+    updated_at = (
+        datetime.fromtimestamp(latest.stat().st_mtime, timezone.utc)
+        .isoformat(timespec="seconds")
+        .replace(
+            "+00:00",
+            "Z",
+        )
     )
     latest_pipeline = _read_latest_pipeline_status()
     if latest_pipeline is not None:
@@ -3292,7 +3903,9 @@ def _load_latest_import_result() -> ImportLatestResultResponse:
             payload["import_outcomes"] = recent_outcomes
         recent_failure_reasons = latest_pipeline.get("failure_reasons")
         if isinstance(recent_failure_reasons, list):
-            failure_reasons = [str(item) for item in recent_failure_reasons if str(item).strip()]
+            failure_reasons = [
+                str(item) for item in recent_failure_reasons if str(item).strip()
+            ]
         recent_updated = latest_pipeline.get("updated_at")
         if isinstance(recent_updated, str) and recent_updated.strip():
             updated_at = recent_updated.strip()
@@ -3309,11 +3922,17 @@ def _load_latest_import_result() -> ImportLatestResultResponse:
             if latest_pipeline.get(key) is not None:
                 payload[key] = latest_pipeline.get(key)
 
-    stage_updated_at = _collect_stage_updated_at(report=payload, latest_updated_at=updated_at, latest_pipeline=latest_pipeline)
+    stage_updated_at = _collect_stage_updated_at(
+        report=payload, latest_updated_at=updated_at, latest_pipeline=latest_pipeline
+    )
     degradation = _extract_ingest_degradation(payload)
     diagnostics = _extract_parser_diagnostics(payload)
-    artifacts = _build_marker_artifacts(latest_updated_at=updated_at, stage_updated_at=stage_updated_at)
-    progress = _build_import_result_progress(payload, total_papers, papers_by_id=papers_by_id)
+    artifacts = _build_marker_artifacts(
+        latest_updated_at=updated_at, stage_updated_at=stage_updated_at
+    )
+    progress = _build_import_result_progress(
+        payload, total_papers, papers_by_id=papers_by_id
+    )
 
     return ImportLatestResultResponse(
         added=max(0, int(import_summary.get("added", 0) or 0)),
@@ -3355,9 +3974,13 @@ def _load_import_history(limit: int = 20) -> list[ImportHistoryEntryResponse]:
     out: list[ImportHistoryEntryResponse] = []
     for path in report_paths:
         run_id = path.parent.name
-        updated_at = datetime.fromtimestamp(path.stat().st_mtime, timezone.utc).isoformat(timespec="seconds").replace(
-            "+00:00",
-            "Z",
+        updated_at = (
+            datetime.fromtimestamp(path.stat().st_mtime, timezone.utc)
+            .isoformat(timespec="seconds")
+            .replace(
+                "+00:00",
+                "Z",
+            )
         )
         try:
             payload = json.loads(path.read_text(encoding="utf-8"))
@@ -3391,24 +4014,45 @@ def _load_import_history(limit: int = 20) -> list[ImportHistoryEntryResponse]:
 def get_llm_debug_trace(trace_id: str) -> LlmDebugTraceResponse:
     normalized = str(trace_id or "").strip()
     if not normalized:
-        raise HTTPException(status_code=400, detail={"code": "INVALID_TRACE_ID", "message": "trace_id is required"})
+        raise HTTPException(
+            status_code=400,
+            detail={"code": "INVALID_TRACE_ID", "message": "trace_id is required"},
+        )
     with _LLM_DEBUG_STORE_LOCK:
         payload = dict(_LLM_DEBUG_STORE.get(normalized) or {})
     records = list(payload.get("records") or [])
     if not records:
-        raise HTTPException(status_code=404, detail={"code": "LLM_DEBUG_NOT_FOUND", "message": "No llm debug records for trace_id"})
-    return LlmDebugTraceResponse(trace_id=normalized, count=len(records), records=[LlmDebugRecord(**record) for record in records])
+        raise HTTPException(
+            status_code=404,
+            detail={
+                "code": "LLM_DEBUG_NOT_FOUND",
+                "message": "No llm debug records for trace_id",
+            },
+        )
+    return LlmDebugTraceResponse(
+        trace_id=normalized,
+        count=len(records),
+        records=[LlmDebugRecord(**record) for record in records],
+    )
 
 
 def _get_task_or_404(task_id: str) -> TaskStatusResponse:
     with _TASKS_LOCK:
         task = _TASKS.get(task_id)
     if task is None:
-        raise HTTPException(status_code=404, detail={"code": "TASK_NOT_FOUND", "message": f"task_id not found: {task_id}"})
+        raise HTTPException(
+            status_code=404,
+            detail={
+                "code": "TASK_NOT_FOUND",
+                "message": f"task_id not found: {task_id}",
+            },
+        )
     return _task_snapshot(task)
 
 
-def _stage_health_entry(*, stage: str, provider: str, model: str, reason: str | None = None) -> dict[str, Any]:
+def _stage_health_entry(
+    *, stage: str, provider: str, model: str, reason: str | None = None
+) -> dict[str, Any]:
     status = "ok" if not reason else "degraded"
     payload: dict[str, Any] = {
         "status": status,
@@ -3420,14 +4064,25 @@ def _stage_health_entry(*, stage: str, provider: str, model: str, reason: str | 
     return payload
 
 
-def _load_planner_config_state(config_path: str | Path | None = None) -> tuple[Any, list[str], dict[str, Any]]:
-    cfg, warnings = load_and_validate_config(config_path or (CONFIGS_DIR / "default.yaml"))
+def _load_planner_config_state(
+    config_path: str | Path | None = None,
+) -> tuple[Any, list[str], dict[str, Any]]:
+    cfg, warnings = load_and_validate_config(
+        config_path or (CONFIGS_DIR / "default.yaml")
+    )
     runtime_cfg, runtime_err = load_planner_runtime_config()
     planner_warnings: list[str] = []
     if runtime_err:
         planner_warnings.append(f"Planner runtime config ignored: {runtime_err}")
     try:
-        raw_data = yaml.safe_load((Path(config_path or (CONFIGS_DIR / "default.yaml"))).read_text(encoding="utf-8")) or {}
+        raw_data = (
+            yaml.safe_load(
+                (Path(config_path or (CONFIGS_DIR / "default.yaml"))).read_text(
+                    encoding="utf-8"
+                )
+            )
+            or {}
+        )
         if not isinstance(raw_data, dict):
             raw_data = {}
     except Exception as exc:
@@ -3437,14 +4092,22 @@ def _load_planner_config_state(config_path: str | Path | None = None) -> tuple[A
         raw_data=raw_data,
         runtime_cfg=runtime_cfg if runtime_err is None else None,
     )
-    planner_state = evaluate_planner_service_state(cfg, api_key=effective_planner.api_key)
-    return cfg, list(warnings) + planner_warnings + list(effective_warnings), planner_state
+    planner_state = evaluate_planner_service_state(
+        cfg, api_key=effective_planner.api_key
+    )
+    return (
+        cfg,
+        list(warnings) + planner_warnings + list(effective_warnings),
+        planner_state,
+    )
 
 
 def _planner_block_detail(planner_state: dict[str, Any]) -> dict[str, Any]:
     return {
         "code": "PLANNER_SYSTEM_BLOCKED",
-        "message": str(planner_state.get("reason_message") or "Planner Runtime 当前不可服务。"),
+        "message": str(
+            planner_state.get("reason_message") or "Planner Runtime 当前不可服务。"
+        ),
         "planner": {
             "service_mode": planner_state.get("service_mode"),
             "reason_code": planner_state.get("reason_code"),
@@ -3456,23 +4119,35 @@ def _planner_block_detail(planner_state: dict[str, Any]) -> dict[str, Any]:
 
 @app.get("/health/deps")
 def health_deps() -> dict[str, Any]:
-    cfg, warnings, planner_state = _load_planner_config_state(CONFIGS_DIR / "default.yaml")
+    cfg, warnings, planner_state = _load_planner_config_state(
+        CONFIGS_DIR / "default.yaml"
+    )
     _ = warnings
 
     answer_policy = build_stage_policy(cfg, stage="answer")
     embedding_policy = build_stage_policy(cfg, stage="embedding")
     rerank_policy = build_stage_policy(cfg, stage="rerank")
 
-    answer_reason = None if answer_policy.primary.resolve_api_key() else "missing_api_key"
-    embedding_reason = None if embedding_policy.primary.resolve_api_key() else "missing_api_key"
-    rerank_reason = None if rerank_policy.primary.resolve_api_key() else "missing_api_key"
+    answer_reason = (
+        None if answer_policy.primary.resolve_api_key() else "missing_api_key"
+    )
+    embedding_reason = (
+        None if embedding_policy.primary.resolve_api_key() else "missing_api_key"
+    )
+    rerank_reason = (
+        None if rerank_policy.primary.resolve_api_key() else "missing_api_key"
+    )
 
     last_embedding_failure = get_last_stage_failure("embedding")
     if last_embedding_failure:
-        embedding_reason = str(last_embedding_failure.get("category") or embedding_reason or "other")
+        embedding_reason = str(
+            last_embedding_failure.get("category") or embedding_reason or "other"
+        )
     last_rerank_failure = get_last_stage_failure("rerank")
     if last_rerank_failure:
-        rerank_reason = str(last_rerank_failure.get("category") or rerank_reason or "other")
+        rerank_reason = str(
+            last_rerank_failure.get("category") or rerank_reason or "other"
+        )
 
     embed_idx_path = DATA_DIR / "indexes" / "vec_index_embed.json"
     if embed_idx_path.exists():
@@ -3485,15 +4160,26 @@ def health_deps() -> dict[str, Any]:
             if not embedding_reason:
                 embedding_reason = "index_unavailable"
 
-    embedding_fallback_mode = "tfidf" if embedding_reason in {
-        "missing_api_key",
-        "auth_failed",
+    embedding_fallback_mode = (
+        "tfidf"
+        if embedding_reason
+        in {
+            "missing_api_key",
+            "auth_failed",
+            "timeout",
+            "network_error",
+            "server_error",
+            "dimension_mismatch",
+        }
+        else None
+    )
+    rerank_passthrough_mode = rerank_reason in {
         "timeout",
         "network_error",
         "server_error",
-        "dimension_mismatch",
-    } else None
-    rerank_passthrough_mode = rerank_reason in {"timeout", "network_error", "server_error", "missing_api_key", "auth_failed"}
+        "missing_api_key",
+        "auth_failed",
+    }
 
     response = {
         "answer": _stage_health_entry(
@@ -3515,7 +4201,9 @@ def health_deps() -> dict[str, Any]:
             reason=rerank_reason,
         ),
         "planner": {
-            "status": "blocked" if planner_state["blocked"] else ("ok" if planner_state["formal_chat_available"] else "inactive"),
+            "status": "blocked"
+            if planner_state["blocked"]
+            else ("ok" if planner_state["formal_chat_available"] else "inactive"),
             "provider": planner_state["provider"],
             "model": planner_state["model"],
             "service_mode": planner_state["service_mode"],
@@ -3528,7 +4216,9 @@ def health_deps() -> dict[str, Any]:
         },
     }
     response["rerank"]["passthrough_mode"] = bool(rerank_passthrough_mode)
-    response["rerank"]["recent_failure_reason"] = rerank_reason if rerank_passthrough_mode else None
+    response["rerank"]["recent_failure_reason"] = (
+        rerank_reason if rerank_passthrough_mode else None
+    )
     response["rerank"]["used_fallback"] = bool(rerank_passthrough_mode)
     response["embedding"]["fallback_mode"] = embedding_fallback_mode
     response["embedding"]["degraded_to"] = embedding_fallback_mode
@@ -3539,7 +4229,9 @@ def health_deps() -> dict[str, Any]:
 def get_admin_llm_config() -> dict[str, Any]:
     cfg, err = load_runtime_llm_config()
     if err:
-        raise HTTPException(status_code=500, detail={"code": "CONFIG_INVALID", "message": err})
+        raise HTTPException(
+            status_code=500, detail={"code": "CONFIG_INVALID", "message": err}
+        )
     if cfg is None:
         return {"configured": False}
     return {
@@ -3643,9 +4335,31 @@ def save_admin_llm_config(payload: AdminSaveLLMConfigRequest) -> dict[str, Any]:
             default_provider="siliconflow",
         )
 
-        if any(stage is not None for stage in (answer_stage, embedding_stage, rerank_stage, rewrite_stage, graph_entity_stage, sufficiency_judge_stage)):
-            if any(stage is None for stage in (answer_stage, embedding_stage, rerank_stage, rewrite_stage, graph_entity_stage, sufficiency_judge_stage)):
-                raise ValueError("answer/embedding/rerank/rewrite/graph_entity/sufficiency_judge stage payloads are all required")
+        if any(
+            stage is not None
+            for stage in (
+                answer_stage,
+                embedding_stage,
+                rerank_stage,
+                rewrite_stage,
+                graph_entity_stage,
+                sufficiency_judge_stage,
+            )
+        ):
+            if any(
+                stage is None
+                for stage in (
+                    answer_stage,
+                    embedding_stage,
+                    rerank_stage,
+                    rewrite_stage,
+                    graph_entity_stage,
+                    sufficiency_judge_stage,
+                )
+            ):
+                raise ValueError(
+                    "answer/embedding/rerank/rewrite/graph_entity/sufficiency_judge stage payloads are all required"
+                )
             saved = save_runtime_llm_config(
                 answer=answer_stage,
                 embedding=embedding_stage,
@@ -3669,7 +4383,9 @@ def save_admin_llm_config(payload: AdminSaveLLMConfigRequest) -> dict[str, Any]:
             detail["stage"] = stage
         raise HTTPException(status_code=400, detail=detail) from exc
     except Exception as exc:  # pragma: no cover - defensive
-        raise HTTPException(status_code=500, detail={"code": "CONFIG_SAVE_FAILED", "message": str(exc)}) from exc
+        raise HTTPException(
+            status_code=500, detail={"code": "CONFIG_SAVE_FAILED", "message": str(exc)}
+        ) from exc
 
     return {
         "ok": True,
@@ -3719,16 +4435,26 @@ def save_admin_llm_config(payload: AdminSaveLLMConfigRequest) -> dict[str, Any]:
 def get_admin_pipeline_config() -> dict[str, Any]:
     saved, err = load_pipeline_runtime_config()
     if err:
-        raise HTTPException(status_code=500, detail={"code": "CONFIG_INVALID", "message": err})
+        raise HTTPException(
+            status_code=500, detail={"code": "CONFIG_INVALID", "message": err}
+        )
     effective_enabled = resolve_effective_marker_enabled()
     effective = resolve_effective_marker_tuning()
     effective_llm = resolve_effective_marker_llm()
-    saved_values = asdict(saved.marker_tuning) if saved is not None else asdict(default_marker_tuning())
-    saved_marker_llm = asdict(saved.marker_llm) if saved is not None else asdict(default_marker_llm())
+    saved_values = (
+        asdict(saved.marker_tuning)
+        if saved is not None
+        else asdict(default_marker_tuning())
+    )
+    saved_marker_llm = (
+        asdict(saved.marker_llm) if saved is not None else asdict(default_marker_llm())
+    )
     return {
         "configured": saved is not None,
         "saved": {
-            "marker_enabled": saved.marker_enabled if saved is not None else default_marker_enabled(),
+            "marker_enabled": saved.marker_enabled
+            if saved is not None
+            else default_marker_enabled(),
             "marker_tuning": saved_values,
             "marker_llm": mask_marker_llm_secrets(saved_marker_llm),
         },
@@ -3737,8 +4463,14 @@ def get_admin_pipeline_config() -> dict[str, Any]:
             "marker_tuning": asdict(effective.values),
             "marker_llm": mask_marker_llm_secrets(asdict(effective_llm.values)),
         },
-        "effective_source": {"marker_enabled": effective_enabled.source, "marker_tuning": effective.source, "marker_llm": effective_llm.source},
-        "warnings": effective_enabled.warnings + effective.warnings + effective_llm.warnings,
+        "effective_source": {
+            "marker_enabled": effective_enabled.source,
+            "marker_tuning": effective.source,
+            "marker_llm": effective_llm.source,
+        },
+        "warnings": effective_enabled.warnings
+        + effective.warnings
+        + effective_llm.warnings,
         "updated_at": saved.updated_at if saved is not None else None,
     }
 
@@ -3747,7 +4479,9 @@ def get_admin_pipeline_config() -> dict[str, Any]:
 def get_admin_planner_config() -> dict[str, Any]:
     cfg, err = load_planner_runtime_config()
     if err:
-        raise HTTPException(status_code=500, detail={"code": "CONFIG_INVALID", "message": err})
+        raise HTTPException(
+            status_code=500, detail={"code": "CONFIG_INVALID", "message": err}
+        )
     if cfg is None:
         return {"configured": False}
     payload = mask_planner_runtime_secrets(cfg)
@@ -3769,10 +4503,22 @@ def save_admin_planner_config(payload: AdminSavePlannerConfigRequest) -> dict[st
             timeout_ms=int(payload.timeout_ms),
         )
     except ValueError as exc:
-        raise HTTPException(status_code=400, detail={"code": "INVALID_PARAMS", "message": str(exc), "stage": "planner"}) from exc
+        raise HTTPException(
+            status_code=400,
+            detail={"code": "INVALID_PARAMS", "message": str(exc), "stage": "planner"},
+        ) from exc
     except Exception as exc:  # pragma: no cover - defensive
-        raise HTTPException(status_code=500, detail={"code": "CONFIG_SAVE_FAILED", "message": str(exc)}) from exc
-    return {"ok": True, "config": {"configured": True, **mask_planner_runtime_secrets(saved), "service_mode": saved.service_mode}}
+        raise HTTPException(
+            status_code=500, detail={"code": "CONFIG_SAVE_FAILED", "message": str(exc)}
+        ) from exc
+    return {
+        "ok": True,
+        "config": {
+            "configured": True,
+            **mask_planner_runtime_secrets(saved),
+            "service_mode": saved.service_mode,
+        },
+    }
 
 
 @app.get("/api/admin/llm-logs")
@@ -3789,12 +4535,22 @@ def list_llm_logs(limit: int = Query(default=12, ge=1, le=50)) -> dict[str, Any]
 def download_llm_logs(filename: str | None = None) -> FileResponse:
     target = _resolve_llm_log_download_target(filename)
     if not target.exists():
-        raise HTTPException(status_code=404, detail={"code": "LLM_LOG_NOT_FOUND", "message": "No llm log file available yet"})
-    return FileResponse(path=target, filename=target.name, media_type="text/plain; charset=utf-8")
+        raise HTTPException(
+            status_code=404,
+            detail={
+                "code": "LLM_LOG_NOT_FOUND",
+                "message": "No llm log file available yet",
+            },
+        )
+    return FileResponse(
+        path=target, filename=target.name, media_type="text/plain; charset=utf-8"
+    )
 
 
 @app.post("/api/admin/pipeline-config")
-def save_admin_pipeline_config(payload: AdminSavePipelineConfigRequest) -> dict[str, Any]:
+def save_admin_pipeline_config(
+    payload: AdminSavePipelineConfigRequest,
+) -> dict[str, Any]:
     _ensure_no_active_jobs_for_settings()
     enabled_payload = payload.marker_enabled
     marker_payload = payload.marker_tuning.model_dump()
@@ -3813,11 +4569,19 @@ def save_admin_pipeline_config(payload: AdminSavePipelineConfigRequest) -> dict[
             },
         )
     try:
-        saved = save_pipeline_runtime_config(marker_enabled=enabled_payload, marker_tuning=marker_payload, marker_llm=marker_llm_payload)
+        saved = save_pipeline_runtime_config(
+            marker_enabled=enabled_payload,
+            marker_tuning=marker_payload,
+            marker_llm=marker_llm_payload,
+        )
     except ValueError as exc:
-        raise HTTPException(status_code=400, detail={"code": "INVALID_PARAMS", "message": str(exc)}) from exc
+        raise HTTPException(
+            status_code=400, detail={"code": "INVALID_PARAMS", "message": str(exc)}
+        ) from exc
     except Exception as exc:  # pragma: no cover - defensive
-        raise HTTPException(status_code=500, detail={"code": "CONFIG_SAVE_FAILED", "message": str(exc)}) from exc
+        raise HTTPException(
+            status_code=500, detail={"code": "CONFIG_SAVE_FAILED", "message": str(exc)}
+        ) from exc
 
     effective_enabled = resolve_effective_marker_enabled()
     effective = resolve_effective_marker_tuning()
@@ -3835,8 +4599,14 @@ def save_admin_pipeline_config(payload: AdminSavePipelineConfigRequest) -> dict[
             "marker_tuning": asdict(effective.values),
             "marker_llm": mask_marker_llm_secrets(asdict(effective_llm.values)),
         },
-        "effective_source": {"marker_enabled": effective_enabled.source, "marker_tuning": effective.source, "marker_llm": effective_llm.source},
-        "warnings": effective_enabled.warnings + effective.warnings + effective_llm.warnings,
+        "effective_source": {
+            "marker_enabled": effective_enabled.source,
+            "marker_tuning": effective.source,
+            "marker_llm": effective_llm.source,
+        },
+        "warnings": effective_enabled.warnings
+        + effective.warnings
+        + effective_llm.warnings,
     }
 
 
@@ -3873,18 +4643,26 @@ def get_runtime_overview() -> dict[str, Any]:
             "pipeline": {},
             "observability": {"llm_logging": llm_logging_summary},
             "jobs": {"active": active_jobs, "settings_locked": bool(active_jobs)},
-            "status": {"level": "ERROR", "reasons": [planner_err, *llm_log_cfg.warnings]},
+            "status": {
+                "level": "ERROR",
+                "reasons": [planner_err, *llm_log_cfg.warnings],
+            },
             "updated_at": _iso_now(),
         }
 
     cfg, config_warnings = load_and_validate_config(CONFIGS_DIR / "default.yaml")
     try:
-        raw_data = yaml.safe_load((CONFIGS_DIR / "default.yaml").read_text(encoding="utf-8")) or {}
+        raw_data = (
+            yaml.safe_load((CONFIGS_DIR / "default.yaml").read_text(encoding="utf-8"))
+            or {}
+        )
         if not isinstance(raw_data, dict):
             raw_data = {}
     except Exception as exc:
         raw_data = {}
-        config_warnings = list(config_warnings) + [f"Failed to load default.yaml for runtime overview: {exc}"]
+        config_warnings = list(config_warnings) + [
+            f"Failed to load default.yaml for runtime overview: {exc}"
+        ]
     effective_stage_llm = resolve_effective_llm_stages(
         raw_data=raw_data,
         runtime_cfg=llm_cfg,
@@ -3893,19 +4671,35 @@ def get_runtime_overview() -> dict[str, Any]:
 
     llm = {
         "answer": _runtime_stage_entry(
-            {"provider": cfg.answer_llm_provider, "api_base": cfg.answer_llm_api_base, "model": cfg.answer_llm_model},
+            {
+                "provider": cfg.answer_llm_provider,
+                "api_base": cfg.answer_llm_api_base,
+                "model": cfg.answer_llm_model,
+            },
             effective_source=effective_stage_llm.stages["answer"].source,
         ),
         "embedding": _runtime_stage_entry(
-            {"provider": cfg.embedding_provider, "api_base": cfg.embedding_api_base, "model": cfg.embedding_model},
+            {
+                "provider": cfg.embedding_provider,
+                "api_base": cfg.embedding_api_base,
+                "model": cfg.embedding_model,
+            },
             effective_source=effective_stage_llm.stages["embedding"].source,
         ),
         "rerank": _runtime_stage_entry(
-            {"provider": cfg.rerank_provider, "api_base": cfg.rerank_api_base, "model": cfg.rerank_model},
+            {
+                "provider": cfg.rerank_provider,
+                "api_base": cfg.rerank_api_base,
+                "model": cfg.rerank_model,
+            },
             effective_source=effective_stage_llm.stages["rerank"].source,
         ),
         "rewrite": _runtime_stage_entry(
-            {"provider": cfg.rewrite_llm_provider, "api_base": cfg.rewrite_llm_api_base, "model": cfg.rewrite_llm_model},
+            {
+                "provider": cfg.rewrite_llm_provider,
+                "api_base": cfg.rewrite_llm_api_base,
+                "model": cfg.rewrite_llm_model,
+            },
             effective_source=effective_stage_llm.stages["rewrite"].source,
         ),
         "graph_entity": _runtime_stage_entry(
@@ -3925,11 +4719,15 @@ def get_runtime_overview() -> dict[str, Any]:
             effective_source=effective_stage_llm.stages["sufficiency_judge"].source,
         ),
     }
-    effective_planner, planner_source, planner_warnings = resolve_effective_planner_runtime(
-        raw_data=raw_data,
-        runtime_cfg=planner_cfg,
+    effective_planner, planner_source, planner_warnings = (
+        resolve_effective_planner_runtime(
+            raw_data=raw_data,
+            runtime_cfg=planner_cfg,
+        )
     )
-    planner_state = evaluate_planner_service_state(effective_planner, api_key=effective_planner.api_key)
+    planner_state = evaluate_planner_service_state(
+        effective_planner, api_key=effective_planner.api_key
+    )
     planner = {
         "service_mode": planner_state["service_mode"],
         "provider": effective_planner.provider,
@@ -3949,14 +4747,24 @@ def get_runtime_overview() -> dict[str, Any]:
     effective_enabled = resolve_effective_marker_enabled()
     effective = resolve_effective_marker_tuning()
     effective_llm = resolve_effective_marker_llm()
-    marker_llm_entry = _marker_llm_runtime_entry(asdict(effective_llm.values), effective_llm.source)
+    marker_llm_entry = _marker_llm_runtime_entry(
+        asdict(effective_llm.values), effective_llm.source
+    )
     latest_import = _load_latest_import_result()
-    artifact_summary = latest_import.artifact_summary if latest_import.updated_at else {"counts": {}}
+    artifact_summary = (
+        latest_import.artifact_summary if latest_import.updated_at else {"counts": {}}
+    )
     status_level, reasons = _build_runtime_status(
         llm=llm,
         planner=planner,
         marker_source=effective.source,
-        marker_warnings=effective_stage_llm.warnings + planner_warnings + effective_enabled.warnings + effective.warnings + effective_llm.warnings + config_warnings + llm_log_cfg.warnings,
+        marker_warnings=effective_stage_llm.warnings
+        + planner_warnings
+        + effective_enabled.warnings
+        + effective.warnings
+        + effective_llm.warnings
+        + config_warnings
+        + llm_log_cfg.warnings,
         marker_llm=marker_llm_entry,
         artifact_summary=artifact_summary,
         ingest_degradation={
@@ -3976,7 +4784,10 @@ def get_runtime_overview() -> dict[str, Any]:
                 degraded=bool(latest_import.degraded),
             ),
             "marker_tuning": asdict(effective.values),
-            "effective_source": {"marker_enabled": effective_enabled.source, "marker_tuning": effective.source},
+            "effective_source": {
+                "marker_enabled": effective_enabled.source,
+                "marker_tuning": effective.source,
+            },
             "marker_llm": marker_llm_entry,
             "last_ingest": {
                 "degraded": latest_import.degraded,
@@ -4007,7 +4818,9 @@ def health() -> dict[str, str]:
 
 
 @app.post("/api/planner/shadow-review", response_model=PlannerShadowReviewResponse)
-def save_planner_shadow_review(payload: PlannerShadowReviewRequest) -> PlannerShadowReviewResponse:
+def save_planner_shadow_review(
+    payload: PlannerShadowReviewRequest,
+) -> PlannerShadowReviewResponse:
     try:
         saved = save_shadow_review(
             trace_id=payload.trace_id,
@@ -4018,7 +4831,10 @@ def save_planner_shadow_review(payload: PlannerShadowReviewRequest) -> PlannerSh
             base_dir=RUNS_DIR,
         )
     except ValueError as exc:
-        raise HTTPException(status_code=400, detail={"code": "INVALID_SHADOW_REVIEW", "message": str(exc)}) from exc
+        raise HTTPException(
+            status_code=400,
+            detail={"code": "INVALID_SHADOW_REVIEW", "message": str(exc)},
+        ) from exc
     return PlannerShadowReviewResponse(**saved)
 
 
@@ -4039,7 +4855,9 @@ def start_graph_build_task(payload: GraphBuildTaskStartRequest) -> TaskStatusRes
         updated_at=now,
         job_id=task_id,
         job_kind="graph_build",
-        progress=TaskProgressInfo(stage="queued", processed=0, total=0, elapsed_ms=0, message="任务已排队"),
+        progress=TaskProgressInfo(
+            stage="queued", processed=0, total=0, elapsed_ms=0, message="任务已排队"
+        ),
     )
     _save_task(task)
     cancel_event = threading.Event()
@@ -4094,7 +4912,9 @@ def start_graph_build_task(payload: GraphBuildTaskStartRequest) -> TaskStatusRes
                 "on_progress": on_progress,
             }
             if payload.llm_max_concurrency is not None:
-                run_kwargs["llm_max_concurrency"] = max(1, int(payload.llm_max_concurrency))
+                run_kwargs["llm_max_concurrency"] = max(
+                    1, int(payload.llm_max_concurrency)
+                )
             code = run_graph_build(
                 payload.input_path,
                 payload.output_path,
@@ -4103,7 +4923,11 @@ def start_graph_build_task(payload: GraphBuildTaskStartRequest) -> TaskStatusRes
             with _TASKS_LOCK:
                 local = _TASKS[task_id]
                 is_cancelled = cancel_event.is_set() or local.state == "cancelled"
-                local.state = "cancelled" if is_cancelled else ("succeeded" if code == 0 else "failed")
+                local.state = (
+                    "cancelled"
+                    if is_cancelled
+                    else ("succeeded" if code == 0 else "failed")
+                )
                 local.updated_at = _iso_now()
                 local.result = {"output_path": payload.output_path, "code": int(code)}
                 if local.progress is None:
@@ -4185,7 +5009,10 @@ def cancel_task(task_id: str) -> TaskCancelResponse:
         if task is None:
             raise HTTPException(
                 status_code=404,
-                detail={"code": "TASK_NOT_FOUND", "message": f"task_id not found: {task_id}"},
+                detail={
+                    "code": "TASK_NOT_FOUND",
+                    "message": f"task_id not found: {task_id}",
+                },
             )
         if task.state in {"succeeded", "failed", "cancelled"}:
             return TaskCancelResponse(
@@ -4233,33 +5060,54 @@ def list_tasks(limit: int = 20) -> list[TaskStatusResponse]:
 
 @app.get("/api/jobs", response_model=list[JobStatusResponse])
 def list_jobs(state: str | None = None, limit: int = 50) -> list[JobStatusResponse]:
-    states = {item.strip() for item in str(state or "").split(",") if item.strip()} or None
-    return [_job_response(item) for item in list_stored_jobs(states=states, limit=limit)]
+    states = {
+        item.strip() for item in str(state or "").split(",") if item.strip()
+    } or None
+    return [
+        _job_response(item) for item in list_stored_jobs(states=states, limit=limit)
+    ]
 
 
 @app.get("/api/jobs/{job_id}", response_model=JobStatusResponse)
 def get_job_status(job_id: str) -> JobStatusResponse:
     record = get_stored_job(job_id)
     if record is None:
-        raise HTTPException(status_code=404, detail={"code": "JOB_NOT_FOUND", "message": f"job_id not found: {job_id}"})
+        raise HTTPException(
+            status_code=404,
+            detail={"code": "JOB_NOT_FOUND", "message": f"job_id not found: {job_id}"},
+        )
     return _job_response(record)
 
 
 @app.get("/api/jobs/{job_id}/events", response_model=list[JobEventResponse])
-def get_job_events(job_id: str, after_seq: int = 0, limit: int = 500) -> list[JobEventResponse]:
+def get_job_events(
+    job_id: str, after_seq: int = 0, limit: int = 500
+) -> list[JobEventResponse]:
     if get_stored_job(job_id) is None:
-        raise HTTPException(status_code=404, detail={"code": "JOB_NOT_FOUND", "message": f"job_id not found: {job_id}"})
-    return [_job_event_response(item) for item in list_job_events(job_id, after_seq=after_seq, limit=limit)]
+        raise HTTPException(
+            status_code=404,
+            detail={"code": "JOB_NOT_FOUND", "message": f"job_id not found: {job_id}"},
+        )
+    return [
+        _job_event_response(item)
+        for item in list_job_events(job_id, after_seq=after_seq, limit=limit)
+    ]
 
 
 @app.get("/api/jobs/{job_id}/llm-debug", response_model=LlmDebugTraceResponse)
 def get_job_llm_debug(job_id: str) -> LlmDebugTraceResponse:
     record = get_stored_job(job_id)
     if record is None:
-        raise HTTPException(status_code=404, detail={"code": "JOB_NOT_FOUND", "message": f"job_id not found: {job_id}"})
+        raise HTTPException(
+            status_code=404,
+            detail={"code": "JOB_NOT_FOUND", "message": f"job_id not found: {job_id}"},
+        )
     trace_id = str(record.trace_id or "").strip()
     if not trace_id:
-        raise HTTPException(status_code=404, detail={"code": "LLM_DEBUG_NOT_FOUND", "message": "job has no trace_id"})
+        raise HTTPException(
+            status_code=404,
+            detail={"code": "LLM_DEBUG_NOT_FOUND", "message": "job has no trace_id"},
+        )
     return get_llm_debug_trace(trace_id)
 
 
@@ -4267,26 +5115,54 @@ def get_job_llm_debug(job_id: str) -> LlmDebugTraceResponse:
 def cancel_job(job_id: str) -> JobCancelResponse:
     record = get_stored_job(job_id)
     if record is None:
-        raise HTTPException(status_code=404, detail={"code": "JOB_NOT_FOUND", "message": f"job_id not found: {job_id}"})
+        raise HTTPException(
+            status_code=404,
+            detail={"code": "JOB_NOT_FOUND", "message": f"job_id not found: {job_id}"},
+        )
     if record.kind in {"graph_build", "library_import"}:
         task_result = cancel_task(job_id)
         latest = get_stored_job(job_id)
         if latest is None:
-            latest = record.model_copy(update={"state": task_result.state, "updated_at": task_result.updated_at})
-        return _job_cancel_response(latest, cancelled=task_result.cancelled, message=task_result.message)
+            latest = record.model_copy(
+                update={
+                    "state": task_result.state,
+                    "updated_at": task_result.updated_at,
+                }
+            )
+        return _job_cancel_response(
+            latest, cancelled=task_result.cancelled, message=task_result.message
+        )
     if record.kind not in {"chat_answer", "planner_chat"}:
-        raise HTTPException(status_code=409, detail={"code": "JOB_CANCEL_UNSUPPORTED", "message": f"job kind does not support cancel: {record.kind}"})
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "JOB_CANCEL_UNSUPPORTED",
+                "message": f"job kind does not support cancel: {record.kind}",
+            },
+        )
     if record.state in {"succeeded", "failed", "cancelled"}:
-        return _job_cancel_response(record, cancelled=False, message=f"任务已处于终态：{record.state}")
+        return _job_cancel_response(
+            record, cancelled=False, message=f"任务已处于终态：{record.state}"
+        )
 
     cancelled_at = _iso_now()
-    updated = record.model_copy(update={"state": "cancelled", "updated_at": cancelled_at, "progress_stage": "cancelled"})
+    updated = record.model_copy(
+        update={
+            "state": "cancelled",
+            "updated_at": cancelled_at,
+            "progress_stage": "cancelled",
+        }
+    )
     upsert_job(updated)
     append_job_event(
         job_id=job_id,
         event_type="state_changed",
         created_at=cancelled_at,
-        payload={"state": "cancelled", "traceId": record.trace_id, "mode": record.metadata.get("mode")},
+        payload={
+            "state": "cancelled",
+            "traceId": record.trace_id,
+            "mode": record.metadata.get("mode"),
+        },
     )
     with _TASKS_LOCK:
         cancel_event = _JOB_CANCEL_EVENTS.get(job_id)
@@ -4316,7 +5192,10 @@ def list_library_papers(
     normalized_status = str(status or "").strip()
     normalized_topic = str(topic or "").strip()
     normalized_query = str(q or "").strip().lower()
-    store_path = ensure_store_current(processed_dir=DATA_DIR / "processed", topics_path=DATA_DIR / "library_topics.json")
+    store_path = ensure_store_current(
+        processed_dir=DATA_DIR / "processed",
+        topics_path=DATA_DIR / "library_topics.json",
+    )
     rows = list_store_papers(
         db_path=store_path,
         limit=max(1, min(500, int(limit))),
@@ -4325,7 +5204,10 @@ def list_library_papers(
     )
     out: list[LibraryPaperResponse] = []
     for row in rows:
-        if normalized_status and str(row.get("status", "")).strip() != normalized_status:
+        if (
+            normalized_status
+            and str(row.get("status", "")).strip() != normalized_status
+        ):
             continue
         if normalized_topic and normalized_topic not in list(row.get("topics") or []):
             continue
@@ -4345,14 +5227,25 @@ def list_library_papers(
 
 @app.get("/api/library/papers/{paper_id}", response_model=LibraryPaperResponse)
 def get_library_paper(paper_id: str) -> LibraryPaperResponse:
-    store_path = ensure_store_current(processed_dir=DATA_DIR / "processed", topics_path=DATA_DIR / "library_topics.json")
+    store_path = ensure_store_current(
+        processed_dir=DATA_DIR / "processed",
+        topics_path=DATA_DIR / "library_topics.json",
+    )
     row = get_store_paper(paper_id, db_path=store_path)
     if row is None:
-        raise HTTPException(status_code=404, detail={"code": "PAPER_NOT_FOUND", "message": f"paper_id not found: {paper_id}"})
+        raise HTTPException(
+            status_code=404,
+            detail={
+                "code": "PAPER_NOT_FOUND",
+                "message": f"paper_id not found: {paper_id}",
+            },
+        )
     return LibraryPaperResponse.model_validate(row)
 
 
-@app.post("/api/library/papers/{paper_id}/delete", response_model=LibraryPaperActionResponse)
+@app.post(
+    "/api/library/papers/{paper_id}/delete", response_model=LibraryPaperActionResponse
+)
 def delete_library_paper(paper_id: str) -> LibraryPaperActionResponse:
     payload = _orchestrate_paper_delete(paper_id=paper_id)
     paper = payload["paper"] or {"paper_id": paper_id, "status": "deleted"}
@@ -4365,9 +5258,13 @@ def delete_library_paper(paper_id: str) -> LibraryPaperActionResponse:
     )
 
 
-@app.post("/api/library/papers/{paper_id}/rebuild", response_model=LibraryPaperActionResponse)
+@app.post(
+    "/api/library/papers/{paper_id}/rebuild", response_model=LibraryPaperActionResponse
+)
 def rebuild_library_paper(paper_id: str) -> LibraryPaperActionResponse:
-    payload = _orchestrate_paper_rebuild(paper_id=paper_id, reason="rebuild_requested_by_user")
+    payload = _orchestrate_paper_rebuild(
+        paper_id=paper_id, reason="rebuild_requested_by_user"
+    )
     paper = payload["paper"] or {"paper_id": paper_id, "status": "rebuild_pending"}
     return LibraryPaperActionResponse(
         ok=True,
@@ -4378,13 +5275,26 @@ def rebuild_library_paper(paper_id: str) -> LibraryPaperActionResponse:
     )
 
 
-@app.post("/api/library/papers/{paper_id}/retry", response_model=LibraryPaperActionResponse)
+@app.post(
+    "/api/library/papers/{paper_id}/retry", response_model=LibraryPaperActionResponse
+)
 def retry_library_paper(paper_id: str) -> LibraryPaperActionResponse:
-    store_path = ensure_store_current(processed_dir=DATA_DIR / "processed", topics_path=DATA_DIR / "library_topics.json")
+    store_path = ensure_store_current(
+        processed_dir=DATA_DIR / "processed",
+        topics_path=DATA_DIR / "library_topics.json",
+    )
     row = get_store_paper(paper_id, db_path=store_path)
     if row is None:
-        raise HTTPException(status_code=404, detail={"code": "PAPER_NOT_FOUND", "message": f"paper_id not found: {paper_id}"})
-    update_paper(paper_id, status="rebuild_pending", error_message="", db_path=store_path)
+        raise HTTPException(
+            status_code=404,
+            detail={
+                "code": "PAPER_NOT_FOUND",
+                "message": f"paper_id not found: {paper_id}",
+            },
+        )
+    update_paper(
+        paper_id, status="rebuild_pending", error_message="", db_path=store_path
+    )
     upsert_stage_status(
         paper_id=paper_id,
         stage="import",
@@ -4393,7 +5303,9 @@ def retry_library_paper(paper_id: str) -> LibraryPaperActionResponse:
         metadata={"reason": "retry_requested_by_user"},
         db_path=store_path,
     )
-    payload = _orchestrate_paper_rebuild(paper_id=paper_id, reason="retry_requested_by_user")
+    payload = _orchestrate_paper_rebuild(
+        paper_id=paper_id, reason="retry_requested_by_user"
+    )
     paper = payload["paper"] or {"paper_id": paper_id, "status": "rebuild_pending"}
     return LibraryPaperActionResponse(
         ok=True,
@@ -4404,18 +5316,82 @@ def retry_library_paper(paper_id: str) -> LibraryPaperActionResponse:
     )
 
 
+@app.get("/api/library/papers/pending-rebuild")
+def get_papers_pending_rebuild(limit: int = 100) -> dict[str, Any]:
+    """Get list of papers pending rebuild, ordered by priority."""
+    store_path = ensure_store_current(
+        processed_dir=DATA_DIR / "processed",
+        topics_path=DATA_DIR / "library_topics.json",
+    )
+    papers = list_papers_pending_rebuild(db_path=store_path, limit=limit)
+    return {
+        "ok": True,
+        "count": len(papers),
+        "papers": papers,
+    }
+
+
+@app.post("/api/library/papers/execute-rebuild")
+def execute_papers_rebuild(paper_ids: list[str] | None = None) -> dict[str, Any]:
+    """Execute rebuild for papers. If paper_ids not provided, rebuild all pending papers."""
+    store_path = ensure_store_current(
+        processed_dir=DATA_DIR / "processed",
+        topics_path=DATA_DIR / "library_topics.json",
+    )
+
+    if paper_ids:
+        target_ids = [str(pid).strip() for pid in paper_ids if str(pid).strip()]
+    else:
+        pending = list_papers_pending_rebuild(db_path=store_path, limit=100)
+        target_ids = [p["paper_id"] for p in pending]
+
+    results = []
+    for paper_id in target_ids:
+        try:
+            _orchestrate_paper_rebuild(
+                paper_id=paper_id, reason="batch_rebuild_scheduled"
+            )
+            results.append(
+                {"paper_id": paper_id, "status": "rebuild_pending", "ok": True}
+            )
+        except HTTPException as exc:
+            results.append(
+                {
+                    "paper_id": paper_id,
+                    "status": "error",
+                    "ok": False,
+                    "error": exc.detail.get("message", str(exc)),
+                }
+            )
+
+    succeeded = sum(1 for r in results if r["ok"])
+    failed = len(results) - succeeded
+
+    return {
+        "ok": failed == 0,
+        "total": len(results),
+        "succeeded": succeeded,
+        "failed": failed,
+        "results": results,
+    }
+
+
 @app.get("/api/library/vector-backend", response_model=VectorBackendStateResponse)
 def get_library_vector_backend() -> VectorBackendStateResponse:
     payload = _load_vector_backend_summary()
     if payload is None:
-        return VectorBackendStateResponse(backend_name="file", status="missing", metadata={})
+        return VectorBackendStateResponse(
+            backend_name="file", status="missing", metadata={}
+        )
     return VectorBackendStateResponse.model_validate(payload)
 
 
 @app.get("/api/library/marker-artifacts")
 def get_marker_artifacts() -> dict[str, Any]:
     latest = _load_latest_import_result()
-    artifacts = _build_marker_artifacts(latest_updated_at=latest.updated_at, stage_updated_at=latest.stage_updated_at)
+    artifacts = _build_marker_artifacts(
+        latest_updated_at=latest.updated_at, stage_updated_at=latest.stage_updated_at
+    )
     return {
         "items": [artifact.model_dump() for artifact in artifacts],
         "summary": _summarize_marker_artifacts(artifacts),
@@ -4428,13 +5404,25 @@ def delete_marker_artifact(payload: MarkerArtifactDeleteRequest) -> dict[str, An
     allowed = {key: path for key, path, _artifact_type, _stage in _ARTIFACT_INDEX}
     target = allowed.get(payload.key)
     if target is None:
-        raise HTTPException(status_code=404, detail={"code": "ARTIFACT_NOT_FOUND", "message": "artifact key not found"})
+        raise HTTPException(
+            status_code=404,
+            detail={"code": "ARTIFACT_NOT_FOUND", "message": "artifact key not found"},
+        )
     if not target.exists():
-        raise HTTPException(status_code=404, detail={"code": "ARTIFACT_MISSING", "message": "artifact file does not exist"})
+        raise HTTPException(
+            status_code=404,
+            detail={
+                "code": "ARTIFACT_MISSING",
+                "message": "artifact file does not exist",
+            },
+        )
     try:
         target.unlink()
     except Exception as exc:
-        raise HTTPException(status_code=500, detail={"code": "ARTIFACT_DELETE_FAILED", "message": str(exc)}) from exc
+        raise HTTPException(
+            status_code=500,
+            detail={"code": "ARTIFACT_DELETE_FAILED", "message": str(exc)},
+        ) from exc
     return {
         "ok": True,
         "deleted": payload.key,
@@ -4450,14 +5438,21 @@ async def import_library_files(request: Request) -> LibraryImportResponse:
     except RuntimeError as exc:
         raise HTTPException(
             status_code=500,
-            detail={"code": "MULTIPART_UNAVAILABLE", "message": f"multipart form parsing unavailable: {exc}"},
+            detail={
+                "code": "MULTIPART_UNAVAILABLE",
+                "message": f"multipart form parsing unavailable: {exc}",
+            },
         ) from exc
 
     topic = str(form.get("topic", "") or "")
     # request.form() returns Starlette UploadFile objects; use Starlette type to avoid dropping valid files.
-    files = [item for item in form.getlist("files") if isinstance(item, StarletteUploadFile)]
+    files = [
+        item for item in form.getlist("files") if isinstance(item, StarletteUploadFile)
+    ]
     if not files:
-        raise HTTPException(status_code=400, detail={"code": "NO_FILES", "message": "未上传文件"})
+        raise HTTPException(
+            status_code=400, detail={"code": "NO_FILES", "message": "未上传文件"}
+        )
     active = _find_active_task("library_import")
     if active is not None:
         return LibraryImportResponse(
@@ -4475,10 +5470,15 @@ async def import_library_files(request: Request) -> LibraryImportResponse:
     except Exception as exc:
         raise HTTPException(
             status_code=500,
-            detail={"code": "UPLOAD_STAGING_FAILED", "message": f"暂存上传文件失败: {exc}"},
+            detail={
+                "code": "UPLOAD_STAGING_FAILED",
+                "message": f"暂存上传文件失败: {exc}",
+            },
         ) from exc
 
-    task = _start_library_import_task(task_id=task_id, upload_paths=upload_paths, topic=topic)
+    task = _start_library_import_task(
+        task_id=task_id, upload_paths=upload_paths, topic=topic
+    )
     return LibraryImportResponse(
         ok=True,
         message=f"已接收 {len(upload_paths)} 个文件，后台正在导入。",
@@ -4492,7 +5492,9 @@ async def import_library_files(request: Request) -> LibraryImportResponse:
 
 
 @app.post("/api/library/import-from-dir", response_model=LibraryImportResponse)
-def import_library_from_dir(payload: LibraryImportFromDirRequest) -> LibraryImportResponse:
+def import_library_from_dir(
+    payload: LibraryImportFromDirRequest,
+) -> LibraryImportResponse:
     raw_dir = payload.source_dir.strip()
     source_dir = Path(raw_dir).expanduser()
     if not source_dir.is_absolute():
@@ -4506,15 +5508,41 @@ def import_library_from_dir(payload: LibraryImportFromDirRequest) -> LibraryImpo
     local_paths = sorted(
         path
         for path in source_dir.rglob("*")
-        if path.is_file() and path.suffix.lower() in {
-            ".pdf", ".txt", ".md", ".mdx", ".html", ".htm", ".tex", ".json", ".xml", ".yaml", ".yml", ".csv",
-            ".log", ".conf", ".ini", ".properties", ".sql", ".docx", ".pptx", ".xlsx", ".rtf", ".odt", ".epub"
+        if path.is_file()
+        and path.suffix.lower()
+        in {
+            ".pdf",
+            ".txt",
+            ".md",
+            ".mdx",
+            ".html",
+            ".htm",
+            ".tex",
+            ".json",
+            ".xml",
+            ".yaml",
+            ".yml",
+            ".csv",
+            ".log",
+            ".conf",
+            ".ini",
+            ".properties",
+            ".sql",
+            ".docx",
+            ".pptx",
+            ".xlsx",
+            ".rtf",
+            ".odt",
+            ".epub",
         }
     )
     if not local_paths:
         raise HTTPException(
             status_code=400,
-            detail={"code": "NO_LOCAL_DOCS", "message": f"目录中未找到可导入文档: {source_dir}"},
+            detail={
+                "code": "NO_LOCAL_DOCS",
+                "message": f"目录中未找到可导入文档: {source_dir}",
+            },
         )
 
     active = _find_active_task("library_import")
@@ -4529,7 +5557,9 @@ def import_library_from_dir(payload: LibraryImportFromDirRequest) -> LibraryImpo
         )
 
     task_id = f"task_library_import_{uuid4().hex}"
-    task = _start_library_import_task(task_id=task_id, upload_paths=local_paths, topic=payload.topic)
+    task = _start_library_import_task(
+        task_id=task_id, upload_paths=local_paths, topic=payload.topic
+    )
     return LibraryImportResponse(
         ok=True,
         message=f"已接收目录中的 {len(local_paths)} 个文档，后台正在导入。",
@@ -4547,9 +5577,13 @@ def qa(payload: KernelChatRequest) -> KernelChatResponse:
     try:
         return _run_qa_once(payload)
     except FileNotFoundError as exc:
-        raise HTTPException(status_code=500, detail={"code": "KERNEL_BAD_RESPONSE", "message": str(exc)}) from exc
+        raise HTTPException(
+            status_code=500, detail={"code": "KERNEL_BAD_RESPONSE", "message": str(exc)}
+        ) from exc
     except Exception as exc:  # pragma: no cover - defensive
-        raise HTTPException(status_code=500, detail={"code": "KERNEL_UNKNOWN", "message": str(exc)}) from exc
+        raise HTTPException(
+            status_code=500, detail={"code": "KERNEL_UNKNOWN", "message": str(exc)}
+        ) from exc
 
 
 @app.post("/api/jobs/chat", response_model=JobCreateResponse)
@@ -4569,9 +5603,13 @@ def planner_qa(payload: KernelChatRequest) -> KernelChatResponse:
     except HTTPException:
         raise
     except FileNotFoundError as exc:
-        raise HTTPException(status_code=500, detail={"code": "KERNEL_BAD_RESPONSE", "message": str(exc)}) from exc
+        raise HTTPException(
+            status_code=500, detail={"code": "KERNEL_BAD_RESPONSE", "message": str(exc)}
+        ) from exc
     except Exception as exc:  # pragma: no cover - defensive
-        raise HTTPException(status_code=500, detail={"code": "KERNEL_UNKNOWN", "message": str(exc)}) from exc
+        raise HTTPException(
+            status_code=500, detail={"code": "KERNEL_UNKNOWN", "message": str(exc)}
+        ) from exc
 
 
 @app.post("/api/jobs/planner", response_model=JobCreateResponse)
