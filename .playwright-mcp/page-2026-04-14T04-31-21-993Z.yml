@@ -1,0 +1,125 @@
+- generic [ref=e1]:
+  - generic [ref=e3]:
+    - complementary [ref=e4]:
+      - generic [ref=e5]:
+        - generic [ref=e6]:
+          - img [ref=e7]
+          - text: RAG SaaS
+        - heading "研究助理工作台" [level=1] [ref=e11]
+        - paragraph [ref=e12]: 把对话问答、知识处理、模型切换整合成一套更适合中文用户的工作流。
+        - generic [ref=e13]:
+          - paragraph [ref=e14]: 当前主线
+          - paragraph [ref=e15]: 先导入资料，再在聊天页验证答案，最后用模型设置做精细调整。
+          - link "LLM 日志查看与下载" [ref=e17] [cursor=pointer]:
+            - /url: /settings#llm-log-config
+            - img [ref=e18]
+            - text: LLM 日志查看与下载
+      - navigation [ref=e21]:
+        - link "对话问答" [ref=e22] [cursor=pointer]:
+          - /url: /chat
+          - img [ref=e23]
+          - generic [ref=e26]: 对话问答
+          - img [ref=e27]
+        - link "知识处理" [ref=e30] [cursor=pointer]:
+          - /url: /pipeline
+          - img [ref=e31]
+          - generic [ref=e36]: 知识处理
+        - link "模型设置" [ref=e37] [cursor=pointer]:
+          - /url: /settings
+          - img [ref=e38]
+          - generic [ref=e41]: 模型设置
+      - generic [ref=e42]: 版本 1.0 · 中文友好的研究面板
+    - main [ref=e43]:
+      - generic [ref=e44]:
+        - generic [ref=e46]: 已连接
+        - generic [ref=e48]:
+          - generic [ref=e148]:
+            - generic [ref=e149]: ⚠️ 系统当前处于降级运行状态 (DEGRADED)
+            - button "查看详情" [ref=e150] [cursor=pointer]:
+              - text: 查看详情
+              - img [ref=e151]
+            - link "前往模型设置" [ref=e153] [cursor=pointer]:
+              - /url: /settings
+          - list [ref=e154]:
+            - listitem [ref=e155]: "ollama_base_url: http://127.0.0.1:11434"
+            - listitem [ref=e156]: "openai_model: Pro/moonshotai/Kimi-K2.5"
+            - listitem [ref=e157]: "openai_base_url: https://api.siliconflow.cn/v1"
+        - generic [ref=e50]:
+          - generic [ref=e51]: "LLM 日志: 开启"
+          - generic [ref=e52]: "长度上限: 50000"
+          - link "查看日志" [ref=e53] [cursor=pointer]:
+            - /url: /settings#llm-log-config
+      - generic [ref=e54]:
+        - complementary [ref=e55]:
+          - generic [ref=e56]:
+            - generic [ref=e57]:
+              - generic [ref=e58]:
+                - paragraph [ref=e59]: 会话历史
+                - heading "研究对话" [level=2] [ref=e60]
+              - generic [ref=e61]: 连接正常
+            - paragraph [ref=e63]: 把问答沉淀成可回看的研究会话，方便继续追问、回溯与验证。
+            - button "+ 新建对话" [ref=e64] [cursor=pointer]:
+              - img [ref=e65]
+              - text: + 新建对话
+          - generic [ref=e67]:
+            - button "仅知识库 只看已导入资料" [ref=e68] [cursor=pointer]:
+              - img [ref=e69]
+              - paragraph [ref=e73]: 仅知识库
+              - paragraph [ref=e74]: 只看已导入资料
+            - button "联网补充 补一点公开信息" [ref=e75] [cursor=pointer]:
+              - img [ref=e76]
+              - paragraph [ref=e79]: 联网补充
+              - paragraph [ref=e80]: 补一点公开信息
+            - button "混合回答 资料和网络一起看" [ref=e81] [cursor=pointer]:
+              - img [ref=e82]
+              - paragraph [ref=e87]: 混合回答
+              - paragraph [ref=e88]: 资料和网络一起看
+          - generic [ref=e89]:
+            - generic [ref=e90]:
+              - img [ref=e91]
+              - text: 历史会话
+            - generic [ref=e96]: 还没有历史对话。你发出的第一条问题会自动出现在这里。
+        - generic [ref=e97]:
+          - generic [ref=e99]:
+            - generic [ref=e100]:
+              - generic [ref=e101]:
+                - paragraph [ref=e102]: 研究问答工作区
+                - heading "带历史记录的知识问答工作区" [level=3] [ref=e103]
+                - paragraph [ref=e104]: 把提问、引用和依据放在同一个页面里，首屏先服务于发问、看回答和继续追问。
+              - generic [ref=e105]:
+                - generic [ref=e106]:
+                  - paragraph [ref=e107]: 当前状态
+                  - paragraph [ref=e108]: ⚠️ 降级运行
+                  - paragraph [ref=e109]: 1 marker artifacts are missing
+                - generic [ref=e110]:
+                  - paragraph [ref=e111]: 当前使用模型
+                  - paragraph [ref=e112]: 推理：Pro/deepseek-ai/DeepSeek-V3.2
+                  - paragraph [ref=e113]: 重排：Qwen/Qwen3-Reranker-8B
+                  - paragraph [ref=e114]: 改写：Qwen/Qwen3.5-9B
+            - generic [ref=e115]:
+              - button "简洁视图" [ref=e116] [cursor=pointer]
+              - button "排障视图" [ref=e117] [cursor=pointer]
+              - generic [ref=e118]: 左侧会自动保存历史，这里专心提问就行。
+          - generic [ref=e122]:
+            - generic [ref=e123]:
+              - generic [ref=e124]:
+                - paragraph [ref=e125]: 新对话
+                - paragraph [ref=e126]: 这是一段可持续追问的对话，左侧会自动保存历史。
+              - generic [ref=e127]: 0 条消息
+            - generic [ref=e129]:
+              - img [ref=e131]
+              - paragraph [ref=e134]: 对话问答
+              - heading "向你的研究知识库提问" [level=3] [ref=e135]
+              - paragraph [ref=e136]: 系统会尽量给出中文解释、证据来源和关键对比，适合非技术用户直接阅读。
+              - generic [ref=e137]:
+                - button "总结当前知识库里关于 GraphRAG 的核心方法差异" [ref=e138] [cursor=pointer]
+                - button "给我一份最近导入论文的关键贡献对比表" [ref=e139] [cursor=pointer]
+                - button "基于现有证据回答：为什么这套方案更稳健？" [ref=e140] [cursor=pointer]
+                - button "列出可直接落地到生产环境的三项改进建议" [ref=e141] [cursor=pointer]
+            - generic [ref=e142]:
+              - generic [ref=e143]: 输入问题
+              - generic [ref=e144]:
+                - textbox "例如：比较这两篇论文的方法差异，并用中文解释各自优缺点。" [active] [ref=e145]: 什么是RAG技术？
+                - button "发送" [disabled] [ref=e146]
+  - region "Notifications alt+T"
+  - alert [ref=e147]

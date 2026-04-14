@@ -6,7 +6,16 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from app.paper_store import ensure_store_current, list_papers, load_topics, sync_store_from_exports
+from app.paper_store import (
+    ensure_store_current,
+    get_paper,
+    list_papers,
+    list_papers_pending_rebuild,
+    load_topics,
+    mark_paper_rebuild_pending,
+    sync_store_from_exports,
+    upsert_paper,
+)
 
 
 class PaperStoreTests(unittest.TestCase):
@@ -45,11 +54,28 @@ class PaperStoreTests(unittest.TestCase):
                 encoding="utf-8",
             )
             (processed / "chunks.jsonl").write_text(
-                json.dumps({"chunk_id": "p1:00001", "paper_id": "p1", "page_start": 1, "text": "hello"}) + "\n",
+                json.dumps(
+                    {
+                        "chunk_id": "p1:00001",
+                        "paper_id": "p1",
+                        "page_start": 1,
+                        "text": "hello",
+                    }
+                )
+                + "\n",
                 encoding="utf-8",
             )
             (processed / "chunks_clean.jsonl").write_text(
-                json.dumps({"chunk_id": "p1:00001", "paper_id": "p1", "page_start": 1, "text": "hello", "clean_text": "hello"}) + "\n",
+                json.dumps(
+                    {
+                        "chunk_id": "p1:00001",
+                        "paper_id": "p1",
+                        "page_start": 1,
+                        "text": "hello",
+                        "clean_text": "hello",
+                    }
+                )
+                + "\n",
                 encoding="utf-8",
             )
             (processed / "paper_summary.json").write_text(
@@ -88,7 +114,10 @@ class PaperStoreTests(unittest.TestCase):
                 ),
                 encoding="utf-8",
             )
-            (base / "library_topics.json").write_text(json.dumps({"专题A": ["p1"]}, ensure_ascii=False, indent=2), encoding="utf-8")
+            (base / "library_topics.json").write_text(
+                json.dumps({"专题A": ["p1"]}, ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
             (indexes / "bm25_index.json").write_text("{}", encoding="utf-8")
 
             store_path = sync_store_from_exports(
@@ -97,15 +126,21 @@ class PaperStoreTests(unittest.TestCase):
                 stable_source_path_by_fingerprint={fingerprint: str(stable_pdf)},
             )
 
-            rows = list_papers(db_path=store_path, limit=10, include_stage_statuses=True)
+            rows = list_papers(
+                db_path=store_path, limit=10, include_stage_statuses=True
+            )
             self.assertEqual(len(rows), 1)
             self.assertEqual(rows[0]["storage_path"], str(stable_pdf))
             self.assertEqual(rows[0]["path"], str(stable_pdf))
             self.assertEqual(rows[0]["status"], "ready")
             self.assertIn("专题A", rows[0]["topics"])
-            self.assertTrue(any(item["stage"] == "index" for item in rows[0]["stage_statuses"]))
+            self.assertTrue(
+                any(item["stage"] == "index" for item in rows[0]["stage_statuses"])
+            )
 
-            exported = json.loads((processed / "papers.json").read_text(encoding="utf-8"))
+            exported = json.loads(
+                (processed / "papers.json").read_text(encoding="utf-8")
+            )
             self.assertEqual(exported[0]["storage_path"], str(stable_pdf))
             self.assertEqual(exported[0]["path"], str(stable_pdf))
 
@@ -116,17 +151,153 @@ class PaperStoreTests(unittest.TestCase):
             processed.mkdir(parents=True, exist_ok=True)
             (processed / "papers.json").write_text(
                 json.dumps(
-                    [{"paper_id": "p1", "title": "Paper One", "path": "paper.pdf", "source_type": "pdf", "source_uri": "paper.pdf"}],
+                    [
+                        {
+                            "paper_id": "p1",
+                            "title": "Paper One",
+                            "path": "paper.pdf",
+                            "source_type": "pdf",
+                            "source_uri": "paper.pdf",
+                        }
+                    ],
                     ensure_ascii=False,
                 ),
                 encoding="utf-8",
             )
-            (base / "library_topics.json").write_text(json.dumps({"专题A": ["p1"]}, ensure_ascii=False), encoding="utf-8")
+            (base / "library_topics.json").write_text(
+                json.dumps({"专题A": ["p1"]}, ensure_ascii=False), encoding="utf-8"
+            )
 
-            store_path = ensure_store_current(processed_dir=processed, topics_path=base / "library_topics.json")
+            store_path = ensure_store_current(
+                processed_dir=processed, topics_path=base / "library_topics.json"
+            )
 
             self.assertTrue(store_path.exists())
             self.assertEqual(load_topics(db_path=store_path), {"专题A": ["p1"]})
+
+    def test_list_papers_pending_rebuild_returns_only_rebuild_pending_papers(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            processed = base / "processed"
+            processed.mkdir(parents=True, exist_ok=True)
+
+            store_path = ensure_store_current(
+                processed_dir=processed, topics_path=base / "library_topics.json"
+            )
+
+            # Insert papers with different statuses
+            upsert_paper(
+                {
+                    "paper_id": "p1",
+                    "title": "Paper One",
+                    "path": "paper1.pdf",
+                    "source_type": "pdf",
+                    "source_uri": "paper1.pdf",
+                    "status": "ready",
+                },
+                db_path=store_path,
+            )
+
+            upsert_paper(
+                {
+                    "paper_id": "p2",
+                    "title": "Paper Two",
+                    "path": "paper2.pdf",
+                    "source_type": "pdf",
+                    "source_uri": "paper2.pdf",
+                    "status": "failed",
+                },
+                db_path=store_path,
+            )
+
+            upsert_paper(
+                {
+                    "paper_id": "p3",
+                    "title": "Paper Three",
+                    "path": "paper3.pdf",
+                    "source_type": "pdf",
+                    "source_uri": "paper3.pdf",
+                    "status": "rebuild_pending",
+                },
+                db_path=store_path,
+            )
+
+            pending = list_papers_pending_rebuild(db_path=store_path)
+            self.assertEqual(len(pending), 1)
+            self.assertEqual(pending[0]["paper_id"], "p3")
+            self.assertEqual(pending[0]["status"], "rebuild_pending")
+
+    def test_mark_paper_rebuild_pending_sets_correct_status(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            processed = base / "processed"
+            processed.mkdir(parents=True, exist_ok=True)
+
+            store_path = ensure_store_current(
+                processed_dir=processed, topics_path=base / "library_topics.json"
+            )
+
+            upsert_paper(
+                {
+                    "paper_id": "p1",
+                    "title": "Paper One",
+                    "path": "paper1.pdf",
+                    "source_type": "pdf",
+                    "source_uri": "paper1.pdf",
+                    "status": "ready",
+                },
+                db_path=store_path,
+            )
+
+            mark_paper_rebuild_pending("p1", reason="test_rebuild", db_path=store_path)
+
+            paper = get_paper("p1", db_path=store_path)
+            self.assertIsNotNone(paper)
+            self.assertEqual(paper["status"], "rebuild_pending")
+
+    def test_list_papers_pending_rebuild_orders_by_priority(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            processed = base / "processed"
+            processed.mkdir(parents=True, exist_ok=True)
+
+            store_path = ensure_store_current(
+                processed_dir=processed, topics_path=base / "library_topics.json"
+            )
+
+            # Insert papers with rebuild_pending status, some with errors (higher priority)
+            upsert_paper(
+                {
+                    "paper_id": "p1",
+                    "title": "Paper One",
+                    "path": "paper1.pdf",
+                    "source_type": "pdf",
+                    "source_uri": "paper1.pdf",
+                    "status": "rebuild_pending",
+                    "error_message": "",
+                },
+                db_path=store_path,
+            )
+
+            upsert_paper(
+                {
+                    "paper_id": "p2",
+                    "title": "Paper Two",
+                    "path": "paper2.pdf",
+                    "source_type": "pdf",
+                    "source_uri": "paper2.pdf",
+                    "status": "rebuild_pending",
+                    "error_message": "failed previously",
+                },
+                db_path=store_path,
+            )
+
+            pending = list_papers_pending_rebuild(db_path=store_path)
+            self.assertEqual(len(pending), 2)
+            # Papers with error_message should come first
+            self.assertEqual(pending[0]["paper_id"], "p2")
 
 
 if __name__ == "__main__":

@@ -6,6 +6,7 @@ import shutil
 import tempfile
 import time
 import uuid
+import warnings
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
@@ -33,6 +34,8 @@ DEFAULT_PAPERS_PATH = DATA_DIR / "processed" / "papers.json"
 DEFAULT_TOPICS_PATH = DATA_DIR / "library_topics.json"
 DEFAULT_RAW_IMPORT_DIR = DATA_DIR / "raw" / "imported"
 DEFAULT_PROCESSED_DIR = DATA_DIR / "processed"
+
+
 def _normalize_item_name(value: str) -> str:
     text = str(value or "").strip()
     if not text:
@@ -112,17 +115,28 @@ def _recent_items_from_files(
     for path in uploaded_files[:6]:
         name = path.name
         if name in failed_reasons:
-            rows.append({"name": name, "state": "failed", "stage": stage, "message": failed_reasons[name]})
+            rows.append(
+                {
+                    "name": name,
+                    "state": "failed",
+                    "stage": stage,
+                    "message": failed_reasons[name],
+                }
+            )
             continue
         if name not in copied_names:
-            rows.append({"name": name, "state": "queued", "stage": stage, "message": "等待校验"})
+            rows.append(
+                {"name": name, "state": "queued", "stage": stage, "message": "等待校验"}
+            )
             continue
         rows.append(
             {
                 "name": name,
                 "state": "running" if active_name and name == active_name else "queued",
                 "stage": stage,
-                "message": "正在处理" if active_name and name == active_name else "等待当前阶段",
+                "message": "正在处理"
+                if active_name and name == active_name
+                else "等待当前阶段",
             }
         )
     return rows
@@ -140,15 +154,38 @@ def _recent_items_from_progress(
     for path in uploaded_files[:6]:
         name = path.name
         if name in failed_reasons:
-            rows.append({"name": name, "state": "failed", "stage": stage, "message": failed_reasons[name]})
+            rows.append(
+                {
+                    "name": name,
+                    "state": "failed",
+                    "stage": stage,
+                    "message": failed_reasons[name],
+                }
+            )
             continue
         if active_name and name == active_name:
-            rows.append({"name": name, "state": "running", "stage": stage, "message": "正在处理"})
+            rows.append(
+                {
+                    "name": name,
+                    "state": "running",
+                    "stage": stage,
+                    "message": "正在处理",
+                }
+            )
             continue
         if name in completed_names:
-            rows.append({"name": name, "state": "succeeded", "stage": stage, "message": "当前阶段完成"})
+            rows.append(
+                {
+                    "name": name,
+                    "state": "succeeded",
+                    "stage": stage,
+                    "message": "当前阶段完成",
+                }
+            )
             continue
-        rows.append({"name": name, "state": "queued", "stage": stage, "message": "等待当前阶段"})
+        rows.append(
+            {"name": name, "state": "queued", "stage": stage, "message": "等待当前阶段"}
+        )
     return rows
 
 
@@ -160,7 +197,14 @@ def _recent_items_from_outcomes(outcomes: Any, *, stage: str) -> list[dict[str, 
         if not isinstance(row, dict):
             continue
         status = str(row.get("status", "")).strip().lower() or "running"
-        if status in {"added", "succeeded", "success", "completed", "imported", "skipped"}:
+        if status in {
+            "added",
+            "succeeded",
+            "success",
+            "completed",
+            "imported",
+            "skipped",
+        }:
             state = "succeeded"
         elif status in {"failed", "error"}:
             state = "failed"
@@ -168,7 +212,14 @@ def _recent_items_from_outcomes(outcomes: Any, *, stage: str) -> list[dict[str, 
             state = "running"
         rows.append(
             {
-                "name": _normalize_item_name(str(row.get("title") or row.get("source_uri") or row.get("paper_id") or "")),
+                "name": _normalize_item_name(
+                    str(
+                        row.get("title")
+                        or row.get("source_uri")
+                        or row.get("paper_id")
+                        or ""
+                    )
+                ),
                 "state": state,
                 "stage": stage,
                 "message": str(row.get("reason", status)).strip() or status,
@@ -180,9 +231,17 @@ def _recent_items_from_outcomes(outcomes: Any, *, stage: str) -> list[dict[str, 
 def load_papers(path: Path = DEFAULT_PAPERS_PATH) -> list[dict[str, Any]]:
     target = Path(path)
     if target == DEFAULT_PAPERS_PATH:
-        store_path = ensure_store_current(processed_dir=target.parent, topics_path=DEFAULT_TOPICS_PATH)
+        store_path = ensure_store_current(
+            processed_dir=target.parent, topics_path=DEFAULT_TOPICS_PATH
+        )
         rows = list_paper_records(db_path=store_path, limit=10_000)
         return [row for row in rows if str(row.get("paper_id", "")).strip()]
+    # Deprecated: reading papers directly from JSON file is deprecated, use paper_store instead
+    warnings.warn(
+        "Reading papers directly from JSON file is deprecated. Use paper_store module instead.",
+        DeprecationWarning,
+        stacklevel=2,
+    )
     if not target.exists():
         return []
     try:
@@ -191,14 +250,26 @@ def load_papers(path: Path = DEFAULT_PAPERS_PATH) -> list[dict[str, Any]]:
         return []
     if not isinstance(payload, list):
         return []
-    return [row for row in payload if isinstance(row, dict) and str(row.get("paper_id", "")).strip()]
+    return [
+        row
+        for row in payload
+        if isinstance(row, dict) and str(row.get("paper_id", "")).strip()
+    ]
 
 
 def load_topics(path: Path = DEFAULT_TOPICS_PATH) -> dict[str, list[str]]:
     target = Path(path)
     if target == DEFAULT_TOPICS_PATH:
-        store_path = ensure_store_current(processed_dir=DEFAULT_PROCESSED_DIR, topics_path=target)
+        store_path = ensure_store_current(
+            processed_dir=DEFAULT_PROCESSED_DIR, topics_path=target
+        )
         return load_topics_from_store(db_path=store_path)
+    # Deprecated: reading topics directly from JSON file is deprecated, use paper_store instead
+    warnings.warn(
+        "Reading topics directly from JSON file is deprecated. Use paper_store module instead.",
+        DeprecationWarning,
+        stacklevel=2,
+    )
     if not target.exists():
         return {}
     try:
@@ -230,12 +301,18 @@ def save_topics(topics: dict[str, list[str]], path: Path = DEFAULT_TOPICS_PATH) 
     with atomic_text_writer(path) as f:
         f.write(json.dumps(normalized, ensure_ascii=False, indent=2))
     if Path(path) == DEFAULT_TOPICS_PATH:
-        store_path = ensure_store_current(processed_dir=DEFAULT_PROCESSED_DIR, topics_path=path)
+        store_path = ensure_store_current(
+            processed_dir=DEFAULT_PROCESSED_DIR, topics_path=path
+        )
         replace_topics(normalized, db_path=store_path)
-        export_store_to_compat(processed_dir=DEFAULT_PROCESSED_DIR, topics_path=path, db_path=store_path)
+        export_store_to_compat(
+            processed_dir=DEFAULT_PROCESSED_DIR, topics_path=path, db_path=store_path
+        )
 
 
-def assign_topic(topics: dict[str, list[str]], topic: str, paper_id: str) -> dict[str, list[str]]:
+def assign_topic(
+    topics: dict[str, list[str]], topic: str, paper_id: str
+) -> dict[str, list[str]]:
     out = {k: list(v) for k, v in topics.items()}
     topic_name = str(topic).strip()
     pid = str(paper_id).strip()
@@ -333,7 +410,10 @@ def run_import_workflow(
             continue
         dst = DEFAULT_RAW_IMPORT_DIR / src.name
         if dst.exists():
-            dst = DEFAULT_RAW_IMPORT_DIR / f"{src.stem}-{src.stat().st_mtime_ns}{src.suffix.lower()}"
+            dst = (
+                DEFAULT_RAW_IMPORT_DIR
+                / f"{src.stem}-{src.stat().st_mtime_ns}{src.suffix.lower()}"
+            )
         shutil.copyfile(src, dst)
         copied.append(dst)
         success_count += 1
@@ -405,7 +485,11 @@ def run_import_workflow(
             if paper_name and paper_id:
                 paper_ids_by_name[paper_name] = paper_id
             if paper_id and event_name in {"document_finished", "pdf_finished"}:
-                paper_status_by_id[paper_id] = "failed" if str(event.get("status", "")).strip().lower() == "failed" else "parsed"
+                paper_status_by_id[paper_id] = (
+                    "failed"
+                    if str(event.get("status", "")).strip().lower() == "failed"
+                    else "parsed"
+                )
             if event_name in {"document_started", "pdf_started"}:
                 _emit_progress(
                     stage="import_clean",
@@ -414,7 +498,9 @@ def run_import_workflow(
                     message=f"正在解析 {paper_name}",
                     batch_completed=max(0, int(event.get("pdf_completed", 0) or 0)),
                     batch_running=1,
-                    batch_failed=max(failed_count, int(event.get("pdf_failed", 0) or 0)),
+                    batch_failed=max(
+                        failed_count, int(event.get("pdf_failed", 0) or 0)
+                    ),
                     current_item_name=paper_name,
                     recent_items=_attach_store_paper_metadata(
                         _recent_items_from_progress(
@@ -443,7 +529,9 @@ def run_import_workflow(
                     message=f"{paper_name} {'失败' if status == 'failed' else '完成当前阶段'}",
                     batch_completed=len(stage_completed_names),
                     batch_running=0,
-                    batch_failed=max(failed_count, int(event.get("pdf_failed", 0) or 0)),
+                    batch_failed=max(
+                        failed_count, int(event.get("pdf_failed", 0) or 0)
+                    ),
                     current_item_name=None,
                     recent_items=_attach_store_paper_metadata(
                         _recent_items_from_progress(
@@ -486,7 +574,9 @@ def run_import_workflow(
         ingest_report_path = ingest_run_dir / "ingest_report.json"
         if ingest_report_path.exists():
             try:
-                ingest_report = json.loads(ingest_report_path.read_text(encoding="utf-8"))
+                ingest_report = json.loads(
+                    ingest_report_path.read_text(encoding="utf-8")
+                )
             except Exception:
                 ingest_report = {}
         if ingest_rc != 0:
@@ -495,7 +585,8 @@ def run_import_workflow(
                     "ok": False,
                     "success_count": success_count,
                     "failed_count": failed_count,
-                    "failure_reasons": failure_reasons + ["导入冲突：另一个导入或知识库准备任务正在运行。"],
+                    "failure_reasons": failure_reasons
+                    + ["导入冲突：另一个导入或知识库准备任务正在运行。"],
                     "next_steps": [
                         "请等待当前任务完成后重试。",
                         "避免重复点击“开始导入论文”或并发打开多个导入页面。",
@@ -506,27 +597,38 @@ def run_import_workflow(
                 "ok": False,
                 "success_count": success_count,
                 "failed_count": failed_count,
-                "failure_reasons": failure_reasons + ["入库失败：本地文档解析或清洗未通过。"],
+                "failure_reasons": failure_reasons
+                + ["入库失败：本地文档解析或清洗未通过。"],
                 "next_steps": [
                     "确认文档未损坏且包含可提取正文。",
                     "缩小批次先导入 1-2 篇定位问题文件。",
                 ],
-                    "message": "导入失败，请检查文档内容是否可解析。",
-                }
+                "message": "导入失败，请检查文档内容是否可解析。",
+            }
 
         import_summary = ingest_report.get("import_summary")
         if not isinstance(import_summary, dict):
             import_summary = {}
         import_outcomes = ingest_report.get("import_outcomes", [])
-        terminal_completed = int(import_summary.get("added", 0) or 0) + int(import_summary.get("skipped", 0) or 0)
+        terminal_completed = int(import_summary.get("added", 0) or 0) + int(
+            import_summary.get("skipped", 0) or 0
+        )
         terminal_failed = int(import_summary.get("failed", 0) or 0)
-        if int(import_summary.get("added", 0) or 0) == 0 and terminal_failed == 0 and terminal_completed > 0:
+        if (
+            int(import_summary.get("added", 0) or 0) == 0
+            and terminal_failed == 0
+            and terminal_completed > 0
+        ):
             recent_items = _attach_store_paper_metadata(
                 _recent_items_from_outcomes(import_outcomes, stage="done"),
                 paper_ids_by_name=paper_ids_by_name,
                 paper_status_by_id=paper_status_by_id,
             )
-            no_op_updated_at = datetime.fromtimestamp(ingest_finished_at, timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
+            no_op_updated_at = (
+                datetime.fromtimestamp(ingest_finished_at, timezone.utc)
+                .isoformat(timespec="seconds")
+                .replace("+00:00", "Z")
+            )
             _emit_progress(
                 stage="done",
                 stage_processed=max(1, len(copied)),
@@ -564,7 +666,11 @@ def run_import_workflow(
                 "recent_items": recent_items,
                 "import_stage": {"updated_at": no_op_updated_at},
                 "clean_stage": {"updated_at": no_op_updated_at},
-                "index_stage": {"status": "success", "duration_sec": 0.0, "updated_at": no_op_updated_at},
+                "index_stage": {
+                    "status": "success",
+                    "duration_sec": 0.0,
+                    "updated_at": no_op_updated_at,
+                },
                 "next_steps": next_steps,
                 "message": message,
             }
@@ -602,34 +708,46 @@ def run_import_workflow(
                     ]
                 )
         except FileLockTimeoutError:
-                stage_updated_at = datetime.fromtimestamp(ingest_finished_at, timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
-                return {
-                    "ok": False,
-                    "success_count": success_count,
-                    "failed_count": failed_count,
-                    "failure_reasons": failure_reasons + ["知识库准备冲突：另一个任务正在运行。"],
-                    "next_steps": ["请等待当前知识库准备任务完成后重试。"],
-                    "message": "知识库准备冲突，请稍后重试。",
-                    "import_summary": ingest_report.get("import_summary", {}),
-                    "fallback_reason": ingest_report.get("fallback_reason"),
-                    "fallback_path": ingest_report.get("fallback_path"),
-                    "confidence_note": ingest_report.get("confidence_note"),
-                    "import_stage": {"updated_at": stage_updated_at},
-                    "clean_stage": {"updated_at": stage_updated_at},
-                    "index_stage": {
-                        "status": "conflict",
-                        "duration_sec": round(time.perf_counter() - index_started, 3),
-                        "updated_at": datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z"),
-                    },
-                }
-        if build_rc != 0:
-            index_status = "failed"
-            stage_updated_at = datetime.fromtimestamp(ingest_finished_at, timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
+            stage_updated_at = (
+                datetime.fromtimestamp(ingest_finished_at, timezone.utc)
+                .isoformat(timespec="seconds")
+                .replace("+00:00", "Z")
+            )
             return {
                 "ok": False,
                 "success_count": success_count,
                 "failed_count": failed_count,
-                "failure_reasons": failure_reasons + ["知识库准备失败：准备流程未完成。"],
+                "failure_reasons": failure_reasons
+                + ["知识库准备冲突：另一个任务正在运行。"],
+                "next_steps": ["请等待当前知识库准备任务完成后重试。"],
+                "message": "知识库准备冲突，请稍后重试。",
+                "import_summary": ingest_report.get("import_summary", {}),
+                "fallback_reason": ingest_report.get("fallback_reason"),
+                "fallback_path": ingest_report.get("fallback_path"),
+                "confidence_note": ingest_report.get("confidence_note"),
+                "import_stage": {"updated_at": stage_updated_at},
+                "clean_stage": {"updated_at": stage_updated_at},
+                "index_stage": {
+                    "status": "conflict",
+                    "duration_sec": round(time.perf_counter() - index_started, 3),
+                    "updated_at": datetime.now(timezone.utc)
+                    .isoformat(timespec="seconds")
+                    .replace("+00:00", "Z"),
+                },
+            }
+        if build_rc != 0:
+            index_status = "failed"
+            stage_updated_at = (
+                datetime.fromtimestamp(ingest_finished_at, timezone.utc)
+                .isoformat(timespec="seconds")
+                .replace("+00:00", "Z")
+            )
+            return {
+                "ok": False,
+                "success_count": success_count,
+                "failed_count": failed_count,
+                "failure_reasons": failure_reasons
+                + ["知识库准备失败：准备流程未完成。"],
                 "next_steps": [
                     "稍后重试知识库准备。",
                     "若持续失败，请检查输出目录权限与磁盘空间。",
@@ -644,7 +762,9 @@ def run_import_workflow(
                 "index_stage": {
                     "status": index_status,
                     "duration_sec": round(time.perf_counter() - index_started, 3),
-                    "updated_at": datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z"),
+                    "updated_at": datetime.now(timezone.utc)
+                    .isoformat(timespec="seconds")
+                    .replace("+00:00", "Z"),
                 },
             }
         index_duration = round(time.perf_counter() - index_started, 3)
@@ -656,7 +776,11 @@ def run_import_workflow(
         db_path=paper_store_path(DEFAULT_PROCESSED_DIR),
     )
     store_rows = list_paper_records(db_path=store_path, limit=10_000)
-    store_by_id = {str(row.get("paper_id", "")).strip(): row for row in store_rows if str(row.get("paper_id", "")).strip()}
+    store_by_id = {
+        str(row.get("paper_id", "")).strip(): row
+        for row in store_rows
+        if str(row.get("paper_id", "")).strip()
+    }
     for outcome in import_outcomes:
         if not isinstance(outcome, dict):
             continue
@@ -667,8 +791,15 @@ def run_import_workflow(
         if status in {"added", "succeeded", "success", "completed", "imported"}:
             paper_status_by_id[paper_id] = "ready"
             update_paper(paper_id, status="ready", error_message="", db_path=store_path)
-            upsert_stage_status(paper_id=paper_id, stage="index", state="succeeded", db_path=store_path)
-            upsert_stage_status(paper_id=paper_id, stage="graph_build", state="queued", db_path=store_path)
+            upsert_stage_status(
+                paper_id=paper_id, stage="index", state="succeeded", db_path=store_path
+            )
+            upsert_stage_status(
+                paper_id=paper_id,
+                stage="graph_build",
+                state="queued",
+                db_path=store_path,
+            )
             upsert_artifact(
                 paper_id=paper_id,
                 artifact_key="vector_index",
@@ -680,7 +811,12 @@ def run_import_workflow(
             )
         elif status in {"failed", "error"}:
             paper_status_by_id[paper_id] = "failed"
-            update_paper(paper_id, status="failed", error_message=str(outcome.get("reason", "")).strip(), db_path=store_path)
+            update_paper(
+                paper_id,
+                status="failed",
+                error_message=str(outcome.get("reason", "")).strip(),
+                db_path=store_path,
+            )
             upsert_stage_status(
                 paper_id=paper_id,
                 stage="index",
@@ -708,7 +844,12 @@ def run_import_workflow(
             ),
         )
         papers = load_papers()
-        paper_paths = {Path(str(row.get("storage_path") or row.get("path", ""))).name: str(row.get("paper_id", "")) for row in papers}
+        paper_paths = {
+            Path(str(row.get("storage_path") or row.get("path", ""))).name: str(
+                row.get("paper_id", "")
+            )
+            for row in papers
+        }
         topics = load_topics()
         for src in copied:
             pid = paper_paths.get(src.name)
@@ -718,7 +859,11 @@ def run_import_workflow(
         save_topics(topics)
         store_rows = list_paper_records(db_path=store_path, limit=10_000)
 
-    export_store_to_compat(processed_dir=DEFAULT_PROCESSED_DIR, topics_path=DEFAULT_TOPICS_PATH, db_path=store_path)
+    export_store_to_compat(
+        processed_dir=DEFAULT_PROCESSED_DIR,
+        topics_path=DEFAULT_TOPICS_PATH,
+        db_path=store_path,
+    )
     recent_items = _attach_store_paper_metadata(
         _recent_items_from_outcomes(import_outcomes, stage="done"),
         store_rows=store_rows,
@@ -748,15 +893,21 @@ def run_import_workflow(
         "import_outcomes": import_outcomes,
         "recent_items": recent_items,
         "import_stage": {
-            "updated_at": datetime.fromtimestamp(ingest_finished_at, timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
+            "updated_at": datetime.fromtimestamp(ingest_finished_at, timezone.utc)
+            .isoformat(timespec="seconds")
+            .replace("+00:00", "Z")
         },
         "clean_stage": {
-            "updated_at": datetime.fromtimestamp(ingest_finished_at, timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
+            "updated_at": datetime.fromtimestamp(ingest_finished_at, timezone.utc)
+            .isoformat(timespec="seconds")
+            .replace("+00:00", "Z")
         },
         "index_stage": {
             "status": "success",
             "duration_sec": index_duration,
-            "updated_at": datetime.fromtimestamp(index_finished_at, timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z"),
+            "updated_at": datetime.fromtimestamp(index_finished_at, timezone.utc)
+            .isoformat(timespec="seconds")
+            .replace("+00:00", "Z"),
         },
         "next_steps": [
             "切换到 Chat，基于新导入论文开始提问。",

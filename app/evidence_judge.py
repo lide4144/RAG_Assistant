@@ -52,7 +52,9 @@ def _tokenize_for_matching(text: str) -> list[str]:
 
 
 def _extract_anchor_terms(text: str, *, max_terms: int = 8) -> list[str]:
-    anchors = sorted(set(_tokenize_for_matching(text)), key=lambda item: (-len(item), item))
+    anchors = sorted(
+        set(_tokenize_for_matching(text)), key=lambda item: (-len(item), item)
+    )
     return anchors[:max_terms]
 
 
@@ -84,13 +86,21 @@ def _judge_error(
     warning: str,
     status: str,
 ) -> dict[str, Any]:
-    semantic_policy = str(getattr(config, "sufficiency_semantic_policy", "balanced") or "balanced").strip().lower()
+    semantic_policy = (
+        str(getattr(config, "sufficiency_semantic_policy", "balanced") or "balanced")
+        .strip()
+        .lower()
+    )
     if semantic_policy not in {"strict", "balanced", "explore"}:
         semantic_policy = "balanced"
     thresholds = {
         "strict": float(getattr(config, "sufficiency_semantic_threshold_strict", 0.35)),
-        "balanced": float(getattr(config, "sufficiency_semantic_threshold_balanced", 0.25)),
-        "explore": float(getattr(config, "sufficiency_semantic_threshold_explore", 0.15)),
+        "balanced": float(
+            getattr(config, "sufficiency_semantic_threshold_balanced", 0.25)
+        ),
+        "explore": float(
+            getattr(config, "sufficiency_semantic_threshold_explore", 0.15)
+        ),
     }
     return {
         "decision_hint": "uncertain",
@@ -161,18 +171,23 @@ def judge_semantic_evidence(
         },
         ensure_ascii=False,
     )
+    # 使用从 YAML 加载的 resolved_stage 配置（与 api_key 一致）
     result = call_chat_completion(
-        provider=str(getattr(config, "sufficiency_judge_llm_provider", "siliconflow")),
-        model=str(getattr(config, "sufficiency_judge_llm_model", "")),
+        provider=str(resolved_stage.values.provider or "siliconflow"),
+        model=str(resolved_stage.values.model or ""),
         api_key=api_key,
-        api_base=str(getattr(config, "sufficiency_judge_llm_api_base", "")) or None,
+        api_base=str(resolved_stage.values.api_base or "") or None,
         system_prompt=JUDGE_SYSTEM_PROMPT,
         user_prompt=user_prompt,
-        timeout_ms=max(1000, int(getattr(config, "sufficiency_judge_llm_timeout_ms", 6000))),
+        timeout_ms=max(
+            1000, int(getattr(config, "sufficiency_judge_llm_timeout_ms", 6000))
+        ),
         max_retries=max(0, int(getattr(config, "llm_max_retries", 1))),
         router_retry=int(getattr(config, "llm_router_retry", 1)),
         router_cooldown_sec=int(getattr(config, "llm_router_cooldown_sec", 60)),
-        router_failure_threshold=int(getattr(config, "llm_router_failure_threshold", 2)),
+        router_failure_threshold=int(
+            getattr(config, "llm_router_failure_threshold", 2)
+        ),
         use_litellm_sdk=bool(getattr(config, "llm_use_litellm_sdk", True)),
         use_legacy_client=bool(getattr(config, "llm_use_legacy_client", False)),
         temperature=0.0,
@@ -205,24 +220,39 @@ def judge_semantic_evidence(
             warning="judge_llm_invalid_payload",
             status="error",
         )
-    missing_aspects = [str(x).strip() for x in (payload.get("missing_aspects") or []) if str(x).strip()]
-    covered_aspects = [str(x).strip() for x in (payload.get("covered_aspects") or []) if str(x).strip()]
-    semantic_policy = str(getattr(config, "sufficiency_semantic_policy", "balanced") or "balanced").strip().lower()
+    missing_aspects = [
+        str(x).strip() for x in (payload.get("missing_aspects") or []) if str(x).strip()
+    ]
+    covered_aspects = [
+        str(x).strip() for x in (payload.get("covered_aspects") or []) if str(x).strip()
+    ]
+    semantic_policy = (
+        str(getattr(config, "sufficiency_semantic_policy", "balanced") or "balanced")
+        .strip()
+        .lower()
+    )
     if semantic_policy not in {"strict", "balanced", "explore"}:
         semantic_policy = "balanced"
     thresholds = {
         "strict": float(getattr(config, "sufficiency_semantic_threshold_strict", 0.35)),
-        "balanced": float(getattr(config, "sufficiency_semantic_threshold_balanced", 0.25)),
-        "explore": float(getattr(config, "sufficiency_semantic_threshold_explore", 0.15)),
+        "balanced": float(
+            getattr(config, "sufficiency_semantic_threshold_balanced", 0.25)
+        ),
+        "explore": float(
+            getattr(config, "sufficiency_semantic_threshold_explore", 0.15)
+        ),
     }
     anchors = _extract_anchor_terms(topic_query_text or question)
     return {
         "decision_hint": decision_hint,
         "judge_status": "ok" if decision_hint != "uncertain" else "uncertain",
         "judge_source": "semantic_evidence_judge_llm_v1",
-        "confidence": str(payload.get("confidence") or "medium").strip().lower() or "medium",
+        "confidence": str(payload.get("confidence") or "medium").strip().lower()
+        or "medium",
         "coverage_summary": {
-            "topic_aligned": bool(payload.get("topic_aligned", decision_hint != "mismatch")),
+            "topic_aligned": bool(
+                payload.get("topic_aligned", decision_hint != "mismatch")
+            ),
             "covered_aspects": covered_aspects,
             "missing_aspects": missing_aspects,
             "matched_anchors": anchors,
@@ -230,7 +260,9 @@ def judge_semantic_evidence(
             "evidence_groups": len(evidence_grouped),
         },
         "missing_aspects": missing_aspects,
-        "allows_partial_answer": bool(payload.get("allows_partial_answer", bool(covered_aspects))),
+        "allows_partial_answer": bool(
+            payload.get("allows_partial_answer", bool(covered_aspects))
+        ),
         "semantic_policy": semantic_policy,
         "semantic_threshold": thresholds.get(semantic_policy, thresholds["balanced"]),
         "output_warnings": [],

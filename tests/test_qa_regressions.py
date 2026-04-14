@@ -31,7 +31,10 @@ class QARegressionTests(unittest.TestCase):
                         "section_id": "2.1",
                         "quote": "Table 1 reports the main result.",
                         "block_type": "table_block",
-                        "structure_provenance": {"source": "marker", "block_type": "Table"},
+                        "structure_provenance": {
+                            "source": "marker",
+                            "block_type": "Table",
+                        },
                     }
                 ],
             }
@@ -42,8 +45,15 @@ class QARegressionTests(unittest.TestCase):
         self.assertEqual(lookup["p1:1"]["block_type"], "table_block")
         self.assertEqual(lookup["p1:1"]["structure_provenance"]["block_type"], "Table")
 
-    def test_build_answer_does_not_reject_single_paper_match_with_paper_clue(self) -> None:
-        config = PipelineConfig(answer_use_llm=False)
+    def test_build_answer_does_not_reject_single_paper_match_with_paper_clue(
+        self,
+    ) -> None:
+        """Test that _build_answer uses LLM to generate answer (not hardcoded fallback).
+
+        When LLM is unavailable, it should return graceful error message,
+        not the old hardcoded paper title concatenation.
+        """
+        config = PipelineConfig(answer_use_llm=False)  # LLM disabled triggers fallback
         evidence_grouped = [
             {
                 "paper_id": "p1",
@@ -69,9 +79,11 @@ class QARegressionTests(unittest.TestCase):
             history_turns=[],
         )
 
-        self.assertIn("Paper One", answer)
-        self.assertNotIn("当前问题未指定具体论文", answer)
-        self.assertEqual(citations[0]["chunk_id"], "p1:1")
+        # When LLM is unavailable, should return graceful error message
+        # instead of hardcoded paper title concatenation
+        self.assertIn("抱歉", answer)  # Friendly error message
+        self.assertNotIn("基于", answer)  # No hardcoded "基于...证据" prefix
+        self.assertEqual(len(citations), 0)  # No citations when LLM fails
 
     def test_parse_answer_payload_preserves_structured_citation_metadata(self) -> None:
         content = """```json
@@ -141,7 +153,16 @@ class QARegressionTests(unittest.TestCase):
                 encoding="utf-8",
             )
             (base / "papers.json").write_text(
-                json.dumps([{"paper_id": "p1", "title": "Paper One", "path": "data/papers/p1.pdf"}], ensure_ascii=False),
+                json.dumps(
+                    [
+                        {
+                            "paper_id": "p1",
+                            "title": "Paper One",
+                            "path": "data/papers/p1.pdf",
+                        }
+                    ],
+                    ensure_ascii=False,
+                ),
                 encoding="utf-8",
             )
             config_path.write_text(
@@ -208,7 +229,9 @@ class QARegressionTests(unittest.TestCase):
 
             self.assertEqual(code, 0)
             trace = json.loads((run_dir / "run_trace.json").read_text(encoding="utf-8"))
-            report = json.loads((run_dir / "qa_report.json").read_text(encoding="utf-8"))
+            report = json.loads(
+                (run_dir / "qa_report.json").read_text(encoding="utf-8")
+            )
 
             self.assertEqual(trace["rewrite_selected_by"], "legacy_strategy")
             self.assertEqual(trace["rewritten_query"], "llm query")

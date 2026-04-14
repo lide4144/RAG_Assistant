@@ -58,7 +58,11 @@ def _is_temp_path(raw: str) -> bool:
     normalized = str(raw or "").strip()
     if not normalized:
         return True
-    return normalized.startswith("/tmp/tmp") or "/_api_upload_staging/" in normalized or "/_ui_upload_staging/" in normalized
+    return (
+        normalized.startswith("/tmp/tmp")
+        or "/_api_upload_staging/" in normalized
+        or "/_ui_upload_staging/" in normalized
+    )
 
 
 def _sha1_file(path: Path) -> str:
@@ -161,7 +165,15 @@ def init_paper_store(db_path: str | Path | None = None) -> Path:
     return path
 
 
-def _derive_status(*, explicit_status: str, paper_id: str, chunk_ids: set[str], clean_ids: set[str], indexes_ready: bool, deleted_at: str = "") -> str:
+def _derive_status(
+    *,
+    explicit_status: str,
+    paper_id: str,
+    chunk_ids: set[str],
+    clean_ids: set[str],
+    indexes_ready: bool,
+    deleted_at: str = "",
+) -> str:
     status = str(explicit_status or "").strip().lower()
     if deleted_at:
         return "deleted"
@@ -183,7 +195,11 @@ def _load_json_rows(path: Path) -> list[dict[str, Any]]:
         payload = json.loads(path.read_text(encoding="utf-8"))
     except Exception:
         return []
-    return [row for row in payload if isinstance(row, dict)] if isinstance(payload, list) else []
+    return (
+        [row for row in payload if isinstance(row, dict)]
+        if isinstance(payload, list)
+        else []
+    )
 
 
 def _load_jsonl_rows(path: Path) -> list[dict[str, Any]]:
@@ -362,7 +378,10 @@ def update_paper(
     with _STORE_LOCK:
         conn = _connect(db_path)
         try:
-            conn.execute(f"UPDATE papers SET {', '.join(assignments)} WHERE paper_id = ?", tuple(values))
+            conn.execute(
+                f"UPDATE papers SET {', '.join(assignments)} WHERE paper_id = ?",
+                tuple(values),
+            )
             conn.commit()
         finally:
             conn.close()
@@ -396,14 +415,23 @@ def upsert_stage_status(
                     error_message=excluded.error_message,
                     metadata_json=excluded.metadata_json
                 """,
-                (pid, stage_name, str(state).strip() or "unknown", updated_at or _now_iso(), str(error_message or "").strip(), _json_dumps(metadata)),
+                (
+                    pid,
+                    stage_name,
+                    str(state).strip() or "unknown",
+                    updated_at or _now_iso(),
+                    str(error_message or "").strip(),
+                    _json_dumps(metadata),
+                ),
             )
             conn.commit()
         finally:
             conn.close()
 
 
-def replace_topics(topics: dict[str, list[str]], *, db_path: str | Path | None = None) -> None:
+def replace_topics(
+    topics: dict[str, list[str]], *, db_path: str | Path | None = None
+) -> None:
     init_paper_store(db_path)
     now = _now_iso()
     with _STORE_LOCK:
@@ -427,7 +455,9 @@ def replace_topics(topics: dict[str, list[str]], *, db_path: str | Path | None =
             conn.close()
 
 
-def assign_topic(topic: str, paper_id: str, *, db_path: str | Path | None = None) -> None:
+def assign_topic(
+    topic: str, paper_id: str, *, db_path: str | Path | None = None
+) -> None:
     name = str(topic).strip()
     pid = str(paper_id).strip()
     if not name or not pid:
@@ -450,7 +480,9 @@ def load_topics(*, db_path: str | Path | None = None) -> dict[str, list[str]]:
     with _STORE_LOCK:
         conn = _connect(db_path)
         try:
-            rows = conn.execute("SELECT topic, paper_id FROM paper_topics ORDER BY topic, paper_id").fetchall()
+            rows = conn.execute(
+                "SELECT topic, paper_id FROM paper_topics ORDER BY topic, paper_id"
+            ).fetchall()
         finally:
             conn.close()
     topics: dict[str, list[str]] = {}
@@ -463,7 +495,9 @@ def load_topics(*, db_path: str | Path | None = None) -> dict[str, list[str]]:
     return topics
 
 
-def replace_chunks(chunks: list[dict[str, Any]], *, db_path: str | Path | None = None) -> None:
+def replace_chunks(
+    chunks: list[dict[str, Any]], *, db_path: str | Path | None = None
+) -> None:
     init_paper_store(db_path)
     by_paper: dict[str, list[dict[str, Any]]] = {}
     for row in chunks:
@@ -500,7 +534,9 @@ def replace_chunks(chunks: list[dict[str, Any]], *, db_path: str | Path | None =
                                 {
                                     "content_type": row.get("content_type"),
                                     "block_type": row.get("block_type"),
-                                    "structure_provenance": row.get("structure_provenance"),
+                                    "structure_provenance": row.get(
+                                        "structure_provenance"
+                                    ),
                                 }
                             ),
                         ),
@@ -541,7 +577,16 @@ def upsert_artifact(
                     updated_at=excluded.updated_at,
                     metadata_json=excluded.metadata_json
                 """,
-                (pid, key, str(artifact_type).strip() or key, str(status).strip() or "unknown", str(path).strip(), str(version).strip(), _now_iso(), _json_dumps(metadata)),
+                (
+                    pid,
+                    key,
+                    str(artifact_type).strip() or key,
+                    str(status).strip() or "unknown",
+                    str(path).strip(),
+                    str(version).strip(),
+                    _now_iso(),
+                    _json_dumps(metadata),
+                ),
             )
             conn.commit()
         finally:
@@ -583,7 +628,13 @@ def update_artifacts_for_paper(
                     SET status = ?, updated_at = ?, metadata_json = ?
                     WHERE paper_id = ? AND artifact_key = ?
                     """,
-                    (str(status).strip() or "unknown", _now_iso(), _json_dumps(metadata), pid, str(row["artifact_key"]).strip()),
+                    (
+                        str(status).strip() or "unknown",
+                        _now_iso(),
+                        _json_dumps(metadata),
+                        pid,
+                        str(row["artifact_key"]).strip(),
+                    ),
                 )
             conn.commit()
         finally:
@@ -616,7 +667,13 @@ def mark_paper_failed(
         return
     message = str(reason or "unknown_failure").strip() or "unknown_failure"
     update_paper(pid, status="failed", error_message=message, db_path=db_path)
-    upsert_stage_status(paper_id=pid, stage=stage, state="failed", error_message=message, db_path=db_path)
+    upsert_stage_status(
+        paper_id=pid,
+        stage=stage,
+        state="failed",
+        error_message=message,
+        db_path=db_path,
+    )
     update_artifacts_for_paper(
         pid,
         status="stale",
@@ -634,13 +691,21 @@ def mark_paper_rebuild_pending(
     pid = str(paper_id).strip()
     if not pid:
         return
-    update_paper(pid, status="rebuild_pending", error_message=str(reason or "").strip(), deleted_at=None, db_path=db_path)
+    update_paper(
+        pid,
+        status="rebuild_pending",
+        error_message=str(reason or "").strip(),
+        deleted_at=None,
+        db_path=db_path,
+    )
     upsert_stage_status(
         paper_id=pid,
         stage="index",
         state="queued",
         error_message="",
-        metadata={"reason": str(reason or "rebuild_requested").strip() or "rebuild_requested"},
+        metadata={
+            "reason": str(reason or "rebuild_requested").strip() or "rebuild_requested"
+        },
         db_path=db_path,
     )
     upsert_stage_status(
@@ -648,15 +713,71 @@ def mark_paper_rebuild_pending(
         stage="graph_build",
         state="queued",
         error_message="",
-        metadata={"reason": str(reason or "rebuild_requested").strip() or "rebuild_requested"},
+        metadata={
+            "reason": str(reason or "rebuild_requested").strip() or "rebuild_requested"
+        },
         db_path=db_path,
     )
     update_artifacts_for_paper(
         pid,
         status="stale",
-        metadata_patch={"rebuild_pending": True, "reason": str(reason or "rebuild_requested").strip() or "rebuild_requested"},
+        metadata_patch={
+            "rebuild_pending": True,
+            "reason": str(reason or "rebuild_requested").strip() or "rebuild_requested",
+        },
         db_path=db_path,
     )
+
+
+def list_papers_pending_rebuild(
+    *,
+    db_path: str | Path | None = None,
+    limit: int = 100,
+) -> list[dict[str, Any]]:
+    """List papers with rebuild_pending status, ordered by priority (failed first, then oldest)."""
+    init_paper_store(db_path)
+    safe_limit = max(1, min(1000, int(limit)))
+    with _STORE_LOCK:
+        conn = _connect(db_path)
+        try:
+            rows = conn.execute(
+                """
+                SELECT p.*,
+                       COALESCE((SELECT group_concat(topic, ',') FROM paper_topics pt WHERE pt.paper_id = p.paper_id), '') AS topics_csv
+                FROM papers p
+                WHERE p.status = 'rebuild_pending' AND COALESCE(p.deleted_at, '') = ''
+                ORDER BY 
+                    CASE WHEN p.error_message <> '' THEN 0 ELSE 1 END,
+                    p.updated_at ASC
+                LIMIT ?
+                """,
+                (safe_limit,),
+            ).fetchall()
+        finally:
+            conn.close()
+    out: list[dict[str, Any]] = []
+    for row in rows:
+        payload = {
+            "paper_id": str(row["paper_id"]).strip(),
+            "title": str(row["title"]).strip(),
+            "path": str(row["path"]).strip(),
+            "storage_path": str(row["storage_path"]).strip(),
+            "source_type": str(row["source_type"]).strip() or "pdf",
+            "source_uri": str(row["source_uri"]).strip(),
+            "parser_engine": str(row["parser_engine"]).strip() or "legacy",
+            "title_source": str(row["title_source"]).strip(),
+            "title_confidence": float(row["title_confidence"] or 0.0),
+            "imported_at": str(row["imported_at"]).strip(),
+            "status": str(row["status"]).strip() or "rebuild_pending",
+            "fingerprint": str(row["fingerprint"]).strip(),
+            "ingest_metadata": _json_loads(row["ingest_metadata_json"]),
+            "created_at": str(row["created_at"]).strip(),
+            "updated_at": str(row["updated_at"]).strip(),
+            "error_message": str(row["error_message"]).strip(),
+            "topics": [item for item in str(row["topics_csv"]).split(",") if item],
+        }
+        out.append(payload)
+    return out
 
 
 def mark_paper_deleted(
@@ -725,19 +846,28 @@ def set_vector_backend_state(
                     updated_at=excluded.updated_at,
                     metadata_json=excluded.metadata_json
                 """,
-                (name, str(status).strip() or "unknown", _now_iso(), _json_dumps(metadata)),
+                (
+                    name,
+                    str(status).strip() or "unknown",
+                    _now_iso(),
+                    _json_dumps(metadata),
+                ),
             )
             conn.commit()
         finally:
             conn.close()
 
 
-def get_vector_backend_state(*, db_path: str | Path | None = None) -> dict[str, Any] | None:
+def get_vector_backend_state(
+    *, db_path: str | Path | None = None
+) -> dict[str, Any] | None:
     init_paper_store(db_path)
     with _STORE_LOCK:
         conn = _connect(db_path)
         try:
-            row = conn.execute("SELECT * FROM vector_backend_state ORDER BY updated_at DESC LIMIT 1").fetchone()
+            row = conn.execute(
+                "SELECT * FROM vector_backend_state ORDER BY updated_at DESC LIMIT 1"
+            ).fetchone()
         finally:
             conn.close()
     if row is None:
@@ -771,17 +901,21 @@ def list_papers(
         clauses.append("p.status = ?")
         params.append(str(status).strip())
     if topic:
-        clauses.append("EXISTS (SELECT 1 FROM paper_topics pt WHERE pt.paper_id = p.paper_id AND pt.topic = ?)")
+        clauses.append(
+            "EXISTS (SELECT 1 FROM paper_topics pt WHERE pt.paper_id = p.paper_id AND pt.topic = ?)"
+        )
         params.append(str(topic).strip())
     if query:
         needle = f"%{str(query).strip().lower()}%"
-        clauses.append("(lower(p.title) LIKE ? OR lower(p.source_uri) LIKE ? OR lower(p.storage_path) LIKE ?)")
+        clauses.append(
+            "(lower(p.title) LIKE ? OR lower(p.source_uri) LIKE ? OR lower(p.storage_path) LIKE ?)"
+        )
         params.extend([needle, needle, needle])
     sql = f"""
         SELECT p.*,
                COALESCE((SELECT group_concat(topic, ',') FROM paper_topics pt WHERE pt.paper_id = p.paper_id), '') AS topics_csv
         FROM papers p
-        WHERE {' AND '.join(clauses)}
+        WHERE {" AND ".join(clauses)}
         ORDER BY p.imported_at DESC, p.updated_at DESC, p.title ASC
         LIMIT ?
     """
@@ -790,9 +924,13 @@ def list_papers(
         conn = _connect(db_path)
         try:
             rows = conn.execute(sql, tuple(params)).fetchall()
-            stage_rows = conn.execute(
-                "SELECT paper_id, stage, state, updated_at, error_message, metadata_json FROM paper_stage_status ORDER BY updated_at DESC"
-            ).fetchall() if include_stage_statuses else []
+            stage_rows = (
+                conn.execute(
+                    "SELECT paper_id, stage, state, updated_at, error_message, metadata_json FROM paper_stage_status ORDER BY updated_at DESC"
+                ).fetchall()
+                if include_stage_statuses
+                else []
+            )
         finally:
             conn.close()
     stages_by_paper: dict[str, list[dict[str, Any]]] = {}
@@ -840,7 +978,12 @@ def get_paper(
     db_path: str | Path | None = None,
     include_deleted: bool = True,
 ) -> dict[str, Any] | None:
-    rows = list_papers(db_path=db_path, limit=1_000, include_stage_statuses=True, include_deleted=include_deleted)
+    rows = list_papers(
+        db_path=db_path,
+        limit=1_000,
+        include_stage_statuses=True,
+        include_deleted=include_deleted,
+    )
     target = str(paper_id).strip()
     return next((row for row in rows if row.get("paper_id") == target), None)
 
@@ -861,7 +1004,9 @@ def export_store_to_compat(
     topic_target = Path(topics_path or DEFAULT_TOPICS_PATH)
     topic_target.parent.mkdir(parents=True, exist_ok=True)
     with atomic_text_writer(topic_target) as handle:
-        handle.write(json.dumps(load_topics(db_path=store_path), ensure_ascii=False, indent=2))
+        handle.write(
+            json.dumps(load_topics(db_path=store_path), ensure_ascii=False, indent=2)
+        )
 
 
 def sync_store_from_exports(
@@ -879,14 +1024,24 @@ def sync_store_from_exports(
     structure_path = processed / "structure_index.json"
     indexes_dir = processed.parent / "indexes"
     store_path = Path(db_path or paper_store_path(processed))
-    raw_import_dir = DEFAULT_RAW_IMPORT_DIR if processed == DEFAULT_PROCESSED_DIR else processed.parent / "raw" / "imported"
+    raw_import_dir = (
+        DEFAULT_RAW_IMPORT_DIR
+        if processed == DEFAULT_PROCESSED_DIR
+        else processed.parent / "raw" / "imported"
+    )
 
     init_paper_store(store_path)
     papers = _load_json_rows(papers_path)
     chunks = _load_jsonl_rows(chunks_path)
     clean_chunks = _load_jsonl_rows(clean_chunks_path)
-    summaries = {str(row.get("paper_id", "")).strip(): row for row in _load_json_rows(summary_path) if str(row.get("paper_id", "")).strip()}
-    structure_payload = _load_json_rows(structure_path) if structure_path.suffix == ".jsonl" else []
+    summaries = {
+        str(row.get("paper_id", "")).strip(): row
+        for row in _load_json_rows(summary_path)
+        if str(row.get("paper_id", "")).strip()
+    }
+    structure_payload = (
+        _load_json_rows(structure_path) if structure_path.suffix == ".jsonl" else []
+    )
     structure_map: dict[str, dict[str, Any]] = {}
     if not structure_payload and structure_path.exists():
         try:
@@ -901,9 +1056,20 @@ def sync_store_from_exports(
                 if paper_id:
                     structure_map[paper_id] = row
 
-    chunk_ids = {str(row.get("paper_id", "")).strip() for row in chunks if str(row.get("paper_id", "")).strip()}
-    clean_ids = {str(row.get("paper_id", "")).strip() for row in clean_chunks if str(row.get("paper_id", "")).strip()}
-    indexes_ready = any((indexes_dir / name).exists() for name in ("bm25_index.json", "vec_index.json", "vec_index_embed.json"))
+    chunk_ids = {
+        str(row.get("paper_id", "")).strip()
+        for row in chunks
+        if str(row.get("paper_id", "")).strip()
+    }
+    clean_ids = {
+        str(row.get("paper_id", "")).strip()
+        for row in clean_chunks
+        if str(row.get("paper_id", "")).strip()
+    }
+    indexes_ready = any(
+        (indexes_dir / name).exists()
+        for name in ("bm25_index.json", "vec_index.json", "vec_index_embed.json")
+    )
 
     for row in papers:
         paper_id = str(row.get("paper_id", "")).strip()
@@ -935,18 +1101,43 @@ def sync_store_from_exports(
             db_path=store_path,
         )
 
-        upsert_stage_status(paper_id=paper_id, stage="dedup", state="succeeded", db_path=store_path)
-        upsert_stage_status(paper_id=paper_id, stage="import", state="succeeded", db_path=store_path)
-        upsert_stage_status(paper_id=paper_id, stage="parse", state="succeeded" if paper_id in chunk_ids else "queued", db_path=store_path)
-        upsert_stage_status(paper_id=paper_id, stage="clean", state="succeeded" if paper_id in clean_ids else "queued", db_path=store_path)
+        upsert_stage_status(
+            paper_id=paper_id, stage="dedup", state="succeeded", db_path=store_path
+        )
+        upsert_stage_status(
+            paper_id=paper_id, stage="import", state="succeeded", db_path=store_path
+        )
+        upsert_stage_status(
+            paper_id=paper_id,
+            stage="parse",
+            state="succeeded" if paper_id in chunk_ids else "queued",
+            db_path=store_path,
+        )
+        upsert_stage_status(
+            paper_id=paper_id,
+            stage="clean",
+            state="succeeded" if paper_id in clean_ids else "queued",
+            db_path=store_path,
+        )
         upsert_stage_status(
             paper_id=paper_id,
             stage="index",
-            state="succeeded" if indexes_ready and paper_id in clean_ids else ("queued" if paper_id in clean_ids else "not_started"),
+            state="succeeded"
+            if indexes_ready and paper_id in clean_ids
+            else ("queued" if paper_id in clean_ids else "not_started"),
             db_path=store_path,
         )
-        graph_state = "succeeded" if (processed / "graph.json").exists() and paper_id in clean_ids else "not_started"
-        upsert_stage_status(paper_id=paper_id, stage="graph_build", state=graph_state, db_path=store_path)
+        graph_state = (
+            "succeeded"
+            if (processed / "graph.json").exists() and paper_id in clean_ids
+            else "not_started"
+        )
+        upsert_stage_status(
+            paper_id=paper_id,
+            stage="graph_build",
+            state=graph_state,
+            db_path=store_path,
+        )
 
         upsert_artifact(
             paper_id=paper_id,
@@ -972,7 +1163,9 @@ def sync_store_from_exports(
             status="ready" if summary_row else "missing",
             path=str(summary_path),
             version=str((summary_row or {}).get("summary_version", "")).strip(),
-            metadata={"chunk_snapshot_hash": (summary_row or {}).get("chunk_snapshot_hash")},
+            metadata={
+                "chunk_snapshot_hash": (summary_row or {}).get("chunk_snapshot_hash")
+            },
             db_path=store_path,
         )
         structure_row = structure_map.get(paper_id)
@@ -980,9 +1173,16 @@ def sync_store_from_exports(
             paper_id=paper_id,
             artifact_key="structure_index",
             artifact_type="structure_index",
-            status=str((structure_row or {}).get("structure_parse_status", "missing")).strip() or "missing",
+            status=str(
+                (structure_row or {}).get("structure_parse_status", "missing")
+            ).strip()
+            or "missing",
             path=str(structure_path),
-            metadata={"structure_parse_reason": (structure_row or {}).get("structure_parse_reason")},
+            metadata={
+                "structure_parse_reason": (structure_row or {}).get(
+                    "structure_parse_reason"
+                )
+            },
             db_path=store_path,
         )
 
@@ -996,13 +1196,17 @@ def sync_store_from_exports(
             payload = {}
         if isinstance(payload, dict):
             normalized = {
-                str(topic).strip(): [str(pid).strip() for pid in values if str(pid).strip()]
+                str(topic).strip(): [
+                    str(pid).strip() for pid in values if str(pid).strip()
+                ]
                 for topic, values in payload.items()
                 if str(topic).strip() and isinstance(values, list)
             }
             replace_topics(normalized, db_path=store_path)
 
-    export_store_to_compat(processed_dir=processed, topics_path=topic_file, db_path=store_path)
+    export_store_to_compat(
+        processed_dir=processed, topics_path=topic_file, db_path=store_path
+    )
     return store_path
 
 
@@ -1028,7 +1232,9 @@ def ensure_store_current(
         except OSError:
             needs_sync = True
     if needs_sync and (papers_path.exists() or topic_file.exists()):
-        sync_store_from_exports(processed_dir=processed, topics_path=topic_file, db_path=store_path)
+        sync_store_from_exports(
+            processed_dir=processed, topics_path=topic_file, db_path=store_path
+        )
     else:
         init_paper_store(store_path)
     return store_path

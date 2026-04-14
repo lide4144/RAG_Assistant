@@ -491,12 +491,11 @@ export function ChatShell() {
   );
   const waitingStage = describeWaitingStage(executionTimeline.activeKey || activeStreamingJob?.progress_stage, activeStreamingMessage?.mode ?? mode, loadingBeat);
   const waitingMoment = waitingMoments[loadingBeat % waitingMoments.length];
-  const sourceCount = latestAssistantMessage?.sources?.length ?? 0;
-  const showSessionAside = true;
+
 
   return (
-    <section className="grid items-start gap-5 2xl:grid-cols-[252px_minmax(0,1fr)]">
-      <aside className="order-2 rounded-[28px] border border-white/70 bg-[linear-gradient(180deg,rgba(255,255,255,0.96),rgba(244,247,251,0.92))] p-3 shadow-[0_20px_80px_rgba(15,23,42,0.08)] backdrop-blur 2xl:order-1 2xl:sticky 2xl:top-6">
+    <section className="grid items-start gap-5 lg:grid-cols-[220px_minmax(0,1fr)]">
+      <aside className="order-2 rounded-[28px] border border-white/70 bg-[linear-gradient(180deg,rgba(255,255,255,0.96),rgba(244,247,251,0.92))] p-3 shadow-[0_20px_80px_rgba(15,23,42,0.08)] backdrop-blur lg:order-1 lg:sticky lg:top-6">
         <div className="rounded-[24px] border border-slate-200/80 bg-[radial-gradient(circle_at_top_left,rgba(14,165,233,0.14),transparent_48%),linear-gradient(135deg,#fffdf8,#ffffff_46%,#f4f7fb)] p-4">
           <div className="flex items-start justify-between gap-3">
             <div>
@@ -669,7 +668,7 @@ export function ChatShell() {
           ) : null}
         </header>
 
-        <div className={`mt-5 grid gap-4 ${showSessionAside ? '2xl:grid-cols-[minmax(0,1fr)_300px]' : '2xl:grid-cols-1'}`}>
+        <div className="mt-5 grid gap-4">
           <div className="rounded-[28px] border border-slate-200 bg-white/80 p-3 shadow-[0_12px_36px_rgba(15,23,42,0.05)]">
             <div className="mb-3 flex items-center justify-between gap-3 px-2">
               <div>
@@ -685,7 +684,7 @@ export function ChatShell() {
 
             <div
               className={`overflow-y-auto rounded-[24px] bg-[linear-gradient(180deg,#f7fbff_0%,#ffffff_20%,#f8fafc_100%)] p-3 ${
-                hasMessages ? 'h-[62vh] md:h-[64vh]' : 'h-[58vh] md:h-[62vh]'
+                hasMessages ? 'h-[66vh] md:h-[70vh]' : 'h-[62vh] md:h-[68vh]'
               }`}
             >
               {!hasMessages ? (
@@ -880,30 +879,35 @@ export function ChatShell() {
                   {isSending ? (
                     <div
                       data-testid="chat-streaming-stage-card"
-                      className="overflow-hidden rounded-[26px] border border-sky-200 bg-[linear-gradient(135deg,rgba(239,246,255,0.96),rgba(255,255,255,0.98)_52%,rgba(236,253,245,0.96))] p-4 shadow-[0_18px_40px_rgba(56,189,248,0.14)]"
+                      className="overflow-hidden rounded-[26px] border border-sky-200 bg-[linear-gradient(135deg,rgba(239,246,255,0.96),rgba(255,255,255,0.98)_52%,rgba(236,253,245,0.96))] p-5 shadow-[0_18px_40px_rgba(56,189,248,0.14)]"
                     >
-                      <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
+                      <div className="flex flex-col gap-5">
+                        {/* 顶部：当前状态 + 转圈动画 */}
                         <div className="flex items-start gap-4">
                           <div className="thinking-orbit shrink-0">
                             <span className="thinking-orbit-dot thinking-orbit-dot-a" />
                             <span className="thinking-orbit-dot thinking-orbit-dot-b" />
                             <span className="thinking-orbit-dot thinking-orbit-dot-c" />
                           </div>
-                          <div>
-                            <div className="inline-flex items-center gap-2 rounded-full border border-sky-200 bg-white/90 px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.18em] text-sky-700">
+                          <div className="flex-1">
+                            <div className="inline-flex items-center gap-2 rounded-full border border-sky-200 bg-white/90 px-3 py-1 text-[11px] font-semibold tracking-normal text-sky-700">
                               <Clock3 className="h-3.5 w-3.5" />
                               {waitingStage.badge}
                             </div>
                             <h4 className="mt-3 text-lg font-semibold text-slate-950">{waitingStage.title}</h4>
                             <p className="mt-2 max-w-xl text-sm leading-6 text-slate-600">{waitingStage.detail}</p>
-                            <div className="mt-4">
-                              <ExecutionTimeline steps={executionTimeline.steps} />
-                            </div>
                           </div>
                         </div>
-                        <div className="rounded-[22px] border border-white/80 bg-white/80 px-4 py-3 text-sm text-slate-700 shadow-sm md:max-w-[300px]">
-                          <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">等待时可以做什么</p>
-                          <p className="mt-2 leading-6">{waitingMoment}</p>
+                        
+                        {/* 中间：竖向排列的所有阶段 */}
+                        <div className="pl-4">
+                          <ExecutionTimelineVertical steps={executionTimeline.steps} />
+                        </div>
+                        
+                        {/* 底部：文字Tips */}
+                        <div className="rounded-[22px] border border-white/80 bg-white/80 px-4 py-3 text-sm text-slate-700 shadow-sm">
+                          <p className="text-[11px] font-semibold text-slate-500 tracking-normal">💡 等待时可以做什么</p>
+                          <p className="mt-2 text-sm leading-[1.6] whitespace-normal break-words">{waitingMoment}</p>
                         </div>
                       </div>
                     </div>
@@ -959,36 +963,7 @@ export function ChatShell() {
             </footer>
           </div>
 
-          {showSessionAside ? <aside data-testid="chat-session-aside" className="space-y-4">
-            <div className="rounded-[28px] border border-slate-200 bg-white/85 p-4">
-              <p className="text-[11px] font-semibold uppercase tracking-[0.2em] text-slate-500">本次会话速览</p>
-              <div className="mt-3 grid gap-3">
-                <div className="rounded-2xl bg-slate-50 px-4 py-3">
-                  <p className="text-xs text-slate-500">引用条目</p>
-                  <p className="mt-1 text-2xl font-semibold text-slate-950">{sourceCount}</p>
-                </div>
-                <div className="rounded-2xl bg-slate-50 px-4 py-3">
-                  <p className="text-xs text-slate-500">当前模式</p>
-                  <p className="mt-1 text-sm font-medium text-slate-900">{modeOptions.find((item) => item.key === mode)?.label}</p>
-                </div>
-                <div className="rounded-2xl bg-slate-50 px-4 py-3">
-                  <p className="text-xs text-slate-500">证据回看</p>
-                  <p className="mt-1 text-sm leading-6 text-slate-700">
-                    {hasMessages ? '回答会尽量告诉你“这句话从哪里来”，减少只看结论的悬空感。' : '开始提问后，这里会持续汇总当前会话的引用和阅读重点。'}
-                  </p>
-                </div>
-              </div>
-            </div>
 
-            <div className="rounded-[28px] border border-slate-200 bg-[linear-gradient(180deg,#fffefb,#fff)] p-4">
-              <p className="text-[11px] font-semibold uppercase tracking-[0.2em] text-slate-500">使用提示</p>
-              <ul className="mt-3 space-y-3 text-sm leading-6 text-slate-600">
-                <li>先问“总结”和“对比”，系统更容易给出结构化答案。</li>
-                <li>若结果过泛，可继续追问“请只基于已导入论文回答”。</li>
-                <li>切到“排障视图”可查看图谱子图和更多技术细节。</li>
-              </ul>
-            </div>
-          </aside> : null}
         </div>
       </div>
     </section>
@@ -1185,58 +1160,186 @@ function ExecutionTimeline({ steps }: { steps: ExecutionTimelineStep[] }) {
     return null;
   }
   return (
-    <div className="grid gap-2">
-      {steps.map((step, index) => (
-        <div
-          key={`${step.key}-${index}`}
-          className={`grid grid-cols-[28px_minmax(0,1fr)] gap-3 rounded-[20px] border px-3 py-3 transition ${
-            step.status === 'active'
-              ? 'border-sky-300 bg-sky-50/90 shadow-[0_12px_28px_rgba(56,189,248,0.12)]'
-              : step.status === 'done'
-                ? 'border-emerald-200 bg-emerald-50/70'
-                : 'border-slate-200 bg-white/75'
-          }`}
-        >
-          <div className="flex flex-col items-center">
-            <span
-              className={`mt-0.5 flex h-7 w-7 items-center justify-center rounded-full text-[11px] font-semibold ${
-                step.status === 'active'
-                  ? 'bg-sky-600 text-white'
-                  : step.status === 'done'
-                    ? 'bg-emerald-600 text-white'
-                    : 'bg-slate-200 text-slate-600'
-              }`}
-            >
-              {index + 1}
-            </span>
-            {index < steps.length - 1 ? (
-              <span
-                className={`mt-1 w-px flex-1 ${
-                  step.status === 'done' ? 'bg-emerald-300' : step.status === 'active' ? 'bg-sky-300' : 'bg-slate-200'
-                }`}
-              />
-            ) : null}
-          </div>
-          <div className="min-w-0">
-            <div className="flex flex-wrap items-center gap-2">
-              <p className="text-sm font-semibold text-slate-900">{step.label}</p>
-              <span
-                className={`rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.16em] ${
+    <div className="w-full">
+      {/* 水平进度条 - 在宽屏幕上显示 */}
+      <div className="hidden md:block">
+        <div className="flex items-center gap-2 overflow-x-auto pb-2 scrollbar-thin">
+          {steps.map((step, index) => (
+            <div key={`${step.key}-${index}`} className="flex items-center shrink-0">
+              <div
+                className={`flex-1 rounded-2xl border px-3 py-2.5 transition ${
                   step.status === 'active'
-                    ? 'bg-sky-100 text-sky-700'
+                    ? 'border-sky-300 bg-sky-50/90 shadow-[0_8px_20px_rgba(56,189,248,0.12)]'
                     : step.status === 'done'
-                      ? 'bg-emerald-100 text-emerald-700'
-                      : 'bg-slate-100 text-slate-500'
+                      ? 'border-emerald-200 bg-emerald-50/70'
+                      : 'border-slate-200 bg-white/75'
                 }`}
               >
-                {step.status === 'active' ? '当前' : step.status === 'done' ? '已完成' : '待推进'}
-              </span>
-              {step.meta ? <span className="truncate text-[11px] text-slate-500">{step.meta}</span> : null}
+                <div className="flex items-center gap-2">
+                  <span
+                    className={`flex h-5 w-5 shrink-0 items-center justify-center rounded-full text-[10px] font-semibold ${
+                      step.status === 'active'
+                        ? 'bg-sky-600 text-white'
+                        : step.status === 'done'
+                          ? 'bg-emerald-600 text-white'
+                          : 'bg-slate-200 text-slate-600'
+                    }`}
+                  >
+                    {index + 1}
+                  </span>
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-center gap-1.5">
+                      <p className="text-xs font-semibold text-slate-900 truncate">{step.label}</p>
+                      <span
+                        className={`shrink-0 rounded-full px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-[0.12em] ${
+                          step.status === 'active'
+                            ? 'bg-sky-100 text-sky-700'
+                            : step.status === 'done'
+                              ? 'bg-emerald-100 text-emerald-700'
+                              : 'bg-slate-100 text-slate-500'
+                        }`}
+                      >
+                        {step.status === 'active' ? '当前' : step.status === 'done' ? '完成' : '待办'}
+                      </span>
+                    </div>
+                    {step.meta ? (
+                      <p className="truncate text-[10px] text-slate-500">{step.meta}</p>
+                    ) : (
+                      <p className="truncate text-[10px] text-slate-600">{step.description}</p>
+                    )}
+                  </div>
+                </div>
+              </div>
+              {index < steps.length - 1 && (
+                <span
+                  className={`mx-1.5 h-0.5 w-4 shrink-0 rounded-full ${
+                    step.status === 'done' ? 'bg-emerald-400' : 'bg-slate-200'
+                  }`}
+                />
+              )}
             </div>
-            <p className="mt-1 text-xs leading-5 text-slate-600">{step.description}</p>
-          </div>
+          ))}
         </div>
-      ))}
+      </div>
+
+      {/* 垂直进度条 - 在窄屏幕上显示 */}
+      <div className="md:hidden grid gap-2">
+        {steps.map((step, index) => (
+          <div
+            key={`${step.key}-mobile-${index}`}
+            className={`grid grid-cols-[28px_minmax(0,1fr)] gap-3 rounded-[20px] border px-3 py-3 transition ${
+              step.status === 'active'
+                ? 'border-sky-300 bg-sky-50/90 shadow-[0_12px_28px_rgba(56,189,248,0.12)]'
+                : step.status === 'done'
+                  ? 'border-emerald-200 bg-emerald-50/70'
+                  : 'border-slate-200 bg-white/75'
+            }`}
+          >
+            <div className="flex flex-col items-center">
+              <span
+                className={`mt-0.5 flex h-7 w-7 items-center justify-center rounded-full text-[11px] font-semibold ${
+                  step.status === 'active'
+                    ? 'bg-sky-600 text-white'
+                    : step.status === 'done'
+                      ? 'bg-emerald-600 text-white'
+                      : 'bg-slate-200 text-slate-600'
+                }`}
+              >
+                {index + 1}
+              </span>
+              {index < steps.length - 1 ? (
+                <span
+                  className={`mt-1 w-px flex-1 ${
+                    step.status === 'done' ? 'bg-emerald-300' : step.status === 'active' ? 'bg-sky-300' : 'bg-slate-200'
+                  }`}
+                />
+              ) : null}
+            </div>
+            <div className="min-w-0">
+              <div className="flex flex-wrap items-center gap-2">
+                <p className="text-sm font-semibold text-slate-900">{step.label}</p>
+                <span
+                  className={`rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.16em] ${
+                    step.status === 'active'
+                      ? 'bg-sky-100 text-sky-700'
+                      : step.status === 'done'
+                        ? 'bg-emerald-100 text-emerald-700'
+                        : 'bg-slate-100 text-slate-500'
+                  }`}
+                >
+                  {step.status === 'active' ? '当前' : step.status === 'done' ? '已完成' : '待推进'}
+                </span>
+                {step.meta ? <span className="truncate text-[11px] text-slate-500">{step.meta}</span> : null}
+              </div>
+              <p className="mt-1 text-xs leading-5 text-slate-600">{step.description}</p>
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// 竖向排列的阶段时间线组件
+function ExecutionTimelineVertical({ steps }: { steps: ExecutionTimelineStep[] }) {
+  if (!steps.length) {
+    return null;
+  }
+  return (
+    <div className="w-full">
+      <div className="grid gap-3">
+        {steps.map((step, index) => (
+          <div
+            key={`${step.key}-vertical-${index}`}
+            className={`grid grid-cols-[36px_minmax(0,1fr)] gap-3 rounded-[16px] border px-3 py-3 transition ${
+              step.status === 'active'
+                ? 'border-sky-300 bg-sky-50/90 shadow-[0_8px_20px_rgba(56,189,248,0.12)]'
+                : step.status === 'done'
+                  ? 'border-emerald-200 bg-emerald-50/70'
+                  : 'border-slate-200 bg-white/75'
+            }`}
+          >
+            <div className="flex flex-col items-center">
+              <span
+                className={`mt-0.5 flex h-8 w-8 items-center justify-center rounded-full text-[12px] font-semibold ${
+                  step.status === 'active'
+                    ? 'bg-sky-600 text-white'
+                    : step.status === 'done'
+                      ? 'bg-emerald-600 text-white'
+                      : 'bg-slate-200 text-slate-600'
+                }`}
+              >
+                {index + 1}
+              </span>
+              {index < steps.length - 1 ? (
+                <span
+                  className={`mt-1.5 w-px flex-1 min-h-[20px] ${
+                    step.status === 'done' ? 'bg-emerald-300' : step.status === 'active' ? 'bg-sky-300' : 'bg-slate-200'
+                  }`}
+                />
+              ) : null}
+            </div>
+            <div className="min-w-0 py-0.5">
+              <div className="flex flex-wrap items-center gap-2">
+                <p className="text-sm font-semibold text-slate-900">{step.label}</p>
+                <span
+                  className={`rounded-full px-2 py-0.5 text-[10px] font-semibold ${
+                    step.status === 'active'
+                      ? 'bg-sky-100 text-sky-700'
+                      : step.status === 'done'
+                        ? 'bg-emerald-100 text-emerald-700'
+                        : 'bg-slate-100 text-slate-500'
+                  }`}
+                >
+                  {step.status === 'active' ? '当前' : step.status === 'done' ? '已完成' : '待推进'}
+                </span>
+                {step.meta ? <span className="truncate text-[11px] text-slate-500">{step.meta}</span> : null}
+              </div>
+              <p className="mt-1 text-xs leading-5 text-slate-600">{step.description}</p>
+            </div>
+          </div>
+        ))}
+      </div>
     </div>
   );
 }

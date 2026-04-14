@@ -68,7 +68,9 @@ TEXT_EXTENSIONS = {
 }
 OFFICE_EXTENSIONS = {".docx", ".pptx", ".xlsx"}
 LIGHT_DOCUMENT_EXTENSIONS = {".rtf", ".odt", ".epub"}
-SUPPORTED_LOCAL_DOC_EXTENSIONS = {".pdf"} | TEXT_EXTENSIONS | OFFICE_EXTENSIONS | LIGHT_DOCUMENT_EXTENSIONS
+SUPPORTED_LOCAL_DOC_EXTENSIONS = (
+    {".pdf"} | TEXT_EXTENSIONS | OFFICE_EXTENSIONS | LIGHT_DOCUMENT_EXTENSIONS
+)
 
 
 @dataclass(frozen=True)
@@ -85,7 +87,9 @@ def list_pdf_files(input_dir: str | Path | None) -> list[Path]:
     base = Path(input_dir)
     if not base.exists():
         return []
-    return sorted([p for p in base.iterdir() if p.is_file() and p.suffix.lower() == ".pdf"])
+    return sorted(
+        [p for p in base.iterdir() if p.is_file() and p.suffix.lower() == ".pdf"]
+    )
 
 
 def list_local_document_files(input_dir: str | Path | None) -> list[Path]:
@@ -94,24 +98,49 @@ def list_local_document_files(input_dir: str | Path | None) -> list[Path]:
     base = Path(input_dir)
     if not base.exists():
         return []
-    return sorted([p for p in base.iterdir() if p.is_file() and p.suffix.lower() in SUPPORTED_LOCAL_DOC_EXTENSIONS])
+    return sorted(
+        [
+            p
+            for p in base.iterdir()
+            if p.is_file() and p.suffix.lower() in SUPPORTED_LOCAL_DOC_EXTENSIONS
+        ]
+    )
 
 
 def resolve_document_route(path: str | Path) -> DocumentRoute:
     suffix = Path(path).suffix.lower()
     if suffix == ".pdf":
-        return DocumentRoute(source_type="pdf", route_family="pdf", base_parser="legacy", enhanced_parser="marker")
+        return DocumentRoute(
+            source_type="pdf",
+            route_family="pdf",
+            base_parser="legacy",
+            enhanced_parser="marker",
+        )
     if suffix in TEXT_EXTENSIONS:
-        return DocumentRoute(source_type="text", route_family="text_like", base_parser="text")
+        return DocumentRoute(
+            source_type="text", route_family="text_like", base_parser="text"
+        )
     if suffix == ".docx":
-        return DocumentRoute(source_type="docx", route_family="office", base_parser="docx")
+        return DocumentRoute(
+            source_type="docx", route_family="office", base_parser="docx"
+        )
     if suffix == ".pptx":
-        return DocumentRoute(source_type="pptx", route_family="office", base_parser="pptx")
+        return DocumentRoute(
+            source_type="pptx", route_family="office", base_parser="pptx"
+        )
     if suffix == ".xlsx":
-        return DocumentRoute(source_type="xlsx", route_family="office", base_parser="xlsx")
+        return DocumentRoute(
+            source_type="xlsx", route_family="office", base_parser="xlsx"
+        )
     if suffix in LIGHT_DOCUMENT_EXTENSIONS:
-        return DocumentRoute(source_type=suffix.lstrip("."), route_family="document_like", base_parser=suffix.lstrip("."))
-    return DocumentRoute(source_type="unknown", route_family="unsupported", base_parser="unsupported")
+        return DocumentRoute(
+            source_type=suffix.lstrip("."),
+            route_family="document_like",
+            base_parser=suffix.lstrip("."),
+        )
+    return DocumentRoute(
+        source_type="unknown", route_family="unsupported", base_parser="unsupported"
+    )
 
 
 def _read_text_file(path: Path) -> str:
@@ -136,11 +165,13 @@ def _metadata_title_from_text(text: str) -> str | None:
     for line in str(text or "").splitlines():
         candidate = line.strip()
         if len(candidate) >= 4:
-            return candidate[:300]
+            return _smart_truncate(candidate, max_length=300)
     return None
 
 
-def _parse_text_like_document(path: Path) -> tuple[list[PageText], list[str], str | None]:
+def _parse_text_like_document(
+    path: Path,
+) -> tuple[list[PageText], list[str], str | None]:
     suffix = path.suffix.lower()
     raw = _read_text_file(path)
     if suffix in {".html", ".htm", ".xml"}:
@@ -155,7 +186,10 @@ def _parse_text_like_document(path: Path) -> tuple[list[PageText], list[str], st
     elif suffix == ".csv":
         try:
             rows = list(__import__("csv").reader(StringIO(raw)))
-            text = "\n".join(", ".join(cell.strip() for cell in row if cell is not None) for row in rows)
+            text = "\n".join(
+                ", ".join(cell.strip() for cell in row if cell is not None)
+                for row in rows
+            )
         except Exception:
             text = raw
     else:
@@ -163,7 +197,11 @@ def _parse_text_like_document(path: Path) -> tuple[list[PageText], list[str], st
     normalized = text.strip()
     if not normalized:
         return [], [f"{path.name}: empty text content"], None
-    return [PageText(page_num=1, text=normalized)], [], _metadata_title_from_text(normalized)
+    return (
+        [PageText(page_num=1, text=normalized)],
+        [],
+        _metadata_title_from_text(normalized),
+    )
 
 
 def _parse_docx_document(path: Path) -> tuple[list[PageText], list[str], str | None]:
@@ -215,7 +253,11 @@ def _parse_xlsx_document(path: Path) -> tuple[list[PageText], list[str], str | N
         for index, sheet in enumerate(workbook.worksheets, start=1):
             lines: list[str] = [f"# Sheet: {sheet.title}"]
             for row in sheet.iter_rows(values_only=True):
-                values = [str(cell).strip() for cell in row if cell is not None and str(cell).strip()]
+                values = [
+                    str(cell).strip()
+                    for cell in row
+                    if cell is not None and str(cell).strip()
+                ]
                 if values:
                     lines.append(", ".join(values))
             if len(lines) > 1:
@@ -261,7 +303,8 @@ def _parse_epub_document(path: Path) -> tuple[list[PageText], list[str], str | N
             html_entries = sorted(
                 name
                 for name in archive.namelist()
-                if name.lower().endswith((".xhtml", ".html", ".htm")) and not name.endswith("/")
+                if name.lower().endswith((".xhtml", ".html", ".htm"))
+                and not name.endswith("/")
             )
             pages: list[PageText] = []
             for index, name in enumerate(html_entries, start=1):
@@ -276,7 +319,9 @@ def _parse_epub_document(path: Path) -> tuple[list[PageText], list[str], str | N
     return pages, [], _metadata_title_from_text(pages[0].text if pages else "")
 
 
-def parse_local_document_pages(path: str | Path) -> tuple[list[PageText], list[str], str | None, DocumentRoute]:
+def parse_local_document_pages(
+    path: str | Path,
+) -> tuple[list[PageText], list[str], str | None, DocumentRoute]:
     doc_path = Path(path)
     route = resolve_document_route(doc_path)
     if route.route_family == "pdf":
@@ -303,7 +348,14 @@ def parse_local_document_pages(path: str | Path) -> tuple[list[PageText], list[s
     if route.base_parser == "epub":
         pages, errors, metadata_title = _parse_epub_document(doc_path)
         return pages, errors, metadata_title, route
-    return [], [f"{doc_path.name}: unsupported file type `{doc_path.suffix.lower() or 'unknown'}`"], None, route
+    return (
+        [],
+        [
+            f"{doc_path.name}: unsupported file type `{doc_path.suffix.lower() or 'unknown'}`"
+        ],
+        None,
+        route,
+    )
 
 
 def make_paper_id(path: Path) -> str:
@@ -331,7 +383,84 @@ DEFAULT_TITLE_BLACKLIST_PATTERNS = [
     r"arxiv preprint",
     r"provided proper attribution is provided",
     r"hereby grants permission to",
+    # Journal/template patterns
+    r"journal\s+of\s+latex\s+class\s+files",
+    r"latex\s+class\s+files",
+    r"ieee\s+transactions",
+    r"acm\s+transactions",
+    r"proceedings\s+of\s+the",
+    r"technical\s+report",
+    # Word metadata patterns
+    r"^microsoft\s+word\s*-",
+    r"^word\s+document",
+    r"\.docx?\s*$",
+    # Conference/workshop header patterns
+    r"^gameon\s+\d{4}",
+    r"^dagstuhl\s+seminar",
+    r"^workshop\s+on",
+    r"^conference\s+on",
+    # File-like patterns
+    r"^draft\s*\d+",
+    r"camera\s*ready",
+    r"^\d{10,}",  # Long numbers (IDs)
 ]
+
+
+def _smart_truncate(text: str, max_length: int = 300, min_word_length: int = 3) -> str:
+    """Smart truncate text at word boundary.
+
+    Args:
+        text: Input text to truncate
+        max_length: Maximum allowed length
+        min_word_length: Minimum length of last word to keep
+
+    Returns:
+        Truncated text that ends at a word boundary
+    """
+    if not text or len(text) <= max_length:
+        return text
+
+    # Try to find a good truncation point
+    truncated = text[:max_length]
+    overflow = len(text) - max_length
+
+    # If overflow is small (<= 10 chars), try to find a natural break
+    # to avoid aggressively truncating short titles
+    if overflow <= 10:
+        # Look for word boundary (space) near the end
+        last_space = truncated.rfind(" ")
+        if last_space > max_length * 0.8:
+            return truncated[:last_space]
+        # For small overflow, just return the truncated text
+        # as it's likely already at a reasonable boundary
+        return truncated.rstrip()
+
+    # For larger overflow, use more aggressive truncation logic
+    # Look for sentence-ending punctuation
+    for punct in [". ", "? ", "! ", "; "]:
+        last_punct = truncated.rfind(punct)
+        if last_punct > max_length * 0.5:  # Only if we have substantial content
+            return truncated[: last_punct + 1].rstrip()
+
+    # Look for word boundary (space)
+    last_space = truncated.rfind(" ")
+    if last_space > max_length * 0.7:  # Keep at least 70% if possible
+        # Check if the word is complete enough
+        word_start = last_space + 1
+        if len(truncated) - word_start >= min_word_length:
+            return truncated[:last_space]
+
+    # Try to find a comma or other separator (but not for small overflow)
+    for sep in [", ", ": ", " - ", " — "]:
+        last_sep = truncated.rfind(sep)
+        if last_sep > max_length * 0.6:
+            return truncated[:last_sep]
+
+    # Default: cut at last space to avoid cutting words
+    if last_space > 0:
+        return truncated[:last_space]
+
+    return truncated
 
 
 @dataclass
@@ -354,7 +483,7 @@ def _normalize_structured_title_candidates(
                 continue
             normalized.append(
                 {
-                    "text": text[:300],
+                    "text": _smart_truncate(text, max_length=300),
                     "source": str(row.get("source", "marker")).strip() or "marker",
                     "priority": int(row.get("priority", 99) or 99),
                     "page": int(row.get("page", 1) or 1),
@@ -367,7 +496,7 @@ def _normalize_structured_title_candidates(
         if text:
             normalized.append(
                 {
-                    "text": text[:300],
+                    "text": _smart_truncate(text, max_length=300),
                     "source": "marker",
                     "priority": 99,
                     "page": 1,
@@ -378,7 +507,9 @@ def _normalize_structured_title_candidates(
     return normalized
 
 
-def compile_title_blacklist_patterns(patterns: list[str] | None = None) -> list[re.Pattern[str]]:
+def compile_title_blacklist_patterns(
+    patterns: list[str] | None = None,
+) -> list[re.Pattern[str]]:
     raw_patterns = list(patterns or DEFAULT_TITLE_BLACKLIST_PATTERNS)
     compiled: list[re.Pattern[str]] = []
     for pattern in raw_patterns:
@@ -394,7 +525,9 @@ def compile_title_blacklist_patterns(patterns: list[str] | None = None) -> list[
     return [re.compile(p, re.IGNORECASE) for p in DEFAULT_TITLE_BLACKLIST_PATTERNS]
 
 
-def _is_blacklisted_title(candidate: str, blacklist_patterns: list[re.Pattern[str]] | None = None) -> bool:
+def _is_blacklisted_title(
+    candidate: str, blacklist_patterns: list[re.Pattern[str]] | None = None
+) -> bool:
     text = str(candidate or "").strip()
     if not text:
         return True
@@ -426,7 +559,11 @@ def _expand_title_candidate_variants(candidate: str) -> list[str]:
         variants.append(without_tags)
 
     heading_matches = re.findall(r"#\s+(.+?)(?=\s+#\s+|$)", without_tags)
-    extracted_headings = [_normalize_title_spaces(match) for match in heading_matches if _normalize_title_spaces(match)]
+    extracted_headings = [
+        _normalize_title_spaces(match)
+        for match in heading_matches
+        if _normalize_title_spaces(match)
+    ]
     variants.extend(extracted_headings)
     if not extracted_headings and text:
         variants.append(text)
@@ -438,8 +575,12 @@ def _expand_title_candidate_variants(candidate: str) -> list[str]:
         if not normalized:
             continue
         # Trim common author/affiliation tails after obvious separators.
-        normalized = re.split(r"\babstract\b", normalized, maxsplit=1, flags=re.IGNORECASE)[0]
-        normalized = re.split(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}", normalized, maxsplit=1)[0]
+        normalized = re.split(
+            r"\babstract\b", normalized, maxsplit=1, flags=re.IGNORECASE
+        )[0]
+        normalized = re.split(
+            r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}", normalized, maxsplit=1
+        )[0]
         normalized = _normalize_title_spaces(normalized)
         if len(normalized) < 8:
             continue
@@ -460,11 +601,13 @@ def _expand_title_candidate_variants(candidate: str) -> list[str]:
         if key in seen:
             continue
         seen.add(key)
-        unique.append(value[:300])
+        unique.append(_smart_truncate(value, max_length=300))
     return unique
 
 
-def score_title_candidate(candidate: str, blacklist_patterns: list[re.Pattern[str]] | None = None) -> float:
+def score_title_candidate(
+    candidate: str, blacklist_patterns: list[re.Pattern[str]] | None = None
+) -> float:
     text = str(candidate or "").strip()
     if not text:
         return 0.0
@@ -487,7 +630,9 @@ def score_title_candidate(candidate: str, blacklist_patterns: list[re.Pattern[st
         punctuation_penalty += 0.1
     if re.search(r"@[A-Za-z0-9.-]+\.", text):
         punctuation_penalty += 0.3
-    if re.search(r"\b(google|university|brain|research|department)\b", text, re.IGNORECASE):
+    if re.search(
+        r"\b(google|university|brain|research|department)\b", text, re.IGNORECASE
+    ):
         punctuation_penalty += 0.15
     base = 0.85
     score = max(0.0, min(1.0, base - punctuation_penalty))
@@ -510,31 +655,68 @@ def choose_best_title(
         for line in first_page.splitlines():
             candidate = line.strip()
             if len(candidate) >= 8:
-                fallback_first_line = candidate[:300]
+                fallback_first_line = _smart_truncate(candidate, max_length=300)
                 break
 
     layers: list[tuple[str, list[dict[str, object]]]] = [
-        ("marker_h1", [row for row in structured_candidates if str(row.get("source")) == "marker_h1"]),
-        ("marker_h2", [row for row in structured_candidates if str(row.get("source")) == "marker_h2"]),
+        (
+            "marker_h1",
+            [
+                row
+                for row in structured_candidates
+                if str(row.get("source")) == "marker_h1"
+            ],
+        ),
+        (
+            "marker_h2",
+            [
+                row
+                for row in structured_candidates
+                if str(row.get("source")) == "marker_h2"
+            ],
+        ),
         (
             "marker_markdown_first_line",
-            [row for row in structured_candidates if str(row.get("source")) == "marker_markdown_first_line"],
+            [
+                row
+                for row in structured_candidates
+                if str(row.get("source")) == "marker_markdown_first_line"
+            ],
         ),
-        ("marker", [row for row in structured_candidates if str(row.get("source")) == "marker"]),
+        (
+            "marker",
+            [
+                row
+                for row in structured_candidates
+                if str(row.get("source")) == "marker"
+            ],
+        ),
         (
             "metadata",
-            [{"text": str(metadata_title).strip(), "source": "metadata", "priority": 4}] if metadata_title and str(metadata_title).strip() else [],
+            [{"text": str(metadata_title).strip(), "source": "metadata", "priority": 4}]
+            if metadata_title and str(metadata_title).strip()
+            else [],
         ),
         (
             "fallback_first_line",
-            [{"text": fallback_first_line, "source": "fallback_first_line", "priority": 5}] if fallback_first_line else [],
+            [
+                {
+                    "text": fallback_first_line,
+                    "source": "fallback_first_line",
+                    "priority": 5,
+                }
+            ]
+            if fallback_first_line
+            else [],
         ),
     ]
 
     trace: list[dict[str, str]] = []
     for layer_name, candidates in layers:
         if not candidates:
-            trace.append({"layer": layer_name, "status": "missing", "reason": "no_candidates"})
+            trace.append(
+                {"layer": layer_name, "status": "missing", "reason": "no_candidates"}
+            )
             continue
         best_title = ""
         best_score = 0.0
@@ -542,18 +724,34 @@ def choose_best_title(
         for candidate_row in candidates:
             candidate = str(candidate_row.get("text", "")).strip()
             for expanded_candidate in _expand_title_candidate_variants(candidate):
-                score = score_title_candidate(expanded_candidate, blacklist_patterns=compiled_blacklist)
+                score = score_title_candidate(
+                    expanded_candidate, blacklist_patterns=compiled_blacklist
+                )
                 if score <= 0.0:
                     rejected_reasons.append("quality_gate_rejected")
                     continue
                 if score > best_score:
-                    best_title = expanded_candidate[:300]
+                    best_title = _smart_truncate(expanded_candidate, max_length=300)
                     best_score = score
         if not best_title:
-            trace.append({"layer": layer_name, "status": "rejected", "reason": rejected_reasons[-1] if rejected_reasons else "quality_gate_rejected"})
+            trace.append(
+                {
+                    "layer": layer_name,
+                    "status": "rejected",
+                    "reason": rejected_reasons[-1]
+                    if rejected_reasons
+                    else "quality_gate_rejected",
+                }
+            )
             continue
         if best_score < float(confidence_threshold):
-            trace.append({"layer": layer_name, "status": "rejected", "reason": "below_confidence_threshold"})
+            trace.append(
+                {
+                    "layer": layer_name,
+                    "status": "rejected",
+                    "reason": "below_confidence_threshold",
+                }
+            )
             continue
         trace.append({"layer": layer_name, "status": "accepted", "reason": "selected"})
         return TitleDecision(
@@ -590,7 +788,9 @@ def extract_title(metadata_title: str | None, pages: list[PageText]) -> str:
     return decision.title
 
 
-def parse_pdf_pages(pdf_path: str | Path) -> tuple[list[PageText], list[str], str | None]:
+def parse_pdf_pages(
+    pdf_path: str | Path,
+) -> tuple[list[PageText], list[str], str | None]:
     if fitz is None:
         raise RuntimeError("PyMuPDF is required. Please install package `pymupdf`.")
 
