@@ -1,0 +1,298 @@
+# ============================================================
+# 论文资源管理系统 - 主配置文件
+# ============================================================
+# 
+# 使用说明：
+# 1. 复制此文件为 config.yaml（如果还没有的话）
+# 2. 根据需要修改配置项
+# 3. 敏感信息（如API密钥）建议使用环境变量，格式为 ${ENV_VAR_NAME}
+#
+# ============================================================
+
+# ============================================================
+# 系统基础配置
+# ============================================================
+system:
+  # 日志级别: DEBUG, INFO, WARNING, ERROR
+  log_level: INFO
+  # 工作目录（相对于项目根目录）
+  work_dir: ./data
+  # 临时文件目录
+  temp_dir: ./data/temp
+  # 是否启用调试模式
+  debug: false
+
+# ============================================================
+# 文档转换模块配置 (Document Converter)
+# ============================================================
+converter:
+  # 输入目录（存放待转换的文档）
+  input_dir: ./data/input
+  # 输出目录（存放转换后的Markdown文件）
+  output_dir: ./data/output
+  # 图片保存目录
+  images_dir: ./data/output/images
+  
+  # PDF转换配置
+  pdf:
+    # 是否提取图片
+    extract_images: true
+    # 图片最小尺寸（像素），小于此尺寸的图片会被忽略
+    min_image_size: 100
+    # 图片输出格式: png, jpg, webp
+    image_format: png
+    # 图片质量 (1-100, 仅jpg格式有效)
+    image_quality: 85
+    # 是否提取表格
+    extract_tables: true
+    # 表格提取方法: lattice (网格线), stream (基于空白)
+    table_extraction_method: lattice
+    # OCR配置（用于扫描版PDF）
+    ocr:
+      # 是否启用OCR
+      enabled: false
+      # OCR语言（使用Tesseract语言代码）
+      language: chi_sim+eng
+      # OCR DPI
+      dpi: 300
+  
+  # HTML转换配置
+  html:
+    # 是否保留原始链接
+    preserve_links: true
+    # 是否提取内联样式
+    extract_styles: false
+    # 内容选择器（CSS选择器，按优先级尝试）
+    content_selectors:
+      - article
+      - .content
+      - .article-content
+      - main
+      - "#content"
+      - body
+    # 要移除的元素选择器
+    remove_selectors:
+      - script
+      - style
+      - nav
+      - header
+      - footer
+      - .sidebar
+      - .advertisement
+      - .ads
+      - .comments
+      - "#comments"
+    # 请求头配置（用于下载在线HTML）
+    request_headers:
+      User-Agent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+    # 请求超时时间（秒）
+    request_timeout: 30
+  
+  # TXT转换配置
+  txt:
+    # 默认编码
+    default_encoding: utf-8
+    # 是否自动检测编码
+    detect_encoding: true
+    # 段落分隔符（正则表达式）
+    paragraph_separator: '\n\s*\n'
+
+# ============================================================
+# RAG存储模块配置 (RAG Storage)
+# ============================================================
+storage:
+  # 向量数据库配置
+  vector_db:
+    # 数据库类型: chroma, milvus, pinecone, qdrant, weaviate
+    type: chroma
+    # ChromaDB配置
+    chroma:
+      # 持久化目录
+      persist_directory: ./data/vectordb
+      # 是否匿名化遥测
+      anonymized_telemetry: false
+    # Milvus配置（如果使用Milvus）
+    milvus:
+      host: localhost
+      port: 19530
+      user: ""
+      password: ""
+    # 默认集合名称
+    default_collection: papers
+    # 集合配置
+    collection_settings:
+      # 距离度量方法: cosine, euclidean, ip (内积)
+      distance_metric: cosine
+  
+  # 分块配置
+  chunking:
+    # 每个块的目标字符数
+    chunk_size: 512
+    # 块之间的重叠字符数
+    chunk_overlap: 50
+    # 分割方式: paragraph (段落), sentence (句子), token (词元)
+    split_by: paragraph
+    # 是否尊重章节边界（避免跨章节分割）
+    respect_sections: true
+    # 最小块大小（小于此大小的块会与前一块合并）
+    min_chunk_size: 100
+  
+  # 嵌入模型配置
+  embedding:
+    # 模型提供商: sentence-transformers, openai, huggingface, custom
+    provider: sentence-transformers
+    
+    # Sentence-Transformers配置
+    sentence_transformers:
+      # 模型名称（支持本地路径或HuggingFace模型名）
+      model: paraphrase-multilingual-MiniLM-L12-v2
+      # 设备: cpu, cuda, mps (Apple Silicon)
+      device: cpu
+      # 是否使用半精度（可减少显存占用）
+      use_fp16: false
+    
+    # OpenAI嵌入配置
+    openai:
+      model: text-embedding-ada-002
+      api_key: ${OPENAI_API_KEY}
+      api_base: https://api.openai.com/v1
+    
+    # 通用配置
+    batch_size: 32
+    max_length: 512
+    normalize_embeddings: true
+
+# ============================================================
+# RAG问答模块配置 (RAG Query)
+# ============================================================
+query:
+  # 默认检索配置
+  retrieval:
+    # 返回的最相关文档块数量
+    top_k: 5
+    # 相似度阈值（0-1，低于此值的结果将被过滤）
+    similarity_threshold: 0.7
+    # 是否启用重排序
+    rerank: false
+    # 重排序模型（如果启用）
+    rerank_model: cross-encoder/ms-marco-MiniLM-L-6-v2
+    # 最终返回的结果数（重排序后）
+    rerank_top_k: 3
+  
+  # 默认LLM配置
+  llm:
+    # 提供商: openai, anthropic, azure, local, custom
+    provider: openai
+    # 模型名称
+    model: gpt-3.5-turbo
+    # API配置（使用环境变量）
+    api_key: ${OPENAI_API_KEY}
+    api_base: https://api.openai.com/v1
+    # 生成参数
+    temperature: 0.7
+    max_tokens: 2048
+    # 超时设置（秒）
+    timeout: 60
+    # 重试次数
+    max_retries: 3
+    # 重试间隔（秒）
+    retry_delay: 1
+  
+  # 系统提示词
+  system_prompt: |
+    你是一个专业的学术助手，专门帮助用户理解和分析学术论文。
+    
+    请遵循以下规则：
+    1. 基于提供的论文内容回答用户的问题
+    2. 如果提供的内容不足以回答问题，请明确说明
+    3. 回答时请引用相关的论文来源
+    4. 保持学术性和专业性
+    5. 对于不确定的信息，请明确标注
+  
+  # 提示词模板（使用 {context} 和 {question} 占位符）
+  prompt_template: |
+    请根据以下论文内容回答问题：
+    
+    ---
+    参考内容：
+    {context}
+    ---
+    
+    问题：{question}
+    
+    请给出详细的回答，如果引用了论文内容，请标注来源。
+  
+  # 上下文配置
+  context:
+    # 最大上下文长度（字符数）
+    max_context_length: 4000
+    # 上下文格式模板
+    chunk_template: |
+      [来源: {title}]
+      {content}
+    # 块之间的分隔符
+    chunk_separator: "\n\n---\n\n"
+
+# ============================================================
+# 自定义LLM提供商配置
+# ============================================================
+custom_llm_providers:
+  # 本地部署的LLM（如Ollama）
+  local_ollama:
+    type: openai_compatible
+    api_base: http://localhost:11434/v1
+    api_key: ollama  # Ollama不需要API Key，但需要一个占位符
+    default_model: llama2
+    models:
+      - llama2
+      - mistral
+      - codellama
+  
+  # 阿里云通义千问
+  qwen:
+    type: openai_compatible
+    api_base: https://dashscope.aliyuncs.com/compatible-mode/v1
+    api_key: ${DASHSCOPE_API_KEY}
+    default_model: qwen-turbo
+    models:
+      - qwen-turbo
+      - qwen-plus
+      - qwen-max
+  
+  # 智谱AI (GLM)
+  zhipu:
+    type: openai_compatible
+    api_base: https://open.bigmodel.cn/api/paas/v4
+    api_key: ${ZHIPU_API_KEY}
+    default_model: glm-4
+    models:
+      - glm-4
+      - glm-3-turbo
+  
+  # 本地 vLLM 部署
+  local_vllm:
+    type: openai_compatible
+    api_base: http://localhost:8000/v1
+    api_key: not-needed
+    default_model: your-model-name
+
+# ============================================================
+# 日志配置
+# ============================================================
+logging:
+  # 日志格式
+  format: "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+  # 日志文件路径（设为null则只输出到控制台）
+  file: ./logs/app.log
+  # 日志文件最大大小（MB）
+  max_size_mb: 10
+  # 保留的日志文件数量
+  backup_count: 5
+  # 各模块的日志级别（可选）
+  module_levels:
+    converter: INFO
+    storage: INFO
+    query: INFO
+    # 可以单独设置第三方库的日志级别
+    chromadb: WARNING
+    httpx: WARNING

@@ -1,0 +1,9 @@
+# 此文件确保inputs目录被Git追踪
+
+将您的Markdown文件放入此目录进行RAG存储演示。
+
+示例：
+- 手动复制: cp your_document.md src/demo/storage_demo/inputs/
+- 从转换模块: cp src/demo/converter_demo/outputs/*.md src/demo/storage_demo/inputs/
+
+如果此目录为空，演示程序会自动创建一个示例文档。
